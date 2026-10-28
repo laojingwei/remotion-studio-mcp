@@ -1,0 +1,211 @@
+{
+  "dark-keynote": {
+    "name": "暗色发布会",
+    "palette": {
+      "background": "#07070A",
+      "surface": "#111114",
+      "text": "#F5F5F7",
+      "textMuted": "#86868B",
+      "primary": "#5AC8FA",
+      "secondary": "#3A4A50",
+      "accent": "#5AC8FA"
+    },
+    "font": { "heading": "\"Inter Tight\", \"Microsoft YaHei\", sans-serif", "body": "\"Manrope\", \"Microsoft YaHei\", sans-serif" },
+    "radius": 2,
+    "motion": "慢而精确：大标题 1.6s、揭示 0.8–1.2s，离场比进场快",
+    "transition": { "type": "fade", "durationInFrames": 14 },
+    "sceneBias": ["title", "hero", "stats", "quote"],
+    "subtitle": { "color": "#F5F5F7", "bg": "#000000", "bgOpacity": 0.45 },
+    "forbidden": ["紫蓝渐变铺底", "满屏粒子", "居中大字+发光"]
+  },
+  "swiss-editorial": {
+    "name": "瑞士编辑",
+    "palette": {
+      "background": "#EAE9E5",
+      "surface": "#FFFFFF",
+      "text": "#111111",
+      "textMuted": "#8A8780",
+      "primary": "#E30613",
+      "secondary": "#141414",
+      "accent": "#FF5A00"
+    },
+    "font": { "heading": "\"Inter\", \"Helvetica Neue\", \"Microsoft YaHei\", sans-serif", "body": "\"Inter\", \"Microsoft YaHei\", sans-serif" },
+    "radius": 0,
+    "motion": "克制：网格对齐、单一信号色、动效短促",
+    "transition": { "type": "fade", "durationInFrames": 10 },
+    "sceneBias": ["title", "bullets", "list", "stats"],
+    "subtitle": { "color": "#111111", "bg": "#FFFFFF", "bgOpacity": 0.9 },
+    "forbidden": ["多强调色", "圆角卡片堆叠", "发光"]
+  },
+  "kinetic-brutalist": {
+    "name": "粗野动态排版",
+    "palette": {
+      "background": "#0A0A0A",
+      "surface": "#1A1A1A",
+      "text": "#FFFFFF",
+      "textMuted": "#A0A0A0",
+      "primary": "#E8FF00",
+      "secondary": "#FF2A1F",
+      "accent": "#FF4FD8"
+    },
+    "font": { "heading": "\"Archivo Black\", \"Impact\", \"Microsoft YaHei\", sans-serif", "body": "\"Inter\", \"Microsoft YaHei\", sans-serif" },
+    "radius": 0,
+    "motion": "硬切、巨字、强节奏；不用缓动",
+    "transition": { "type": "none", "durationInFrames": 0 },
+    "sceneBias": ["title", "bigtext", "quote", "list"],
+    "subtitle": { "color": "#FFFFFF", "bg": "#000000", "bgOpacity": 0.0, "stroke": 0.3, "strokeColor": "#000000" },
+    "forbidden": ["柔和渐变", "细衬线", "弹簧动画"]
+  },
+  "editorial-collage": {
+    "name": "杂志拼贴",
+    "palette": {
+      "background": "#E8DCC6",
+      "surface": "#FAFAF7",
+      "text": "#1B1B1B",
+      "textMuted": "#6B6B6B",
+      "primary": "#E8452C",
+      "secondary": "#2A4BD7",
+      "accent": "#B6FF3B"
+    },
+    "font": { "heading": "\"Georgia\", \"Noto Serif SC\", serif", "body": "\"Inter\", \"Microsoft YaHei\", sans-serif" },
+    "radius": 3,
+    "motion": "拼贴感：纸片切入、轻微错位、手写标注",
+    "transition": { "type": "slide", "durationInFrames": 12 },
+    "sceneBias": ["title", "quote", "gallery", "cards"],
+    "subtitle": { "color": "#1B1B1B", "bg": "#FAFAF7", "bgOpacity": 0.85 },
+    "forbidden": ["纯色数码渐变", "规整网格无错位"]
+  },
+  "data-motion": {
+    "name": "数据动态",
+    "palette": {
+      "background": "#FAFAF7",
+      "surface": "#FFFFFF",
+      "text": "#1A1A1A",
+      "textMuted": "#BDBAB3",
+      "primary": "#E4572E",
+      "secondary": "#4A4D55",
+      "accent": "#E4572E"
+    },
+    "font": { "heading": "\"Inter\", \"Microsoft YaHei\", sans-serif", "body": "\"IBM Plex Mono\", \"Microsoft YaHei\", monospace" },
+    "radius": 1,
+    "motion": "数字滚动、柱子生长、等宽数字表",
+    "transition": { "type": "fade", "durationInFrames": 10 },
+    "sceneBias": ["chart", "stats", "bars", "table"],
+    "subtitle": { "color": "#1A1A1A", "bg": "#FFFFFF", "bgOpacity": 0.9 },
+    "forbidden": ["装饰性光斑", "无信息的大图"]
+  },
+  "minimal-ui": {
+    "name": "极简界面",
+    "palette": {
+      "background": "#EFEDE8",
+      "surface": "#FFFFFF",
+      "text": "#111111",
+      "textMuted": "#8A8780",
+      "primary": "#3B5BFF",
+      "secondary": "#0F0F10",
+      "accent": "#3B5BFF"
+    },
+    "font": { "heading": "\"Inter\", \"Microsoft YaHei\", sans-serif", "body": "\"Manrope\", \"Microsoft YaHei\", sans-serif" },
+    "radius": 3,
+    "motion": "弹簧手感、卡片轻推、短距离位移",
+    "transition": { "type": "fade", "durationInFrames": 12 },
+    "sceneBias": ["title", "cards", "steps", "split"],
+    "subtitle": { "color": "#111111", "bg": "#FFFFFF", "bgOpacity": 0.9 },
+    "forbidden": ["重描边", "多层阴影", "复古滤镜"]
+  },
+  "cinematic-title": {
+    "name": "电影片头",
+    "palette": {
+      "background": "#0B0806",
+      "surface": "#1A1512",
+      "text": "#F4EEE4",
+      "textMuted": "#8A7A66",
+      "primary": "#F2C48D",
+      "secondary": "#5A4632",
+      "accent": "#F2C48D"
+    },
+    "font": { "heading": "\"Cormorant Garamond\", \"Noto Serif SC\", serif", "body": "\"Inter\", \"Microsoft YaHei\", sans-serif" },
+    "radius": 0,
+    "motion": "缓慢推近、胶片颗粒、衬线大字",
+    "transition": { "type": "fade", "durationInFrames": 16 },
+    "sceneBias": ["title", "hero", "bigtext", "quote"],
+    "subtitle": { "color": "#F4EEE4", "bg": "#000000", "bgOpacity": 0.4 },
+    "forbidden": ["霓虹", "高饱和渐变"]
+  },
+  "crt-vhs": {
+    "name": "复古电视 / VHS",
+    "palette": {
+      "background": "#0B0D0B",
+      "surface": "#111613",
+      "text": "#C9D6C9",
+      "textMuted": "#6B7A6B",
+      "primary": "#FFD400",
+      "secondary": "#FF2E88",
+      "accent": "#FF2E88"
+    },
+    "font": { "heading": "\"VT323\", \"Courier New\", monospace", "body": "\"Courier New\", \"Microsoft YaHei\", monospace" },
+    "radius": 0,
+    "motion": "扫描线、色差、跟踪噪声；步进感",
+    "transition": { "type": "glitch", "durationInFrames": 8 },
+    "sceneBias": ["title", "bigtext", "chat", "stats"],
+    "subtitle": { "color": "#FFD400", "bg": "#000000", "bgOpacity": 0.6 },
+    "forbidden": ["现代扁平", "干净的科技感"]
+  },
+  "guochao": {
+    "name": "国潮纹样",
+    "palette": {
+      "background": "#F3EBDD",
+      "surface": "#FAF4E8",
+      "text": "#1C1A17",
+      "textMuted": "#6B5E4E",
+      "primary": "#C8102E",
+      "secondary": "#1E3A5F",
+      "accent": "#B8860B"
+    },
+    "font": { "heading": "\"STKaiti\", \"KaiTi\", \"Noto Serif SC\", serif", "body": "\"PingFang SC\", \"Microsoft YaHei\", sans-serif" },
+    "radius": 2,
+    "motion": "传统纹样缩放、印章落下、慢节奏",
+    "transition": { "type": "fade", "durationInFrames": 12 },
+    "sceneBias": ["title", "hero", "list", "steps"],
+    "subtitle": { "color": "#1C1A17", "bg": "#F3EBDD", "bgOpacity": 0.85 },
+    "forbidden": ["赛博霓虹", "西式极简"]
+  },
+  "flat-vector": {
+    "name": "扁平插画",
+    "palette": {
+      "background": "#FDF6EC",
+      "surface": "#FFFFFF",
+      "text": "#14213D",
+      "textMuted": "#6B7280",
+      "primary": "#FCA311",
+      "secondary": "#4CC9F0",
+      "accent": "#2A9D8F"
+    },
+    "font": { "heading": "\"Nunito\", \"PingFang SC\", sans-serif", "body": "\"Nunito\", \"Microsoft YaHei\", sans-serif" },
+    "radius": 4,
+    "motion": "轻快位移、无描边色块",
+    "transition": { "type": "slide", "durationInFrames": 12 },
+    "sceneBias": ["title", "bullets", "steps", "image"],
+    "subtitle": { "color": "#14213D", "bg": "#FFFFFF", "bgOpacity": 0.9 },
+    "forbidden": ["写实纹理", "重阴影"]
+  },
+  "pixel-game": {
+    "name": "16-bit 像素游戏",
+    "palette": {
+      "background": "#0D0B1E",
+      "surface": "#1E1A3A",
+      "text": "#F4D58D",
+      "textMuted": "#8A85A8",
+      "primary": "#4FD8FF",
+      "secondary": "#E8A54B",
+      "accent": "#C9563C"
+    },
+    "font": { "heading": "\"Press Start 2P\", \"Courier New\", monospace", "body": "\"Courier New\", \"Microsoft YaHei\", monospace" },
+    "radius": 0,
+    "motion": "步进、像素抖动、硬切",
+    "transition": { "type": "none", "durationInFrames": 0 },
+    "sceneBias": ["title", "stats", "list", "bigtext"],
+    "subtitle": { "color": "#F4D58D", "bg": "#0D0B1E", "bgOpacity": 0.85 },
+    "forbidden": ["抗锯齿平滑", "现代极简"]
+  }
+}

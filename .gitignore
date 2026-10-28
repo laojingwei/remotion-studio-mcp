@@ -1,0 +1,32 @@
+node_modules/
+dist/
+out/
+.browser/
+.tmp*
+*.log
+.DS_Store
+
+# ── 本机工作空间与运行时数据 ────────────────────────────────
+# data / out / public 在「工作空间」把产物迁到别的盘之后会变成符号链接，
+# 指向 workspace.json 里指定的目录。这种链接提交进去只会得到一行别处路径，
+# clone 下来是坏链接，所以整块忽略。
+#
+# 这三个目录由 server/store.ts 的 ensureDirs() 在首次启动时自动创建，
+# 并 seed 一个 demo 工程，所以 clone 后直接 npm start 即可。
+#
+# 被这块一并挡掉的（本来也不该入库）：
+#   工程数据 data/projects/*         素材库索引 data/library.json
+#   rev 快照 data/projects/*/history/  留言 data/agent-chat.json
+#   TTS 配置 data/tts-config.json      agent 指针 data/agent-state.json
+#   音频缓存 data/audio-*.json         最近工程 data/last-project.json
+#   UI 偏好 data/ui-prefs.json         上传素材 public/assets/
+/data
+/out
+/public
+
+# 工作空间配置（本机路径，换机器要重新指定）
+workspace.json
+
+# agent 的本地笔记（跨会话记忆，含本机路径），不是工程内容
+memory/
+.workbuddy/memory/

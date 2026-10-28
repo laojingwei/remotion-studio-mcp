@@ -1,0 +1,84 @@
+{
+  "name": "remotion-studio-mcp",
+  "version": "1.0.0",
+  "license": "MIT",
+  "type": "module",
+  "description": "Project-JSON 驱动的动画工程：Web 编辑器 + MCP 工具 + Remotion 渲染，agent 与用户共用同一份文档",
+  "keywords": [
+    "remotion",
+    "mcp",
+    "agent",
+    "video",
+    "animation",
+    "dsh"
+  ],
+  "author": "laojingwei",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/laojingwei/remotion-studio-mcp.git"
+  },
+  "homepage": "https://github.com/laojingwei/remotion-studio-mcp#readme",
+  "bugs": {
+    "url": "https://github.com/laojingwei/remotion-studio-mcp/issues"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "files": [
+    "server",
+    "web",
+    "shared",
+    "src",
+    "scripts",
+    "vite.config.ts",
+    "tsconfig.json",
+    "README.md",
+    "LICENSE",
+    "THIRD-PARTY-NOTICES.md",
+    "启动编辑器.bat"
+  ],
+  "scripts": {
+    "dev": "concurrently -n server,web -c cyan,magenta \"npm:dev:server\" \"npm:dev:web\"",
+    "dev:server": "tsx server/index.ts",
+    "dev:web": "vite",
+    "studio": "remotion studio src/index.ts",
+    "render": "node scripts/render.mjs",
+    "mcp": "tsx server/mcp-proxy.ts",
+    "typecheck": "tsc --noEmit",
+    "test": "tsx scripts/test-ops.mts && tsx scripts/test-freeform.mts && tsx scripts/test-templates.mts && tsx scripts/test-zip.mts && tsx scripts/test-outputs.mts && tsx scripts/test-transitions.mts && tsx scripts/test-effects.mts && tsx scripts/test-multitrack.mts && tsx scripts/test-history.mts && tsx scripts/test-color.mts && tsx scripts/test-subtitle.mts && tsx scripts/test-media.mts && tsx scripts/test-motion.mts && tsx scripts/test-brief.mts && tsx scripts/test-store.mts && tsx scripts/test-assets.mts && tsx scripts/test-workspace.mts && tsx scripts/test-static.mts && tsx scripts/test-audio.mts && tsx scripts/test-loudness.mts && tsx scripts/test-beats.mts",
+    "verify": "node scripts/verify.mjs",
+    "test:mcp": "node scripts/test-mcp.mjs",
+    "dev:server:watch": "tsx watch --clear-screen=false server/index.ts",
+    "build": "vite build",
+    "start": "node scripts/start.mjs",
+    "render:landscape": "node scripts/render.mjs demo landscape"
+  },
+  "dependencies": {
+    "@hono/node-server": "^1.13.7",
+    "@modelcontextprotocol/sdk": "^1.32.2",
+    "@remotion/bundler": "4.0.538",
+    "@remotion/cli": "4.0.538",
+    "@remotion/media-utils": "4.0.538",
+    "@remotion/player": "4.0.538",
+    "@remotion/renderer": "4.0.538",
+    "essentia.js": "^0.1.3",
+    "hono": "^4.6.14",
+    "mpg123-decoder": "^1.0.3",
+    "react": "^19.3.1",
+    "react-dom": "^19.3.1",
+    "remotion": "4.0.538",
+    "zod": "^3.24.1",
+    "zod-to-json-schema": "^3.25.2",
+    "zustand": "^5.0.2"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.2",
+    "@types/react": "^19.3.0",
+    "@types/react-dom": "^19.3.0",
+    "@vitejs/plugin-react": "^4.3.4",
+    "concurrently": "^9.1.0",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.2",
+    "vite": "^6.0.5"
+  }
+}
