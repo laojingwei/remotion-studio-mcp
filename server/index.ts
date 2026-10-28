@@ -808,8 +808,20 @@ app.post("/api/projects/:id/restore/:rev", (c) => {
   }
 });
 
-/** SSE：agent 的修改实时推到用户界面 */app.get("/api/projects/:id/events", (c) => {
+/** SSE：agent 的修改实时推到用户界面 */
+app.get("/api/projects/:id/events", (c) => {
   const id = c.req.param("id");
+  /**
+   * 项目不存在就直接 404。
+   * 之前没有这一步：流内部 `projects.get(id)` 抛 ENOENT，Hono 打一整段堆栈，
+   * 浏览器 EventSource 再重连、再抛 —— 换工程目录或换个数据盘之后，
+   * 旧标签页会一直刷这段错误，把日志淹掉。
+   */
+  try {
+    projects.get(id);
+  } catch {
+    return c.json({ error: "工程不存在" }, 404);
+  }
   return streamSSE(c, async (stream) => {
     const unsub = projects.subscribe(id, (event) => {
       void stream.writeSSE({ event: "patch", data: JSON.stringify(event) });

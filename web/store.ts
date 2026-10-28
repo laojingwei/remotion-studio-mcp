@@ -501,6 +501,15 @@ export const useDoc = create<State>((set, get) => ({
     if (es) es.close();
     es = new EventSource(`/api/projects/${project.id}/events`);
 
+    /**
+     * 换工程目录 / 换数据盘之后，旧标签页的 SSE 会重连到一个已经不存在的工程。
+     * 服务端现在回 404，浏览器会把连接置为 CLOSED 且不再重试 —— 这里把引用清掉，
+     * 免得后面 connect() 又去 close 一个死对象。
+     */
+    es.addEventListener("error", () => {
+      if (es && es.readyState === EventSource.CLOSED) es = null;
+    });
+
     es.addEventListener("patch", (ev) => {
       try {
         const data = JSON.parse((ev as MessageEvent).data) as {
