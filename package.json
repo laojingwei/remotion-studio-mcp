@@ -1,6 +1,6 @@
 {
   "name": "remotion-studio-mcp",
-  "version": "1.0.2",
+  "version": "1.0.3",
   "license": "MIT",
   "type": "module",
   "description": "Project-JSON 驱动的动画工程：Web 编辑器 + MCP 工具 + Remotion 渲染，agent 与用户共用同一份文档",
