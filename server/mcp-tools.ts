@@ -47,6 +47,7 @@ const EFFECT_DESC = z.object({
 });
 
 const BASE = process.env.SERVER_URL ?? "http://127.0.0.1:4380";
+const BRK = String.fromCharCode(10);
 
 /**
  * 平台 UI 遮挡区（画面百分比，经验值，只用于提醒，绝不硬裁）。
@@ -59,10 +60,61 @@ function clampProbeGuard(_projectId: string, slugs: string[]): void {
   if (slugs.length > 3) throw new Error("样张最多 3 个候选");
 }
 
+/**
+ * 选「画幅相关体检」按哪个画幅算（安全区 / 竖屏构图 / 字幕距底）。
+ *
+ * 多画幅工程（横 + 竖一起出）不能一律按竖屏判：横屏交付的片子会被竖屏规则刷出几十条误报，
+ * 真问题反而被埋掉。顺序：显式 format → brief.aspect 对应的那个 → 工程第一个画幅。
+ */
+function pickReviewFormat(
+  formats: { key?: string; width?: number; height?: number }[],
+  formatKey?: string,
+  briefAspect?: string,
+): { fmt?: { key?: string; width?: number; height?: number }; others: string[]; why: string } {
+  const list = formats.filter((f) => Number(f.width) > 0 && Number(f.height) > 0);
+  if (!list.length) return { fmt: undefined, others: [], why: "工程没设画幅" };
+
+  if (formatKey) {
+    const hit = list.find((f) => f.key === formatKey);
+    if (!hit) {
+      throw new Error(`没有画幅「${formatKey}」。这个工程有：${list.map((f) => f.key).join("、")}`);
+    }
+    return { fmt: hit, others: list.filter((f) => f !== hit).map((f) => String(f.key)), why: "按指定的 format" };
+  }
+
+  const m = /(\d+(?:\.\d+)?)\s*[:：/]\s*(\d+(?:\.\d+)?)/.exec(String(briefAspect ?? ""));
+  if (m) {
+    const want = Number(m[1]) / Number(m[2]);
+    const scored = list
+      .map((f) => ({ f, d: Math.abs(Number(f.width) / Number(f.height) - want) }))
+      .sort((x, y) => x.d - y.d);
+    // 容差 6%：16:9 与 1.85:1 这种近似比例要能对上，差一半以上的说明 brief 说错了
+    if (scored[0] && scored[0].d < want * 0.06) {
+      const hit = scored[0].f;
+      return {
+        fmt: hit,
+        others: list.filter((f) => f !== hit).map((f) => String(f.key)),
+        why: `按 brief 里的画幅 ${m[1]}:${m[2]}`,
+      };
+    }
+  }
+
+  return { fmt: list[0], others: list.slice(1).map((f) => String(f.key)), why: "按工程第一个画幅（brief 里没写画幅）" };
+}
+
 function platformSafeArea(platform: string | undefined, aspect: string) {
   const portrait = /^(9:16|3:4|4:5|1:1)/.test(String(aspect ?? "9:16"));
   const p = String(platform ?? "");
-  if (!portrait) return { right: 6, bottom: 10, top: 5, note: "横屏：右侧 6% / 底部 10% / 顶部 5%" };
+  // 横屏没有右侧按钮栏、也没有顶部状态栏（那是竖屏 App 才有的）。
+  // 只有底部播放器控件会压一点——按竖屏口径判横屏片，等于给横屏交付的片子刷一屏假警报。
+  if (!portrait) {
+    return {
+      right: 0,
+      bottom: 8,
+      top: 0,
+      note: "横屏：只有底部约 8% 是播放器控件区；右侧/顶部不会被平台 UI 压（网页与投屏播放甚至完全不遮）",
+    };
+  }
   if (/小红书/.test(p)) return { right: 0, bottom: 16, top: 8, note: "小红书竖屏：底部 16% / 顶部 8%" };
   return {
     right: 12,
@@ -960,6 +1012,22 @@ const TOOLS: ToolDef[] = [
         throw new Error("给 1–3 个候选风格 slug（先 list_styles 挑），或在 brief 里定好 style");
       }
       if (slugs.length > 3) throw new Error("一次最多 3 个候选：太多了用户挑不动");
+
+      // 「仅规则」的风格套不上，抽出来的其实是上一个风格的画面 —— 假样张比没样张更误导：
+      // 用户会以为自己选的这个风格就长这样。所以宁可直接拒，也不给一张不属于它的图。
+      const noPreset = slugs.filter((s) => !presetOf(s));
+      if (noPreset.length) {
+        const ready = listStyles()
+          .filter((x) => x.hasPreset)
+          .map((x) => x.slug);
+        throw new Error(
+          `这些风格没有结构化预设，出不了真样张：${noPreset.join("、")}${String.fromCharCode(10)}` +
+            `样张必须是「这个风格真实的样子」。没有预设时抽出来的其实是当前主题，` +
+            `用户会当成这个风格就是长这样——比不出样张更误导。${String.fromCharCode(10)}` +
+            `两条路：① 换带【可一键套用】的（共 ${ready.length} 个：${ready.slice(0, 8).join("、")}…）；` +
+            `② 先用 get_style 读规则 → set_theme 手动改到位 → preview_frame 抽这一帧自己看（不走样张对比）`,
+        );
+      }
       const nl = String.fromCharCode(10);
 
       // 样张场景：优先复用已有的「样张」，否则建一幕
@@ -990,17 +1058,15 @@ const TOOLS: ToolDef[] = [
       if (!sceneId) throw new Error("样张场景创建失败，检查场景类型 title 是否可用（list_scene_types）");
 
       const applyTool = TOOLS.find((d) => d.name === "apply_style");
-      const shots: { slug: string; urls: string[]; note?: string }[] = [];
+      const shots: { slug: string; urls: string[] }[] = [];
       for (const slug of slugs) {
-        let note: string | undefined;
-        if (!presetOf(slug)) {
-          note = "该风格没有结构化预设，这一张是「当前主题」的样张（要手动 set_theme 才能看到它的样子）";
-        } else {
-          try {
-            await applyTool?.run({ slug, projectId: p.id });
-          } catch (err) {
-            note = `套用失败：${err instanceof Error ? err.message : String(err)}`;
-          }
+        try {
+          await applyTool?.run({ slug, projectId: p.id });
+        } catch (err) {
+          throw new Error(
+            `套用「${slug}」失败：${err instanceof Error ? err.message : String(err)}。` +
+              `样张必须是对的图，套不上就别抽——先修风格预设或换一个候选`,
+          );
         }
         // 重新取工程，按最新时间轴算这一幕的中间帧
         const fresh = await api<{ project: any }>(`/api/projects/${p.id}`);
@@ -1009,9 +1075,11 @@ const TOOLS: ToolDef[] = [
         const frame = (span?.start ?? 0) + Math.max(0, Math.floor((span?.dur ?? 30) * 0.6));
         const stills = await api<{ stills: { format: string; url: string }[] }>(
           `/api/projects/${p.id}/stills`,
-          { method: "POST", body: JSON.stringify({ frame }) },
+          // tag=slug：三张样张必须落在不同文件上，否则后一张覆盖前一张，
+          // 用户点开三个链接看到的是同一张图 —— 这道闸口就白设了
+          { method: "POST", body: JSON.stringify({ frame, tag: slug }) },
         );
-        shots.push({ slug, urls: stills.stills.map((x) => `${BASE}${encodeURI(x.url)}`), note });
+        shots.push({ slug, urls: stills.stills.map((x) => `${BASE}${encodeURI(x.url)}`) });
       }
 
       markProbe(p.id, slugs);
@@ -1020,7 +1088,7 @@ const TOOLS: ToolDef[] = [
       const body = shots
         .map(
           (x, i) =>
-            `${i + 1}. ${x.slug}${x.note ? `（${x.note}）` : ""}${nl}` +
+            `${i + 1}. ${x.slug}${nl}` +
             x.urls.map((u) => `   ${u}`).join(nl),
         )
         .join(nl);
@@ -1028,7 +1096,8 @@ const TOOLS: ToolDef[] = [
         `已出 ${shots.length} 张风格样张（同一幕、不同风格）：${nl}${body}${nl}` +
         `${nl}下一步：**把这几张图发给用户挑**，问他「哪张的感觉最接近你要的」。` +
         `${nl}选定后 confirm_style_probe(slug="...") 记下来，再 save_storyboard。` +
-        `${nl}注意：样张会用最后一轮套用的风格；铺开时 build_storyboard(replace=true) 会把这幕清掉。`
+        `${nl}注意：每张都是套完该风格后单独抽的（各自一个文件，不会互相覆盖）；` +
+        `铺开时 build_storyboard(replace=true) 会把这幕清掉。`
       );
     },
   },
@@ -4516,8 +4585,12 @@ const TOOLS: ToolDef[] = [
   {
     name: "check_project",
     description:
-      "只读诊断：场景/时长/文案/音频/字幕/素材的潜在问题，返回清单（不改工程）。交付前或每轮修改后跑一次，按提示修。",
-    shape: { projectId: z.string().optional() },
+      "只读诊断：场景/时长/文案/音频/字幕/素材/画幅的潜在问题，返回清单（不改工程）。交付前或每轮修改后跑一次，按提示修。\n" +
+      "画幅相关的检查（安全区 / 竖屏构图 / 字幕距底）默认按 brief 里的画幅挑；多画幅工程只查交付那一版，要查另一版传 format。",
+    shape: {
+      projectId: z.string().optional(),
+      format: z.string().optional().describe("按哪个画幅做画幅体检（formats 里的 key）；不传按 brief.aspect，再退到工程第一个画幅"),
+    },
     run: async (a) => {
       const p = await resolveProject(a.projectId);
       const issues: string[] = [];
@@ -4611,7 +4684,7 @@ const TOOLS: ToolDef[] = [
         const els = (sc.props?.elements ?? []) as any[];
         if (!els.length) continue;
         const dur = Number(sc.durationInFrames) || 0;
-        const ys = new Set<number>();
+        const ys: { label: string; y: number }[] = [];
         els.forEach((el, i) => {
           const label = el.id ? `元素 ${el.id}` : `元素 #${i + 1}`;
           const isAmbient = el.type === "fx" || el.id === "paper" || el.id === "bg";
@@ -4634,12 +4707,24 @@ const TOOLS: ToolDef[] = [
               );
             }
           }
-          if (!isAmbient) ys.add(Number(el.y ?? 50));
+          if (!isAmbient && el.y !== undefined) ys.push({ label, y: Number(el.y) });
         });
-        if (ys.size > 1) {
+        // 只报「差一点点」的错位：差 5% 以内说明本来想对齐、手抖了。
+        // 差 20% 是两行内容，本来就该不同 y —— 以前按「y 值不止一个」判，一屏多行永远在报（实测 50 条噪音）
+        const near: string[] = [];
+        for (let i = 0; i < ys.length; i++) {
+          for (let j = i + 1; j < ys.length; j++) {
+            const d = Math.abs(ys[i].y - ys[j].y);
+            if (d > 0.2 && d <= 5) {
+              near.push(`${ys[i].label}(y=${ys[i].y}) 与 ${ys[j].label}(y=${ys[j].y}) 差 ${d.toFixed(1)}%`);
+            }
+          }
+        }
+        if (near.length) {
           issues.push(
-            `ℹ️「${sc.name}」freeform 元素的 y 有 ${[...ys].sort((a, b) => a - b).join(" / ")} 多个值 —— ` +
-              `同一行内容差 5%（约 27px）就会错开成两行，同一行请统一成同一个 y`,
+            `ℹ️「${sc.name}」有元素看着该对齐却差了一点（5% ≈ 27px 就能看出错位）：${BRK}  - ` +
+              near.slice(0, 3).join(`${BRK}  - `) +
+              `${BRK}  同一行请统一成同一个 y；真是两行内容就不用管`,
           );
         }
       }
@@ -4662,16 +4747,21 @@ const TOOLS: ToolDef[] = [
       // 安全区体检（提醒级，不阻渲染）：出框可能是设计，但字幕/二维码压进平台 UI 是真事故
       {
         const briefNow = readBrief(p.id);
-        // 以**工程实际画幅**为准（brief.aspect 是用户说的，工程的 formats 才是真渲染的）。
-        // 多画幅工程优先按竖屏检查：竖屏是会被平台 UI 压的那一版，也是最容易翻车的一版
         const allFmt = (((p as any).formats ?? []) as { key?: string; width?: number; height?: number }[]);
-        const portraitFmt = allFmt.find((f) => Number(f.height ?? 0) >= Number(f.width ?? 1));
-        const fmt0 = portraitFmt ?? allFmt[0];
+        const picked = pickReviewFormat(allFmt, a.format, briefNow?.aspect);
+        const fmt0 = picked.fmt;
         const W = Number(fmt0?.width ?? 1080);
         const H = Number(fmt0?.height ?? 1920);
         const portrait = H >= W;
-        // 比例用真实宽高算，别信 key（key 可能是自定义名，或同一工程有多个画幅）
-        const aspect = portrait ? "9:16" : "16:9";
+        // 比例用真实宽高算，别信 key（key 可能是自定义名）
+        const ratio = W / H;
+        const aspect = ratio < 0.95 ? "9:16" : ratio > 1.05 ? "16:9" : "1:1";
+        if (picked.others.length) {
+          issues.push(
+            `ℹ️ 画幅体检只覆盖「${fmt0?.key}」（${W}×${H}，${picked.why}）：` +
+              `这个工程还有 ${picked.others.join("、")}，两版版式未必一样，另一版要单独查 → check_project(format="...")`,
+          );
+        }
         const sa = platformSafeArea(briefNow?.platform, aspect);
         const short = Math.min(W, H);
         const hits: string[] = [];

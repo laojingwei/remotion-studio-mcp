@@ -1171,9 +1171,10 @@ app.post("/api/projects/:id/stills", async (c) => {
     const body = (await c.req.json().catch(() => ({}))) as {
       frame?: number;
       formats?: string[];
+      tag?: string;
     };
     const project = projects.get(c.req.param("id"));
-    const stills = await renderStills(project, body.frame, body.formats);
+    const stills = await renderStills(project, body.frame, body.formats, body.tag);
     return c.json({ stills });
   } catch (err) {
     return fail(c, err);

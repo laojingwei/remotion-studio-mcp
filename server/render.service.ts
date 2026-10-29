@@ -266,6 +266,9 @@ export async function renderStills(
   project: Project,
   frame?: number,
   formats?: string[],
+  /** 文件名后缀（只留字母数字与 -_）：同一帧要多张不同内容的图时必须给，
+   *  否则文件名一样会互相覆盖——probe_style 的三个风格样张就踩过这个坑 */
+  tag?: string,
 ): Promise<StillResult[]> {
   const stillDir = ensureStillDir(project.id);
   const serveUrl = await getServeUrl();
@@ -280,7 +283,8 @@ export async function renderStills(
     const puppeteerInstance = await getBrowser();
     const composition = await selectComposition({ puppeteerInstance, serveUrl, id: compositionId, inputProps, browserExecutable: BROWSER?.path, chromeMode: BROWSER?.mode });
     const f = Math.max(0, Math.min(composition.durationInFrames - 1, Math.round(frame ?? 0)));
-    const file = `${fmt.key}-${f}.png`;
+    const safeTag = String(tag ?? "").replace(/[^\w-]/g, "").slice(0, 24);
+    const file = `${fmt.key}-${f}${safeTag ? `-${safeTag}` : ""}.png`;
     const output = path.join(stillDir, file);
     await renderStill({
       puppeteerInstance: await getBrowser(),

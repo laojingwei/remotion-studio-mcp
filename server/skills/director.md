@@ -87,7 +87,7 @@
 8. **批量落地**：`build_storyboard(replace=true)` 一次建成（会重建第 1 幕，正常），字幕顺带写好。
    全片统一的东西用 `apply_to_scenes(tool=..., applyToAll=true)` 批量套（字幕样式 / 贴纸 / 画中画 / 转场），**别逐幕调**。
 9. **配音对齐**：`tts_narration` 逐段合成并自动对齐（铁律：先配音定幕长，再放元素）。音效按 `sfx` + `get_guide("sound")` §8。
-10. **自检**：`preview_frames` 抽 2–3 帧看版式 → `check_project`（⚠️要修 / ℹ️确认一下，含安全区与字幕）
+10. **自检**：`preview_frames` 抽 2–3 帧看版式 → `check_project`（⚠️要修 / ℹ️确认一下，含安全区与字幕；多画幅工程只查交付那一版，另一版传 `format`）
     → 再过 `get_guide("qa")` 的三个肉身测试（遮住标题看正文 / 连读所有大字 / 拿手机看）
     → `preview_frames(around="transitions")` 看转场交界（静态单帧看不到转场，这也是"全片都是 zoom"的发现方式）。
 11. **用户验收（渲染前必做）**：`request_review` 让用户在编辑器里把整片播一遍 → 通过 `confirm_review(approved=true)`；
