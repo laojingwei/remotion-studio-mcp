@@ -45,7 +45,7 @@
     "render": "node scripts/render.mjs",
     "mcp": "tsx server/mcp-proxy.ts",
     "typecheck": "tsc --noEmit",
-    "test": "tsx scripts/test-ops.mts && tsx scripts/test-freeform.mts && tsx scripts/test-templates.mts && tsx scripts/test-zip.mts && tsx scripts/test-outputs.mts && tsx scripts/test-transitions.mts && tsx scripts/test-effects.mts && tsx scripts/test-multitrack.mts && tsx scripts/test-history.mts && tsx scripts/test-color.mts && tsx scripts/test-subtitle.mts && tsx scripts/test-media.mts && tsx scripts/test-motion.mts && tsx scripts/test-brief.mts && tsx scripts/test-store.mts && tsx scripts/test-assets.mts && tsx scripts/test-workspace.mts && tsx scripts/test-static.mts && tsx scripts/test-audio.mts && tsx scripts/test-loudness.mts && tsx scripts/test-beats.mts",
+    "test": "tsx scripts/test-ops.mts && tsx scripts/test-freeform.mts && tsx scripts/test-templates.mts && tsx scripts/test-zip.mts && tsx scripts/test-outputs.mts && tsx scripts/test-transitions.mts && tsx scripts/test-effects.mts && tsx scripts/test-multitrack.mts && tsx scripts/test-history.mts && tsx scripts/test-color.mts && tsx scripts/test-subtitle.mts && tsx scripts/test-media.mts && tsx scripts/test-motion.mts && tsx scripts/test-brief.mts && tsx scripts/test-store.mts && tsx scripts/test-assets.mts && tsx scripts/test-workspace.mts && tsx scripts/test-static.mts && tsx scripts/test-audio.mts && tsx scripts/test-loudness.mts && tsx scripts/test-textfit.mts && tsx scripts/test-beats.mts",
     "verify": "node scripts/verify.mjs",
     "test:mcp": "node scripts/test-mcp.mjs",
     "dev:server:watch": "tsx watch --clear-screen=false server/index.ts",

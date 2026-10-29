@@ -50,12 +50,13 @@ export const CaptionScene: React.FC<CaptionProps> = ({ theme, text, speaker, hig
           <div
             style={{
               fontFamily: theme.font.heading,
-              fontSize: h(isPortrait ? 5.2 : 4.4),
+              // 横屏是摊在两米外看的，字幕要更大；竖屏原本 5.2 已经够
+              fontSize: h(isPortrait ? 5.2 : 5.6),
               fontWeight: 700,
               lineHeight: 1.32,
               color: theme.palette.text,
               textAlign: isPortrait ? "center" : "left",
-              maxWidth: isPortrait ? "100%" : "78%",
+              maxWidth: isPortrait ? "100%" : "88%",
             }}
           >
             <Highlighted text={text} highlight={highlight} color={theme.palette.primary} />

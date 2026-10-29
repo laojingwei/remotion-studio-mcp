@@ -11,7 +11,7 @@ export type PricingProps = {
 
 /** 价格表：2-3 档，中间那档高亮 */
 export const PricingScene: React.FC<PricingProps> = ({ theme, heading, items }) => {
-  const { u, h, isPortrait } = useSceneLayout();
+  const { u, h, b, isPortrait } = useSceneLayout();
   const enter = useEnter(0);
   const mid = Math.floor(items.length / 2);
 
@@ -26,7 +26,14 @@ export const PricingScene: React.FC<PricingProps> = ({ theme, heading, items }) 
           </Editable>
         ) : null}
 
-        <div style={{ display: "flex", flexDirection: isPortrait ? "column" : "row", gap: u(2), alignItems: "stretch" }}>
+        <div
+          style={{
+            display: "flex",
+            flexDirection: isPortrait ? "column" : "row",
+            gap: u(isPortrait ? 2 : 2.6),
+            alignItems: "stretch",
+          }}
+        >
           {items.map((item, i) => {
             const highlight = i === mid;
             return (
@@ -38,18 +45,34 @@ export const PricingScene: React.FC<PricingProps> = ({ theme, heading, items }) 
                   flex: 1,
                   display: "flex",
                   flexDirection: "column",
+                  // 横屏给卡片一个高度，三段内容上下撑开：档名贴顶、价格居中、说明压底
+                  justifyContent: isPortrait ? "flex-start" : "space-between",
                   gap: u(1),
-                  padding: u(2.4),
+                  minHeight: isPortrait ? undefined : u(32),
+                  padding: u(isPortrait ? 2.4 : 3.2),
                   borderRadius: u(1.4),
                   border: `1px solid ${highlight ? theme.palette.primary : theme.palette.surface}`,
                   background: theme.palette.surface,
+                  boxSizing: "border-box",
                 }}
               >
-                <span style={{ fontFamily: theme.font.body, fontSize: h(1.8), color: theme.palette.textMuted }}>{item.name}</span>
-                <span style={{ fontFamily: theme.font.heading, fontSize: h(highlight ? 5 : 4), fontWeight: 800, color: highlight ? theme.palette.primary : theme.palette.text }}>
+                <span style={{ fontFamily: theme.font.body, fontSize: b(isPortrait ? 1.8 : 2.1), color: theme.palette.textMuted }}>
+                  {item.name}
+                </span>
+                <span
+                  style={{
+                    fontFamily: theme.font.heading,
+                    fontSize: h(highlight ? (isPortrait ? 5 : 6.6) : isPortrait ? 4 : 5.6),
+                    fontWeight: 800,
+                    lineHeight: 1.1,
+                    color: highlight ? theme.palette.primary : theme.palette.text,
+                  }}
+                >
                   {item.price}
                 </span>
-                <span style={{ fontFamily: theme.font.body, fontSize: h(1.8), color: theme.palette.textMuted }}>{item.note}</span>
+                <span style={{ fontFamily: theme.font.body, fontSize: b(isPortrait ? 1.8 : 2.1), color: theme.palette.textMuted }}>
+                  {item.note}
+                </span>
               </Editable>
             );
           })}

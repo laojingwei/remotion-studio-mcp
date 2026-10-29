@@ -1,6 +1,7 @@
 import React from "react";
 import type { Theme } from "../../../shared/schema";
 import { withColorAlpha } from "../../../shared/color";
+import { clampHeadSize } from "../../../shared/textFit";
 import { useSceneLayout } from "../../layout/useSceneLayout";
 import { Editable, SceneFrame, useEnter } from "../ui";
 
@@ -100,21 +101,9 @@ export const ShowcaseScene: React.FC<ShowcaseProps> = ({
    * 比小一号难看；宁可一行铺满。
    */
   if (!isPortrait) {
-    // 标题宽度按「等效字数」算，不能直接 strlen：`agent` 五个字母加起来才一个半汉字宽，
-    // 按 5 个字去缩字号，混排标题会白白小一号、右边空一块
-    // （实测「三小时学会用 agent 做动画」只铺到 64%，加权后 84%）。
-    const weight = (s: string) =>
-      Array.from(s).reduce((n, ch) => {
-        const c = ch.codePointAt(0) ?? 0;
-        if (ch === " ") return n + 0.3;
-        if (c < 0x2e80) return n + 0.55; // 拉丁/数字/半角符号
-        return n + 1;
-      }, 0);
-    const len = weight(title ?? "");
-    // 一行能放得下的最大字号；上限 14 单位是防止四五个字的短标题变成标语墙
-    const fit =
-      len > 0 ? ((width - 2 * u(safe.x)) * 0.96) / (len * unit * headScale) : 99;
-    const size = Math.max(4.6, Math.min(14, fit));
+    // 一行放得下的字号，夹在 [4.6, 14] 之间：下限保证远处读得清，
+    // 上限防止四五个字的短标题变成标语墙（等效字数换算见 shared/textFit.ts）
+    const size = clampHeadSize(title, width - 2 * u(safe.x), unit, headScale, 4.6, 14);
 
     return (
       <SceneFrame theme={theme} justify="start">

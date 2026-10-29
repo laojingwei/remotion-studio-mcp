@@ -1,5 +1,6 @@
 import React from "react";
 import type { Theme } from "../../../shared/schema";
+import { withColorAlpha } from "../../../shared/color";
 import { useSceneLayout } from "../../layout/useSceneLayout";
 import { Editable, SceneFrame, scaleNumericText, useCountUp, useEnter } from "../ui";
 
@@ -86,6 +87,18 @@ export const StatsScene: React.FC<StatsProps> = ({ theme, heading, items }) => {
                 gap: u(0.8),
                 flex: `1 1 ${basis}`,
                 minWidth: 0,
+                /**
+                 * 横屏每列顶上加一条发丝线。
+                 *
+                 * 只有数字和标签时，一列里真正有墨水的只有左边那一小截
+                 * （「0」就一个字符），右半列全是空 —— 两个数字并排却只占半幅宽。
+                 * 顶线把每列的实际宽度画出来，眼睛读到的是一条横向的数据栏，
+                 * 而不是半空中飘着两个数字。
+                 */
+                paddingTop: isPortrait ? 0 : u(2.4),
+                borderTop: isPortrait
+                  ? undefined
+                  : `1px solid ${withColorAlpha(theme.palette.primary, 0.45)}`,
                 opacity: enter.opacity,
                 transform: `translateY(${enter.y * u(1)}px)`,
               }}
