@@ -857,7 +857,7 @@ const TOOLS: ToolDef[] = [
         "   ↳ 字幕铁律：**一屏 8–16 字（最多 18）、不带标点、一屏念得完**。set_subtitle / build_storyboard / tts_narration 写入时自动拆段并回显拆分预览；老工程长字幕用 fix_subtitles(dryRun) 重拆。规则见 get_guide(\"subtitle\")",
         "   ⚠ 每改一批，**preview_frames 抽 1–2 幕看**（改完不看就往下做，是返工的最大来源）；脏着不抽帧，render / request_review 会被拒。",
         "13. 声音 → get_guide(\"sound\") 定 BGM/避让 → get_guide(\"narration\") → tts_narration（applyToScenes=true 对齐）；要音效按 brief.sfx 加 add_audio_track",
-        "14. 自检【闸口⑨】 → get_guide(\"qa\") → check_project（⚠️要修/ℹ️确认一下，含安全区与字幕超标）→ preview_frames(around=\"transitions\") 看转场",
+        "14. 自检【闸口⑨】 → get_guide(\"qa\") → check_project（⚠️要修/ℹ️确认一下，含字幕超标、安全区、竖屏构图）→ preview_frames(around=\"transitions\") 看转场",
         "   ↳ 字幕超 26 字 render_video 会直接拒：先 fix_subtitles(dryRun=true) 看预演 → fix_subtitles 落盘",
         "15. 验收【闸口⑧】 → request_review：**请用户去编辑器把整片播一遍**（节奏 / 转场 / 字幕 / 音画同步只有整片看得出）",
         "   ↳ 通过 → confirm_review(approved=true)　要改 → confirm_review(approved=false, feedback=[...]) 改完再请他看　他自己导出 → selfRender=true",
@@ -4660,12 +4660,16 @@ const TOOLS: ToolDef[] = [
       // 安全区体检（提醒级，不阻渲染）：出框可能是设计，但字幕/二维码压进平台 UI 是真事故
       {
         const briefNow = readBrief(p.id);
-        // 以**工程实际画幅**为准（brief.aspect 是用户说的，工程的 formats 才是真渲染的）
-        const fmt0 = ((p as any).formats ?? [])[0] as { key?: string; width?: number; height?: number } | undefined;
+        // 以**工程实际画幅**为准（brief.aspect 是用户说的，工程的 formats 才是真渲染的）。
+        // 多画幅工程优先按竖屏检查：竖屏是会被平台 UI 压的那一版，也是最容易翻车的一版
+        const allFmt = (((p as any).formats ?? []) as { key?: string; width?: number; height?: number }[]);
+        const portraitFmt = allFmt.find((f) => Number(f.height ?? 0) >= Number(f.width ?? 1));
+        const fmt0 = portraitFmt ?? allFmt[0];
         const W = Number(fmt0?.width ?? 1080);
         const H = Number(fmt0?.height ?? 1920);
-        const aspect = fmt0?.key ?? String((p as any).aspect ?? (H >= W ? "9:16" : "16:9"));
         const portrait = H >= W;
+        // 比例用真实宽高算，别信 key（key 可能是自定义名，或同一工程有多个画幅）
+        const aspect = portrait ? "9:16" : "16:9";
         const sa = platformSafeArea(briefNow?.platform, aspect);
         const short = Math.min(W, H);
         const hits: string[] = [];
@@ -4677,10 +4681,14 @@ const TOOLS: ToolDef[] = [
               if (el.type === "fx" || el.x === undefined || el.y === undefined) return;
               const size = Number(el.size ?? 0);
               if (!size) return;
-              const halfW = ((size * short) / 2 / W) * 100;
-              const halfH = ((size * short) / 2 / H) * 100;
+              // size 是短边百分比 → 换算成「占画面宽/高的百分比」的半宽半高
+              // 之前这里多乘了 100，导致任何元素都被判成几百 % 宽，安全区提醒全是误报
+              const halfW = (size / 2) * (short / W);
+              const halfH = (size / 2) * (short / H);
               const x = Number(el.x);
               const y = Number(el.y);
+              // 满屏元素是背景/出血，边缘一定贴着画面，报了就是噪音
+              if (size >= 80) return;
               const label = el.id ? `元素 ${el.id}` : `元素 #${i + 1}`;
               if (sa.right && 100 - (x + halfW) < sa.right) hits.push(`「${sc.name}」${label} 右边缘进了右侧 ${sa.right}% 按钮栏`);
               if (100 - (y + halfH) < sa.bottom) hits.push(`「${sc.name}」${label} 下边缘进了底部 ${sa.bottom}% 文案区`);
@@ -4716,6 +4724,42 @@ const TOOLS: ToolDef[] = [
               (hits.length > 6 ? `${nl}  - …还有 ${hits.length - 6} 处` : "") +
               `${nl}  要挪：字幕 set_subtitle_style(bottom=18~22)、元素 add_freeform_element/update_freeform_element 改 y`,
           );
+        }
+
+        // 竖屏构图（提醒级）：竖屏上下各 20% 是平台 UI 与拇指的地盘，主体放进去就被压
+        // 判「元素中心」而不是边缘：出血/延伸是常见设计，中心在禁区才是真的「放错地方」
+        if (portrait) {
+          const TOP = 20;
+          const BOTTOM = 80;
+          const off: string[] = [];
+          for (const sc of scenes as any[]) {
+            if (sc.type === "freeform") {
+              const els = (sc.props?.elements ?? []) as any[];
+              els.forEach((el, i) => {
+                if (el.type === "fx" || el.y === undefined) return;
+                const size = Number(el.size ?? 0);
+                // 满屏背景不算主体（出血是设计），只查真正被看见的那几个元素
+                if (size >= 80) return;
+                const y = Number(el.y);
+                const label = el.id ? `元素 ${el.id}` : `元素 #${i + 1}`;
+                if (y < TOP) off.push(`「${sc.name}」${label} 中心在顶部 ${TOP}% 内（状态栏/下拉刷新区）`);
+                if (y > BOTTOM) off.push(`「${sc.name}」${label} 中心在底部 ${100 - BOTTOM}% 内（字幕/平台文案/按钮区）`);
+              });
+            }
+            if (sc.box) {
+              const by = Number(sc.box.y ?? 50);
+              if (by < TOP) off.push(`「${sc.name}」画中画中心在顶部 ${TOP}% 内（状态栏区）`);
+              if (by > BOTTOM) off.push(`「${sc.name}」画中画中心在底部 ${100 - BOTTOM}% 内（字幕/平台 UI 区）`);
+            }
+          }
+          if (off.length) {
+            issues.push(
+              `ℹ️ 竖屏构图提醒（9:16 上方 20% / 下方 20% 不放主体，内容应在中间 60% 且垂直居中）：${nl}  - ` +
+                off.slice(0, 5).join(`${nl}  - `) +
+                (off.length > 5 ? `${nl}  - …还有 ${off.length - 5} 处` : "") +
+                `${nl}  要挪：元素的 y 改到 30–70；有字幕的幕整体上移 8%；确实要出血就把元素铺满整屏（size≥100）当背景，别把主体放进去`,
+            );
+          }
         }
       }
 
