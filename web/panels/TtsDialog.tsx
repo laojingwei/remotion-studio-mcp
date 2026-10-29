@@ -56,8 +56,17 @@ export const TtsDialog: React.FC<{ open: boolean; onClose: () => void }> = ({
           setSpeed(c.speed);
           setInstruct(c.instruct ?? "");
         }
-        const cur = useDoc.getState().selectedId ?? useDoc.getState().project?.scenes[0]?.id ?? "";
-        setTargetScene((t) => t || cur);
+        const st = useDoc.getState();
+        const scenes = st.project?.scenes ?? [];
+        const cur = st.selectedId ?? scenes[0]?.id ?? "";
+        /**
+         * 原来是 `setTargetScene((t) => t || cur)`：只在第一次填值，之后永远沿用。
+         * 而这个弹窗关掉只是 `return null`，组件不卸载、state 不丢 —— 于是
+         * 「打开过 → 换工程 / 删场景 → 再打开」时会拿着一个已经不存在的 sceneId，
+         * 点「加入该场景」就报「找不到场景: scene_xxx」。
+         * 现在每次打开都校验一次：不在当前工程里就重置。
+         */
+        setTargetScene((t) => (scenes.some((s) => s.id === t) ? t : cur));
       })
       .catch((e) => setMsg(e instanceof Error ? e.message : "读取配置失败"));
     void fetchTtsSpeakers()
@@ -155,11 +164,20 @@ export const TtsDialog: React.FC<{ open: boolean; onClose: () => void }> = ({
   };
 
   const addToScene = () => {
-    if (!result || !targetScene) return;
+    if (!result) return;
+    const scenes = project?.scenes ?? [];
+    if (scenes.length === 0) {
+      setMsg("当前工程还没有场景，先加一个再放语音");
+      return;
+    }
+    // 兜底：面板可能开很久，期间选中场景被删掉 / 换了工程 —— 回退到第一个，
+    // 别把 add_element 发给一个不存在的 sceneId
+    const sceneId = scenes.some((s) => s.id === targetScene) ? targetScene : scenes[0].id;
+    if (sceneId !== targetScene) setTargetScene(sceneId);
     void apply([
       {
         op: "add_element",
-        sceneId: targetScene,
+        sceneId,
         element: {
           kind: "audio",
           src: result.url,
