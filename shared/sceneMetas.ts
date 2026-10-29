@@ -93,6 +93,13 @@ export const chartMeta: SceneMeta = {
   schema: z.object({
     heading: z.string().describe("图表标题"),
     unit: z.string().default("").describe("数值单位，如 %、万"),
+    scale: z
+      .enum(["linear", "log"])
+      .default("linear")
+      .describe(
+        "纵轴口径：linear 线性 / log 对数。数据跨数量级（比如 3 和 6800 同屏）时用 log，" +
+          "否则小值的柱子矮到看不见，像数据丢了；用 log 会在图上标「对数轴」",
+      ),
     data: z
       .array(
         z.object({
@@ -583,7 +590,7 @@ export const ringMeta: SceneMeta = {
   summary: "大圆环展示百分比，成果/进度",
   schema: z.object({
     heading: z.string().default("").describe("标题，可留空"),
-    percent: z.string().describe("百分比数字，如 72"),
+    percent: z.string().describe("百分比数字，如 72（写成 72% 也可以，渲染时会去掉多余的百分号）"),
     label: z.string().describe("说明，如 完成率"),
     sub: z.string().default("").describe("补充说明，可留空"),
   }),

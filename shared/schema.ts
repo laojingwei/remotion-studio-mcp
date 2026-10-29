@@ -347,7 +347,14 @@ export const subtitleStyleSchema = z.object({
   color: z.string().optional().describe("文字颜色"),
   bg: z.string().optional().describe("字幕底色（CSS 色值/渐变，默认 #000）"),
   bgOpacity: z.number().min(0).max(1).optional().describe("底色透明度，默认 0.55"),
-  bottom: z.number().optional().describe("距底部（短边百分比，默认 6.5）"),
+  bottom: z
+    .number()
+    .optional()
+    .describe(
+      "距**画面底边**的距离（短边百分比，默认 6.5）。基准是画面边缘，不含平台 UI：" +
+        "竖屏抖音/快手的按钮栏和文案区会压住底部约 16%（按画面高算），" +
+        "所以竖屏建议 ≥ 20，横屏 6.5 就够；check_project 会对压进 UI 区的字幕提醒",
+    ),
   bold: z.number().optional().describe("字重 100-900，默认 600（注意：不是布尔）"),
   stroke: z.number().optional().describe("描边宽度（短边百分比）"),
   strokeColor: z.string().optional().describe("描边颜色"),

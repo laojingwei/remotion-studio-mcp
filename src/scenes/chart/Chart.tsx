@@ -1,6 +1,7 @@
 import React from "react";
 import { spring, useCurrentFrame, useVideoConfig } from "remotion";
 import type { Theme } from "../../../shared/schema";
+import { barRatio } from "../../../shared/numeric";
 import { useSceneLayout } from "../../layout/useSceneLayout";
 import { Editable, SceneFrame, useEnter, scaleNumericText } from "../ui";
 
@@ -13,7 +14,8 @@ const Bar: React.FC<{
   unit: string;
   theme: Theme;
   highlight: boolean;
-}> = ({ datum, max, delay, unit, theme, highlight }) => {
+  scale: "linear" | "log";
+}> = ({ datum, max, delay, unit, theme, highlight, scale }) => {
   const frame = useCurrentFrame();
   const { fps } = useVideoConfig();
   const { u, h, b, isPortrait } = useSceneLayout();
@@ -25,7 +27,8 @@ const Bar: React.FC<{
     durationInFrames: Math.round(fps * 1.1),
   });
   const grow = Math.max(0, Math.min(1, p));
-  const pct = (datum.value / max) * grow;
+  // 柱高比例统一走 shared/numeric.ts 的 barRatio（linear / log 两种口径）
+  const pct = barRatio(datum.value, max, scale) * grow;
 
   return (
     <div
@@ -119,10 +122,11 @@ export type ChartProps = {
   theme: Theme;
   heading: string;
   unit: string;
+  scale: "linear" | "log";
   data: Datum[];
 };
 
-export const ChartScene: React.FC<ChartProps> = ({ theme, heading, unit, data }) => {
+export const ChartScene: React.FC<ChartProps> = ({ theme, heading, unit, scale = "linear", data }) => {
   const { u, h, b, isPortrait } = useSceneLayout();
   const head = useEnter(0);
   const axis = useEnter(2);
@@ -132,7 +136,7 @@ export const ChartScene: React.FC<ChartProps> = ({ theme, heading, unit, data })
   return (
     <SceneFrame theme={theme} justify="center">
       {/* 横屏也铺满内容区：收窄到 80% 会把图表压成中间一小块，上下再留大片空 */}
-      <div style={{ width: "100%" }}>
+      <div style={{ width: "100%", position: "relative" }}>
         <Editable
           id="heading"
           title="图表标题"
@@ -149,6 +153,24 @@ export const ChartScene: React.FC<ChartProps> = ({ theme, heading, unit, data })
         >
           {heading}
         </Editable>
+
+        {/* 对数轴必须标出来：柱子长短不再和数值成正比，不标就是误导读者 */}
+        {scale === "log" ? (
+          <div
+            style={{
+              position: "absolute",
+              top: 0,
+              right: 0,
+              fontFamily: theme.font.body,
+              fontSize: b(1.6),
+              letterSpacing: u(0.08),
+              color: theme.palette.textMuted,
+              opacity: 0.9,
+            }}
+          >
+            对数轴
+          </div>
+        ) : null}
 
         <Editable
           id="chart"
@@ -175,6 +197,7 @@ export const ChartScene: React.FC<ChartProps> = ({ theme, heading, unit, data })
               unit={unit}
               theme={theme}
               highlight={i === peakIdx}
+              scale={scale}
             />
           ))}
         </Editable>

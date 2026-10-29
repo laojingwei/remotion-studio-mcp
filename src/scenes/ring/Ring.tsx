@@ -1,5 +1,6 @@
 import React from "react";
 import type { Theme } from "../../../shared/schema";
+import { parseNumeric } from "../../../shared/numeric";
 import { useSceneLayout } from "../../layout/useSceneLayout";
 import { Editable, SceneFrame, scaleNumericText, useCountUp, useEnter } from "../ui";
 
@@ -16,7 +17,11 @@ export const RingScene: React.FC<RingProps> = ({ theme, heading, percent, label,
   const { u, h, isPortrait } = useSceneLayout();
   const enter = useEnter(0);
   const c = theme.palette;
-  const pct = Math.max(0, Math.min(100, Number(percent) || 0));
+  // percent 是字符串字段，用户会写成「72%」；直接 Number() 会得到 NaN，
+  // 圆环填 0 而数字照旧显示 72% —— 图和字对不上（见 shared/numeric.ts parseNumeric）
+  const pct = Math.max(0, Math.min(100, parseNumeric(percent, 0)));
+  // 显示时去掉用户自己写的 %，组件统一补一个带色的小 %（否则就是 72%%）
+  const shown = String(percent ?? "").replace(/%/g, "").trim();
   // 环形填充与中间的数字一起从 0 涨到目标值（motion=0 时 useCountUp 直接返回目标值）
   const pctNow = useCountUp(pct, 8);
   const growRatio = pct > 0 ? Math.min(1, pctNow / pct) : 1;
@@ -79,7 +84,7 @@ export const RingScene: React.FC<RingProps> = ({ theme, heading, percent, label,
                   letterSpacing: "-0.03em",
                 }}
               >
-                {scaleNumericText(percent, growRatio)}
+                {scaleNumericText(shown, growRatio)}
                 <span style={{ fontSize: h(3.4), color: c.primary }}>%</span>
               </span>
             </Editable>

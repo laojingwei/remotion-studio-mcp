@@ -9,7 +9,7 @@
  */
 import assert from "node:assert/strict";
 import { applyOps, createSeedProject, type Op } from "../shared/ops";
-import { easeOutCubic, scaleNumericText } from "../shared/numeric";
+import { barRatio, easeOutCubic, parseNumeric, scaleNumericText } from "../shared/numeric";
 
 let passed = 0;
 const failures: string[] = [];
@@ -64,6 +64,26 @@ test("纯四位数（年份）不滚 —— 否则像乱码", () => {
 test("factor >= 1 原样返回（收尾帧不能被浮点污染）", () => {
   assert.equal(scaleNumericText("86.7%", 1.0000001), "86.7%");
   assert.equal(scaleNumericText("86.7%", 1), "86.7%");
+});
+
+test("parseNumeric：带单位的百分比能取出数值（ring 的图字不一致就是这么来的）", () => {
+  assert.equal(parseNumeric("72%"), 72);
+  assert.equal(parseNumeric("-12.5 万"), -12.5);
+  assert.equal(parseNumeric(72), 72);
+  assert.equal(parseNumeric("没写数字"), 0);
+  assert.equal(parseNumeric("没写数字", 50), 50);
+});
+
+test("barRatio：linear 按值/最大值，log 压数量级且 0 值归 0", () => {
+  assert.equal(barRatio(30, 60), 0.5);
+  assert.equal(barRatio(0, 60), 0);
+  assert.equal(barRatio(-5, 60), 0, "负值不画柱子");
+  assert.equal(barRatio(30, 0), 0, "最大值为 0 时不能除出 NaN");
+  // 跨数量级：linear 里 3/6800 ≈ 0.04% 看不见；log 里还有约 1/4 的高度
+  assert.ok(barRatio(3, 6800) < 0.001);
+  const logRatio = barRatio(3, 6800, "log");
+  assert.ok(logRatio > 0.1 && logRatio < 0.2, `log 比例 ${logRatio}`);
+  assert.equal(barRatio(6800, 6800, "log"), 1, "最大值必须顶满");
 });
 
 test("easeOutCubic：0→0、1→1、中间单调递增且越来越慢", () => {
