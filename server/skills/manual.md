@@ -146,6 +146,7 @@
 |---|---|
 | 从零做一支片 | `start_guide` → 9 步问诊 → 确认 → 三提案 → 分镜 → build → 配音 → 自检 → 渲染（`get_guide("director")` 全流程） |
 | 文案写得像废话 | 标题写结论不写主题、数字配参照系、删形容词（`get_guide("content")`）；`save_script` 会做机械体检 |
+| 口播一听就是 AI 写的 | 四条结构签名：翻案腔（不是…而是…）、三项排比（不仅…也…更…）、结尾升华（让我们一起）、模糊归因（专家指出）。再加黑话与「念不出来的符号」（`get_guide("content","AI 味")`），`save_script` / `save_storyboard` 会自动点名 |
 | 竖屏片被平台 UI 压住 | 上 20% / 内容 60% / 下 20% 三区域，内容垂直居中，字幕上移（`get_guide("craft")` §11） |
 | 精修越改越花 | 精修是减法：先对齐/层级/减色，再加新特效（`get_guide("qa")` 精修与三个肉身测试） |
 | 只改某幕文案 | `update_scene(props)` 或 `update_element`；**改过口播必须重新 `tts_narration` 重量** |

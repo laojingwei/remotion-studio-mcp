@@ -1,15 +1,19 @@
 /**
  * 文案体检（机械层）。
  *
- * 只查三类机器查得出、且确实拉低观感的问题：
- *   1. 空洞词（显著/全面/赋能…）——形容词零信息量，观众听不出差别
+ * 查四类机器查得出、且确实拉低观感的问题：
+ *   1. 空洞词（显著/全面/极致…）——形容词零信息量，观众听不出差别
  *   2. 数字没有参照系——孤立数字不构成信息
  *   3. 句子太长——屏幕上读不完、口播一口气念不完
+ *   4. AI 味（见 `aiFlavor.ts`）——翻案腔、三项排比、官腔黑话、结尾升华、念不出来的符号
  *
  * 查不出「没意思」「没观点」，那只能靠 `get_guide("content")` 的三问自己判断。
  * 所以这里全部是提醒级，不阻断任何流程。
  */
 
+import { detectFlavor, detectScriptFlavor } from "./aiFlavor";
+
+/** 纯形容词：补不出数字就该删。商业黑话在 aiFlavor 的 A6 里，这里不重复列 */
 const HOLLOW = [
   "显著",
   "全面",
@@ -17,21 +21,14 @@ const HOLLOW = [
   "进一步",
   "持续",
   "深度",
-  "赋能",
-  "打造",
-  "助力",
-  "一站式",
-  "全方位",
   "高效",
-  "专业",
   "优质",
   "领先",
   "颠覆",
   "极致",
-  "闭环",
-  "抓手",
-  "生态化",
-  "深度融合",
+  "精准",
+  "丰富",
+  "完善",
 ];
 
 /** 对比词：有它，数字才算有参照系 */
@@ -108,6 +105,7 @@ export function lintCopy(text: string, kind: "screen" | "voice" = "voice"): Copy
   if (!text || !text.trim()) return [];
   const issues = [...lintHollow(text), ...lintNumbers(text)];
   issues.push(...(kind === "screen" ? lintScreen(text) : lintVoice(text)));
+  for (const hit of detectFlavor(text, kind)) issues.push({ level: hit.level, msg: hit.msg });
   return issues;
 }
 
@@ -127,5 +125,18 @@ export function lintCopyLines(
       lines.push(`${item.label ? `${item.label}：` : ""}${issue.msg}`);
     }
   }
+  return lines;
+}
+
+/**
+ * 整篇体检：逐条 + 跨条。
+ * 单条读着都没问题、连着读才发现「没有一个数字」「句子一样长」，只有整篇看才暴露。
+ */
+export function lintScriptLines(
+  items: { text: string; kind?: "screen" | "voice"; label?: string }[],
+  maxPerKind = 3,
+): string[] {
+  const lines = lintCopyLines(items, maxPerKind);
+  for (const hit of detectScriptFlavor(items.map((i) => i.text))) lines.push(hit.msg);
   return lines;
 }

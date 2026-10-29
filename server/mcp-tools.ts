@@ -35,7 +35,8 @@ import {
 import { customEffectSchema, MAX_VOLUME, sceneSpans, totalDuration } from "../shared/schema";
 import { SUBTITLE_LIMITS, normalizeSubtitle, subtitleToField } from "../shared/subtitleText";
 import { sceneSubtitleLines, subtitleMaxChars } from "../shared/subtitle";
-import { lintCopyLines } from "../shared/copyLint";
+import { detectFlavor } from "../shared/aiFlavor";
+import { lintCopyLines, lintScriptLines } from "../shared/copyLint";
 import { beatFrames, beatTimes, buildCompressCurve, DEFAULT_DUCKING, gainForTarget, nearestBeat, summarizeCurve } from "../shared/audio";
 import { analyzeBeats, BEAT_CONFIDENCE_MIN } from "./audio-analysis.service";
 
@@ -841,6 +842,7 @@ const TOOLS: ToolDef[] = [
         "4. 确认【闸口③】 → confirm_brief（不确认，build_storyboard 直接拒绝）",
         "5. 稿件【闸口④】 → intake(10) 定稿件类型 → get_guide(\"script\") 定写法 → save_script 写稿 → **把整段稿发给用户过目** → confirm_script",
         "   ↳ 文案三条：标题写结论不写主题、数字配参照系、删掉形容词（get_guide(\"content\")）；save_script 会做机械体检",
+        "   ↳ 去 AI 味：翻案腔（不是…而是…）、三项排比（不仅…也…更…）、结尾升华（让我们一起）、模糊归因（专家指出）四条最致命，见 get_guide(\"content\",\"AI 味\")",
         "   ↳ 稿子决定幕数、幕长、配音、字幕。口播稿念得出来吗？屏幕文案字够少吗？双轨有没有两套话打架？——没确认别写分镜。",
         "6. 观感规格 → intake(11)：mood 三个形容词 / 安全区 / 封面 / 字幕规格 / 音效层 → save_brief(step=11)",
         "   ↳ 这五项决定\"好不好看、专不专业\"。写分镜时可以先不齐（会软提醒），但**请用户看片前必须齐**——标准没定，他只能说「感觉不对」。",
@@ -920,7 +922,7 @@ const TOOLS: ToolDef[] = [
   {
     name: "get_guide",
     description:
-      "读项目里的技能指南（按需加载，省上下文）：工具全书 manual（能力地图/意图速查/铁律）、导演流程、稿件写法 script、内容打磨 content（标题写结论/数字配参照/删形容词）、字幕写法 subtitle（一屏一句、无标点）、画面质感 craft、用途结构 formats、声音设计 sound、长片章节、版式配方、旁白配音、记忆与模板、交付验收。先用 list_guides 看有哪些，再 get_guide 取某一篇；传 section 可只取某一节。",
+      "读项目里的技能指南（按需加载，省上下文）：工具全书 manual（能力地图/意图速查/铁律）、导演流程、稿件写法 script、内容打磨 content（标题写结论/数字配参照/删形容词/去 AI 味：翻案腔、三项排比、结尾升华、黑话、念不出来的符号）、字幕写法 subtitle（一屏一句、无标点）、画面质感 craft、用途结构 formats、声音设计 sound、长片章节、版式配方、旁白配音、记忆与模板、交付验收。先用 list_guides 看有哪些，再 get_guide 取某一篇；传 section 可只取某一节。",
     shape: {
       name: z
         .string()
@@ -5019,14 +5021,20 @@ const TOOLS: ToolDef[] = [
       // 类型以稿件为准回写 brief，避免两处说法不一致
       if (a.type && a.type !== brief.scriptType) saveBrief(p.id, { scriptType: a.type } as Brief);
       const nl = String.fromCharCode(10);
-      // 机械体检：空洞词 / 数字缺参照 / 句子太长。查不出「没意思」，但能挡掉一半废话
+      // 机械体检：空洞词 / 数字缺参照 / 句子太长 / AI 味。
+      // 查不出「没意思」，但能挡掉一半废话和几乎所有「一眼 AI」的句式
       const kind = (a.type ?? brief.scriptType) === "屏幕文案" ? ("screen" as const) : ("voice" as const);
-      const lint = lintCopyLines(
-        script.segments.map((seg, i) => ({ text: seg.text, kind, label: `第 ${i + 1} 段` })),
+      const items = script.segments.map((seg, i) => ({ text: seg.text, kind, label: `第 ${i + 1} 段` }));
+      const lint = lintScriptLines(items);
+      const warnCount = script.segments.reduce(
+        (n, seg) => n + detectFlavor(seg.text, kind).filter((h) => h.level === "warn").length,
+        0,
       );
       const lintNote = lint.length
-        ? `${nl}文案体检（提醒，不阻断）：${nl}- ${lint.slice(0, 8).join(`${nl}- `)}` +
-          `${nl}（规则见 get_guide("content")：标题写结论、数字配参照、删形容词）`
+        ? `${nl}文案体检（提醒，不阻断）${warnCount ? `：其中 AI 味 ${warnCount} 处建议改` : ""}：${nl}- ${lint
+            .slice(0, 10)
+            .join(`${nl}- `)}` +
+          `${nl}（规则见 get_guide("content")；去 AI 味的词表与改写对照：get_guide("content","AI 味")）`
         : "";
       return (
         `已保存稿件${nl}${scriptToText(script, brief.durationSec)}${lintNote}${nl}` +
@@ -5108,7 +5116,24 @@ const TOOLS: ToolDef[] = [
       }
       const prevShots = a.append ? (readStoryboard(p.id)?.shots ?? []) : [];
       const sb = saveStoryboard(p.id, { shots: [...prevShots, ...(a.shots as Storyboard["shots"])] });
-      return `已保存分镜表${a.append ? `（追加 ${a.shots.length} 幕，共 ${sb.shots.length} 幕）` : ""}${String.fromCharCode(10)}${storyboardToText(sb)}${String.fromCharCode(10)}下一步：确认分镜后 build_storyboard 一次建成（会顺带写字幕）`;
+      // 分镜是最后一次「只动文字」的机会：这里不体检，等铺开再改就要重建场景
+      const shotLint = lintScriptLines(
+        sb.shots.flatMap((s, i) => {
+          const out: { text: string; kind: "screen" | "voice"; label: string }[] = [];
+          if (s.text) out.push({ text: s.text, kind: "voice", label: `第 ${i + 1} 幕口播` });
+          const head = (s.props as Record<string, unknown> | undefined)?.title;
+          if (typeof head === "string" && head.trim()) {
+            out.push({ text: head, kind: "screen", label: `第 ${i + 1} 幕大字` });
+          }
+          return out;
+        }),
+      );
+      const lintNote = shotLint.length
+        ? `${String.fromCharCode(10)}文案体检（提醒，不阻断；现在改最便宜）：${String.fromCharCode(10)}- ${shotLint
+            .slice(0, 8)
+            .join(`${String.fromCharCode(10)}- `)}`
+        : "";
+      return `已保存分镜表${a.append ? `（追加 ${a.shots.length} 幕，共 ${sb.shots.length} 幕）` : ""}${String.fromCharCode(10)}${storyboardToText(sb)}${lintNote}${String.fromCharCode(10)}下一步：确认分镜后 build_storyboard 一次建成（会顺带写字幕）`;
     },
   },
   {
