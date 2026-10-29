@@ -127,10 +127,21 @@ test("dryRun：未迁移时没有任何条目被标记为跳过", () => {
 
 /* ────────────────────────── reset ────────────────────────── */
 
-test("没迁移过时 reset 无事可做（不报错、不动文件）", () => {
+/**
+ * reset 的前提是「本机迁过」。老写法直接断言 plan 为空 —— 只在没迁过的机器上成立，
+ * 一旦开发者真的把工作区搬走（这台机器就搬到了 D:\dsh\Remotion workspace），
+ * 用例必挂，后面所有人就习惯性忽略这条红。所以按实际状态分支判断。
+ */
+test("reset 只回滚真的迁移过的目录（没迁移过则无事可做）", () => {
+  const migrated = !!getWorkspaceStatus().workspaceDir;
   const r = resetWorkspace({ dryRun: true });
-  assert.equal(r.plan.length, 0);
-  assert.equal(r.moved.length, 0);
+  assert.equal(r.moved.length, 0, "dryRun 不能搬任何东西");
+  if (migrated) {
+    assert.ok(r.plan.length > 0, "已迁移时应该给出回滚计划");
+    assert.ok(r.plan.every((p) => !p.skip), "回滚计划里每一项都该是真链接");
+  } else {
+    assert.equal(r.plan.length, 0);
+  }
 });
 
 /* ────────────────────────── 收尾 ────────────────────────── */
