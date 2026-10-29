@@ -35,6 +35,7 @@ import {
 import { customEffectSchema, MAX_VOLUME, sceneSpans, totalDuration } from "../shared/schema";
 import { SUBTITLE_LIMITS, normalizeSubtitle, subtitleToField } from "../shared/subtitleText";
 import { sceneSubtitleLines, subtitleMaxChars } from "../shared/subtitle";
+import { lintCopyLines } from "../shared/copyLint";
 import { beatFrames, beatTimes, buildCompressCurve, DEFAULT_DUCKING, gainForTarget, nearestBeat, summarizeCurve } from "../shared/audio";
 import { analyzeBeats, BEAT_CONFIDENCE_MIN } from "./audio-analysis.service";
 
@@ -839,6 +840,7 @@ const TOOLS: ToolDef[] = [
         "   ⚠ 画幅必须问死：横屏（课程/B站/视频号）还是竖屏（抖音原生）。画幅是不可逆的架构决策——版式、字号基准、安全区、能放几列全跟着它变。",
         "4. 确认【闸口③】 → confirm_brief（不确认，build_storyboard 直接拒绝）",
         "5. 稿件【闸口④】 → intake(10) 定稿件类型 → get_guide(\"script\") 定写法 → save_script 写稿 → **把整段稿发给用户过目** → confirm_script",
+        "   ↳ 文案三条：标题写结论不写主题、数字配参照系、删掉形容词（get_guide(\"content\")）；save_script 会做机械体检",
         "   ↳ 稿子决定幕数、幕长、配音、字幕。口播稿念得出来吗？屏幕文案字够少吗？双轨有没有两套话打架？——没确认别写分镜。",
         "6. 观感规格 → intake(11)：mood 三个形容词 / 安全区 / 封面 / 字幕规格 / 音效层 → save_brief(step=11)",
         "   ↳ 这五项决定\"好不好看、专不专业\"。写分镜时可以先不齐（会软提醒），但**请用户看片前必须齐**——标准没定，他只能说「感觉不对」。",
@@ -918,11 +920,11 @@ const TOOLS: ToolDef[] = [
   {
     name: "get_guide",
     description:
-      "读项目里的技能指南（按需加载，省上下文）：工具全书 manual（能力地图/意图速查/铁律）、导演流程、稿件写法 script、字幕写法 subtitle（一屏一句、无标点）、画面质感 craft、用途结构 formats、声音设计 sound、长片章节、版式配方、旁白配音、记忆与模板、交付验收。先用 list_guides 看有哪些，再 get_guide 取某一篇；传 section 可只取某一节。",
+      "读项目里的技能指南（按需加载，省上下文）：工具全书 manual（能力地图/意图速查/铁律）、导演流程、稿件写法 script、内容打磨 content（标题写结论/数字配参照/删形容词）、字幕写法 subtitle（一屏一句、无标点）、画面质感 craft、用途结构 formats、声音设计 sound、长片章节、版式配方、旁白配音、记忆与模板、交付验收。先用 list_guides 看有哪些，再 get_guide 取某一篇；传 section 可只取某一节。",
     shape: {
       name: z
         .string()
-        .describe("技能名，如 manual / director / script / subtitle / craft / formats / sound / freeform / long-form / scene-recipes / narration / qa / memory / delivery / tools-quickref"),
+        .describe("技能名，如 manual / director / script / content / subtitle / craft / formats / sound / freeform / long-form / scene-recipes / narration / qa / memory / delivery / tools-quickref"),
       section: z
         .string()
         .optional()
@@ -4747,6 +4749,11 @@ const TOOLS: ToolDef[] = [
           brief
             ? `当前进度：${progress.done.length}/9${progress.finished ? "（1–9 已问完）" : `，下一步第 ${progress.next} 步`}`
             : "还没有 brief：从第 1 步开始。",
+          "",
+          "用户说「你定 / 随便 / 你看着办」时的默认值（别硬问，用了就写进 assumed）：",
+          "  抖音 · 竖屏 9:16 · 30 秒 · 口播稿 · 硬字幕 · MP4 · 风格按题材在风格库里挑 · 禁止清单从 craft §10 挑两条",
+          "  真正会改变结构的只有三个：目标（要达成什么）、时长、画幅。其余能用默认就用默认。",
+          "  ⚠ 用了默认值的字段必须写进 save_brief 的 assumed，confirm_brief 会要求用户逐条点头。",
           progress.finished
             ? script?.confirmedAt
               ? `第 10 步稿件：已确认 ✅`
@@ -4968,8 +4975,17 @@ const TOOLS: ToolDef[] = [
       // 类型以稿件为准回写 brief，避免两处说法不一致
       if (a.type && a.type !== brief.scriptType) saveBrief(p.id, { scriptType: a.type } as Brief);
       const nl = String.fromCharCode(10);
+      // 机械体检：空洞词 / 数字缺参照 / 句子太长。查不出「没意思」，但能挡掉一半废话
+      const kind = (a.type ?? brief.scriptType) === "屏幕文案" ? ("screen" as const) : ("voice" as const);
+      const lint = lintCopyLines(
+        script.segments.map((seg, i) => ({ text: seg.text, kind, label: `第 ${i + 1} 段` })),
+      );
+      const lintNote = lint.length
+        ? `${nl}文案体检（提醒，不阻断）：${nl}- ${lint.slice(0, 8).join(`${nl}- `)}` +
+          `${nl}（规则见 get_guide("content")：标题写结论、数字配参照、删形容词）`
+        : "";
       return (
-        `已保存稿件${nl}${scriptToText(script, brief.durationSec)}${nl}` +
+        `已保存稿件${nl}${scriptToText(script, brief.durationSec)}${lintNote}${nl}` +
         `下一步：把稿子整段发给用户过目（尤其口播语气、幕数、有没有事实要核），点头后 confirm_script`
       );
     },
