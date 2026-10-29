@@ -179,7 +179,7 @@ export const Eyebrow: React.FC<{ text: string; theme: Theme; accent?: boolean }>
   theme,
   accent = true,
 }) => {
-  const { u, h } = useSceneLayout();
+  const { u, b } = useSceneLayout();
   if (!text) return null;
   return (
     <div
@@ -189,7 +189,7 @@ export const Eyebrow: React.FC<{ text: string; theme: Theme; accent?: boolean }>
         gap: u(1.2),
         marginBottom: u(2),
         fontFamily: theme.font.heading,
-        fontSize: h(1.5),
+        fontSize: b(1.5),
         letterSpacing: u(0.22),
         textTransform: "uppercase",
         color: theme.palette.textMuted,

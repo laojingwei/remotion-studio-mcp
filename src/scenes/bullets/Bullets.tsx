@@ -11,17 +11,21 @@ const BulletRow: React.FC<{
   delay: number;
   theme: Theme;
   basis: string;
-}> = ({ item, index, delay, theme, basis }) => {
-  const { u, h } = useSceneLayout();
+  /** stack = 编号在上、文字在下（横屏三栏对比用）；row = 编号在左（竖排列表用） */
+  layout: "row" | "stack";
+}> = ({ item, index, delay, theme, basis, layout }) => {
+  const { u, h, b } = useSceneLayout();
   const e = useEnter(delay);
+  const stacked = layout === "stack";
   return (
     <Editable
       id={`item${index + 1}`}
       title={`要点 ${index + 1}`}
       style={{
         display: "flex",
+        flexDirection: stacked ? "column" : "row",
         alignItems: "flex-start",
-        gap: u(2.4),
+        gap: stacked ? u(2.2) : u(2.4),
         flex: `1 1 ${basis}`,
         minWidth: 0,
         opacity: e.opacity,
@@ -31,8 +35,8 @@ const BulletRow: React.FC<{
       <div
         style={{
           flex: "0 0 auto",
-          width: u(5.6),
-          height: u(5.6),
+          width: u(stacked ? 6.4 : 5.6),
+          height: u(stacked ? 6.4 : 5.6),
           borderRadius: u(1.2),
           background: theme.palette.surface,
           border: `1px solid ${theme.palette.primary}33`,
@@ -40,7 +44,7 @@ const BulletRow: React.FC<{
           alignItems: "center",
           justifyContent: "center",
           fontFamily: theme.font.heading,
-          fontSize: h(1.9),
+          fontSize: h(stacked ? 2.2 : 1.9),
           fontWeight: 700,
           color: theme.palette.primary,
           letterSpacing: "0.02em",
@@ -49,11 +53,19 @@ const BulletRow: React.FC<{
         {String(index + 1).padStart(2, "0")}
       </div>
 
-      <div style={{ display: "flex", flexDirection: "column", gap: u(0.7), paddingTop: u(0.4) }}>
+      <div
+        style={{
+          display: "flex",
+          flexDirection: "column",
+          gap: u(stacked ? 1 : 0.7),
+          paddingTop: stacked ? 0 : u(0.4),
+          minWidth: 0,
+        }}
+      >
         <div
           style={{
             fontFamily: theme.font.heading,
-            fontSize: h(3.1),
+            fontSize: h(stacked ? 3.4 : 3.1),
             lineHeight: 1.25,
             fontWeight: 600,
             color: theme.palette.text,
@@ -66,7 +78,7 @@ const BulletRow: React.FC<{
           <div
             style={{
               fontFamily: theme.font.body,
-              fontSize: h(1.9),
+              fontSize: b(1.9),
               lineHeight: 1.5,
               color: theme.palette.textMuted,
             }}
@@ -86,15 +98,24 @@ export type BulletsProps = {
 };
 
 export const BulletsScene: React.FC<BulletsProps> = ({ theme, heading, items }) => {
-  const { u, h, isPortrait } = useSceneLayout();
+  const { u, h, b, isPortrait } = useSceneLayout();
   const head = useEnter(0);
 
   const list = items ?? [];
-  // 3 条以内竖排（要点本来就是从上往下读的），4 条起两列。
-  // 用 flex 而不是 grid：最后一行只剩一条时它会被拉满整行，不会留孤儿格
-  const columns = !isPortrait && list.length >= 3 ? 2 : 1;
+  /**
+   * 列数。竖屏永远单列（要点是顺着往下读的）。
+   * 横屏按条数分：2 条 2 列、3 条 3 列、4 条 2×2、5 条以上 3 列。
+   * 之前固定 2 列，3 条会排成 2+1，右下角空出半格，整页看着缺一块。
+   */
+  const columns = isPortrait
+    ? 1
+    : list.length <= 1
+      ? 1
+      : list.length === 4
+        ? 2
+        : Math.min(3, list.length);
   const colGap = u(isPortrait ? 0 : 5);
-  const rowGap = u(3.4);
+  const rowGap = u(columns >= 3 ? 5 : 3.4);
   const basis = `calc((100% - ${colGap * (columns - 1)}px) / ${columns})`;
 
   return (
@@ -105,7 +126,7 @@ export const BulletsScene: React.FC<BulletsProps> = ({ theme, heading, items }) 
           title="小标题"
           style={{
             fontFamily: theme.font.heading,
-            fontSize: h(isPortrait ? 2.2 : 2.0),
+            fontSize: b(isPortrait ? 2.2 : 2.0),
             letterSpacing: u(0.18),
             textTransform: "uppercase",
             color: theme.palette.primary,
@@ -135,6 +156,7 @@ export const BulletsScene: React.FC<BulletsProps> = ({ theme, heading, items }) 
             delay={8 + i * 9}
             theme={theme}
             basis={basis}
+            layout={columns >= 3 ? "stack" : "row"}
           />
         ))}
       </div>

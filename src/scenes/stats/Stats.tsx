@@ -26,7 +26,7 @@ const StatValue: React.FC<{ value: string; delay: number }> = ({ value, delay })
 
 /** 数据大字：2-4 个关键数字 */
 export const StatsScene: React.FC<StatsProps> = ({ theme, heading, items }) => {
-  const { u, h, isPortrait } = useSceneLayout();
+  const { u, h, b, isPortrait } = useSceneLayout();
   const enter = useEnter(0);
 
   const list = items ?? [];
@@ -36,7 +36,18 @@ export const StatsScene: React.FC<StatsProps> = ({ theme, heading, items }) => {
   // grid 做不到 —— 那个空格子就是「孤儿行」
   const basis = `calc((100% - ${gap * (cols - 1)}px) / ${cols})`;
   // 列多了数字要小一号，否则三个大数字挤在一行
-  const valueSize = cols >= 3 ? 6.6 : cols === 2 ? 8 : 8.5;
+  // 横屏可以放开：16:9 横向空间够，数字小了整页就没分量
+  const valueSize = isPortrait
+    ? cols >= 3
+      ? 6.6
+      : cols === 2
+        ? 8
+        : 8.5
+    : cols >= 3
+      ? 8.4
+      : cols === 2
+        ? 9.6
+        : 10;
 
   return (
     <SceneFrame theme={theme} justify="center">
@@ -94,7 +105,7 @@ export const StatsScene: React.FC<StatsProps> = ({ theme, heading, items }) => {
               <span
                 style={{
                   fontFamily: theme.font.body,
-                  fontSize: h(2),
+                  fontSize: b(2),
                   color: theme.palette.textMuted,
                 }}
               >

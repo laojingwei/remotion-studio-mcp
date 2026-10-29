@@ -16,7 +16,7 @@ const Bar: React.FC<{
 }> = ({ datum, max, delay, unit, theme, highlight }) => {
   const frame = useCurrentFrame();
   const { fps } = useVideoConfig();
-  const { u, h, isPortrait } = useSceneLayout();
+  const { u, h, b, isPortrait } = useSceneLayout();
 
   const p = spring({
     frame: frame - delay,
@@ -101,7 +101,7 @@ const Bar: React.FC<{
         style={{
           marginTop: u(1.4),
           fontFamily: theme.font.body,
-          fontSize: h(1.7),
+          fontSize: b(1.7),
           color: theme.palette.textMuted,
           whiteSpace: "nowrap",
           overflow: "hidden",
@@ -123,7 +123,7 @@ export type ChartProps = {
 };
 
 export const ChartScene: React.FC<ChartProps> = ({ theme, heading, unit, data }) => {
-  const { u, h, isPortrait } = useSceneLayout();
+  const { u, h, b, isPortrait } = useSceneLayout();
   const head = useEnter(0);
   const axis = useEnter(2);
   const max = Math.max(...data.map((d) => d.value), 1);
@@ -131,14 +131,14 @@ export const ChartScene: React.FC<ChartProps> = ({ theme, heading, unit, data })
 
   return (
     <SceneFrame theme={theme} justify="center">
-      {/* 横屏收窄并居中，避免柱子被拉散、右侧留一块不对称空白 */}
-      <div style={{ width: isPortrait ? "100%" : "80%", margin: isPortrait ? 0 : "0 auto" }}>
+      {/* 横屏也铺满内容区：收窄到 80% 会把图表压成中间一小块，上下再留大片空 */}
+      <div style={{ width: "100%" }}>
         <Editable
           id="heading"
           title="图表标题"
           style={{
             fontFamily: theme.font.heading,
-            fontSize: h(isPortrait ? 3.4 : 2.8),
+            fontSize: b(isPortrait ? 3.4 : 2.8),
             fontWeight: 600,
             letterSpacing: "-0.01em",
             color: theme.palette.text,
@@ -155,7 +155,9 @@ export const ChartScene: React.FC<ChartProps> = ({ theme, heading, unit, data })
           title="图表"
           style={{
             width: "100%",
-            height: u(isPortrait ? 34 : 30),
+            // 图表高度：竖屏 34 单位已经是画面的三分之一强；横屏原来只有 30，
+            // 在 16:9 里只占 3 成高，看着像缩略图。给到 46 才撑得住整页
+            height: u(isPortrait ? 34 : 46),
             display: "flex",
             gap: u(isPortrait ? 2 : 3),
             borderBottom: `1px solid ${theme.palette.textMuted}44`,
