@@ -47,8 +47,21 @@ test("字段缺省时不出现空行", () => {
   assert.ok(!text.includes("soundPlan"), text);
 });
 
-console.log("[storyboard] 三问字段与长片提示");
+console.log("[brief] 推断项存证（assumed）");
 
+test("assumed 单列成警告，不混进正文", () => {
+  const text = briefToText({ goal: "涨粉", assumed: ["palette", "pace"] } as never);
+  assert.ok(text.includes("agent 替用户定的"), text);
+  assert.ok(text.includes("palette、pace"), text);
+  assert.ok(!text.includes("- assumed"), "assumed 不该作为普通字段出现在正文");
+});
+
+test("没有 assumed 时不出现警告", () => {
+  const text = briefToText({ goal: "涨粉" } as never);
+  assert.ok(!text.includes("替用户定的"), text);
+});
+
+console.log("[storyboard] 三问字段与长片提示");
 test("change / carry 渲染进分镜文本", () => {
   const text = storyboardToText({
     shots: [

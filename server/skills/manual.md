@@ -1,4 +1,4 @@
-# Agent 使用全书（93 个工具 = 4 常驻 + 89 按需 + 能力地图 + 铁律）
+# Agent 使用全书（103 个工具 = 4 常驻 + 99 按需 + 能力地图 + 铁律）
 
 给 agent 的完整说明书。**你不需要读源码、不需要试探参数**：这台机器能做什么、怎么组合、
 为什么没生效，全部在这页和 12 篇指南里。
@@ -7,7 +7,7 @@
 - **常驻核心 4 个**：`start_guide`（开工入口）、`get_guide`（读指南/本书）、`tool_search`（找工具）、`tool_call`（执行工具）
 - **其余 86 个**：不在常驻列表里。用法：`tool_search("画中画")` 找到工具（返回名字/说明/参数表）→ `tool_call(name="move_scene", args={...})` 执行。
   全量目录：`tool_search(all=true)`；某几个工具的完整文档：`tool_search(names=["add_element"])`
-- 本书的工具全表（§3）覆盖**全部** 90 个——先查表再搜索，比盲搜快
+- 本书的工具全表（§3）覆盖**全部** 99 个——先查表再搜索，比盲搜快
 
 **读法**：
 - 第一次接活：通读 §1 行为契约 + §2 能力地图，其余用到哪节读哪节
@@ -15,6 +15,29 @@
 - 只读某一节：`get_guide("manual", "意图速查")`（按标题关键字匹配）
 
 ---
+
+## 0. 调用协议（复制即用）
+
+常驻只有 4 个工具，其余全走 `tool_call(name, args)`——**业务参数一律包在 `args` 里**，扁平传会被拒：
+
+```
+读   {"name":"get_project","args":{"projectId":"p_xxx"}}
+写   {"name":"update_scene","args":{"sceneId":"s1","props":{"title":"新标题"}}}
+批量 {"name":"apply_to_scenes","args":{"tool":"set_subtitle_style","args":{"style":{"bottom":24}},"applyToAll":true}}
+```
+
+### 易错对照表
+
+| 容易写错 | 正确 | 说明 |
+|---|---|---|
+| `{step:3, goal:"..."}` 直接传 | `{"name":"save_brief","args":{...}}` | 参数必须包在 args 里 |
+| `set_format` | `set_formats` | 没有单数版本；值是数组 |
+| `preview_frame(frames:[...])` | `preview_frames(frames:[...])` | 单个是 `preview_frame(frame)` |
+| `format: "landscape"` | `formats: ["landscape"]` | 预览/渲染的字段是复数 |
+| `percent: "30%"` | `percent: 30` | 组件自己加 %，传字符串会变 30%% |
+| `letterSpacing: 5`（中文标题） | `letterSpacing: 0` | 单位是 px，中文大标题会裂开 |
+| 50 幕一次 `save_storyboard` | 分多次 + `append=true` | 一次传太长会被截断 |
+| 逐幕 `set_subtitle_style` × 50 | `apply_to_scenes(tool="set_subtitle_style", applyToAll=true)` | 全片统一的东西用批量通道 |
 
 ## 1. 行为契约（先读这个）
 
@@ -43,20 +66,21 @@
 | 转场 | 幕间转场（fade/slide 等 8 种，时长可调；**所有版式通用，自由画布也是场景**）；带字幕的幕转场 ≤ 6 帧 | `set_transition` |
 | 多轨 | 任意条轨道、画中画小窗（缩放/位置/圆角）、同轨自动防重叠 | `move_scene` `set_scene_box` |
 | 音频 | TTS 配音（单段/多段**自动对齐幕长并写字幕**）、BGM 全局轨、场景内音频裁时间窗、音量调节 | `tts_narration` `add_audio_track` `set_audio` |
-| 字幕 | 硬字幕烧录（字号/颜色/底/描边/阴影/位置/行高…全套样式）+ SRT/VTT 导出，两者同一套时间 | `set_subtitle(_style)` `export_subtitles` |
+| 字幕 | 硬字幕烧录（**一屏 8–16 字、不带标点**，写入自动拆段）+ SRT/VTT 导出，两者同一套时间 | `set_subtitle` `fix_subtitles` `set_subtitle_style` `export_subtitles` |
 | 风格 | **44 种风格规则库**（12 种可一键套用：改主题色+转场+推荐版式）、风格文件可改造/混搭/自定义 | `list_styles` `get_style` `apply_style` |
 | 画幅 | 多画幅并存（9:16 / 16:9 / 1:1 / 自定义 16–7680） | `set_formats` |
 | 预览 | 单帧/多帧抽帧（按场景偏移）、真实浏览器渲染前 dryRun 预检 | `preview_frame(s)` `render_video(dryRun)` |
 | 渲染 | 正式出片（可等完成）、进度查询、取消、历史产物清理 | `render_video` `get_render_status` `cancel_render` `cleanup_renders` |
 | 素材 | **分两层目录**：`assets/library/`（我的素材，跨工程复用）+ `assets/projects/<工程id>/`（工程私有，删工程连带清）；素材库上传/列表/改名、探测真实时长、图标装饰元素库 | `upload_asset` `list_assets` `list_project_assets` `delete_project_asset` `organize_assets` `get_asset_info` |
 | 自检 | 只读诊断：空场景/素材缺失/音频超长/freeform 异常/字幕问题，一条条给修法 | `check_project` |
-| 需求管线 | 9 步问诊落需求 → 分镜表确认 → 一次建好全部幕+字幕 | `intake` `save_brief` `save_storyboard` `build_storyboard` |
+| 需求管线 | 9 步问诊落需求 → 用户确认 → 定稿件类型 → 稿子确认 → 分镜表确认 → 一次建好全部幕+字幕 | `intake` `save_brief` `confirm_brief` `save_script` `confirm_script` `save_storyboard` `build_storyboard` |
+| 交付闸口 | 渲染前请用户到编辑器看片（抽帧查不出节奏/转场/音画错位）；用户也可自己导出；封面单独出图 | `request_review` `confirm_review` `render_cover` |
 | 协作与记忆 | 给用户发话/收用户消息；跨会话记坑/偏好/配方 | `reply_user` `get_user_messages` `remember` `recall` |
 | 布局辅助 | 网格坐标计算、多元素对齐/等距分布 | `layout_grid` `align_elements` |
 
 ---
 
-## 3. 工具全表（90 个，按域）
+## 3. 工具全表（99 个，按域）
 
 > 除 4 个核心工具（start_guide / get_guide / tool_search / tool_call）外，
 > 下面的工具都用 `tool_call(name, args)` 执行；参数表用 `tool_search(names=["工具名"])` 取。
@@ -67,7 +91,13 @@
 
 > **当前工程怎么变**：只有 `create_project` / `import_project` / `switch_project` /「删掉的正好是当前工程」这四种情况会改。**其余工具即使显式传了 `projectId`，也只影响这一次调用，不会改当前工程**——所以「先 `get_project(别的工程)` 看一眼，再回来干活」是安全的。
 
-**需求与分镜**：`intake(step)` · `save_brief(step?, 字段…)` · `get_brief` · `confirm_brief`（确认前不能开建）· `save_storyboard(shots[])` · `get_storyboard` · `build_storyboard`（一次建全部幕+字幕）
+**批量与样张**：`probe_style(slugs[])`（开工前风格样张，同幕出 2–3 张图给用户挑）· `apply_to_scenes(tool, args, applyToAll|sceneIds)`（全片统一改动的批量通道，替代 50 幕 × N 轮）
+
+**字幕**：`set_subtitle`（传整句即可，自动清标点+一屏一句，返回拆分预览）· `fix_subtitles`（旧工程/长字幕批量重拆，`dryRun` 预演）· `export_subtitles`（SRT / VTT）
+
+**需求与分镜**：`intake(step)`（1–9 接单 / 10 稿件 / 11 观感与规格） · `save_brief(step?, 字段…, assumed[])` · `get_brief` · `confirm_brief`（确认前不能开建）· `save_storyboard(shots[])` · `get_storyboard` · `build_storyboard`（`shot=N` 只建一幕做风格帧；`replace=true` 全量建）
+
+**稿件**：`save_script(segments[])`（一段一幕，带每段预估秒数；改稿会让确认失效）· `get_script` · `confirm_script`（稿子没确认不能写分镜，`scriptType=无稿` 除外）
 
 **场景**：`list_scene_types` · `add_scene` · `update_scene` · `set_scene_type`（换版式，同名 key 迁移）· `set_scene_timing` · `duplicate_scene` · `reorder_scenes` · `remove_scene` · `move_scene`（绝对帧/换轨）· `set_scene_box`（画中画）· `set_transition` · `set_transitions`（批量）
 
@@ -79,7 +109,7 @@
 
 **音频**：`set_audio`（BGM，含 **ducking 人声避让**；volume 1 = 原音、可到 5 = +14dB）· `balance_audio`（**响度配平**：段间大小不一）· `compress_audio`（**段内压缩**：一段里忽大忽小）· `analyze_audio`（测 BPM/拍点 + 响度）· `set_beat_grid`（按 BPM 建卡点网格）· `tts_check`（配音前预检）· `add_audio_track` · `update_audio_track` · `remove_audio_track` · `get_tts_config` · `set_tts_config` · `tts_synthesize` · `tts_narration(segments[], applyToScenes)`
 
-**字幕**：`set_subtitle` · `set_subtitle_style` · `export_subtitles`
+**字幕**：`set_subtitle`（自动拆段：清标点 + 一屏一句，返回拆分预览）· `fix_subtitles`（旧工程/长字幕批量重拆，`dryRun` 预演）· `set_subtitle_style` · `export_subtitles`（SRT / VTT）
 
 **素材**：`upload_asset`（`registerToLibrary` 决定进库还是进本工程目录）· `list_assets`（**只列共用库**）· `list_project_assets`（本工程目录）· `delete_project_asset` · `organize_assets`（把旧版散在 assets 根下的文件归位，默认 dryRun）· `rename_asset` · `delete_asset`（被工程引用的文件只删条目、保留文件）· `get_asset_info`（纯 Node 读文件头，不依赖外部工具）
 
@@ -89,7 +119,7 @@
 
 **风格与主题**：`list_styles` · `get_style` · `apply_style` · `set_theme`（配色/字体/motion）· `set_formats`
 
-**预览与渲染**：`preview_frame` · `preview_frames` · `render_video`（`wait` / `dryRun`）· `get_render_status` · `cancel_render` · `cleanup_renders` · `refresh_bundle`（改了 public 素材后渲染前调用）
+**验收与渲染**：`render_cover`（某帧导出封面 PNG）· `request_review`（请用户到编辑器看片，返回地址+重点看什么）· `confirm_review(approved, feedback[], selfRender)`（没通过 → `render_video` 拒绝）· `preview_frame` · `preview_frames` · `render_video`（`wait` / `dryRun` / `force`）· `get_render_status` · `cancel_render` · `cleanup_renders` · `refresh_bundle`（改了 public 素材后渲染前调用）
 
 **自检**：`check_project`（只读，交付前必跑）
 
@@ -103,7 +133,7 @@
 - **场景（幕）** = `type + props（业务数据）+ start + durationInFrames + track + box（画中画）+ transition + subtitle + elements[] + effects[]`
 - **总时长** = 所有轨最靠后的那一帧（`max(end)`），不是各幕相加
 - **元素** = `kind（text/image/shape/video/audio）+ 内容 props + 外观（rich 全套）+ anim[]（from/to 是**绝对值**不是偏移）`
-- **字幕**：写在场景上的 `subtitle` 一行一句；烧录主轨，时间按字数比例分配
+- **字幕**：`scene.subtitle` 是**一句一屏**（写入时自动清标点并按语义拆，每屏上限跟字号走）；烧录主轨，时间按字数比例分配；渲染与 SRT 共用同一套拆段
 - **音频轨**：`audioTracks[]` 全局 BGM；场景内音频元素只裁时间窗，窗口内从文件第 0 秒播
 
 ---
