@@ -284,7 +284,9 @@ export async function renderStills(
     const composition = await selectComposition({ puppeteerInstance, serveUrl, id: compositionId, inputProps, browserExecutable: BROWSER?.path, chromeMode: BROWSER?.mode });
     const f = Math.max(0, Math.min(composition.durationInFrames - 1, Math.round(frame ?? 0)));
     const safeTag = String(tag ?? "").replace(/[^\w-]/g, "").slice(0, 24);
-    const file = `${fmt.key}-${f}${safeTag ? `-${safeTag}` : ""}.png`;
+    // 文件名必须带 rev：同名文件会被 overwrite 覆盖，而 agent 习惯按上一版的路径打开
+    // （portrait-1656.png 已经是新的了，看到的却是自己记的那次）——白诊断过一次（复盘坑 #4）
+    const file = `${fmt.key}-${f}${safeTag ? `-${safeTag}` : ""}-r${project.rev}.png`;
     const output = path.join(stillDir, file);
     await renderStill({
       puppeteerInstance: await getBrowser(),
@@ -309,16 +311,22 @@ export async function renderStills(
 export type RenderTask = {
   id: string;
   projectId: string;
+  /** 工程名快照：编辑器要显示「agent 在渲染哪个工程」，不能为了一个名字再去查一次 */
+  projectName?: string;
   status: "queued" | "bundling" | "rendering" | "done" | "error" | "cancelled";
   progress: number;
   quality: RenderQuality;
   format: RenderFormat;
   formats: string[];
+  /** 当前正在渲的画幅 key（多画幅逐个渲，进度会从 0 重来，光看百分比会以为卡住了） */
+  currentFormat?: string;
   /** 自定义文件名前缀；不传就用工程名（工程名常带过期标签，如"60s精华版"实际 116 秒） */
   fileName?: string;
   outputs: { format: string; url: string }[];
   error?: string;
   createdAt: number;
+  /** 最后一次状态变化时间（结束时间可能就是它），给编辑器算「已经跑了多久」 */
+  updatedAt?: number;
 };
 
 export type RenderQuality = "low" | "standard" | "high";
@@ -346,6 +354,15 @@ let chain: Promise<unknown> = Promise.resolve();
 export const getTask = (id: string) => tasks.get(id);
 export const listTasks = () => [...tasks.values()].sort((a, b) => b.createdAt - a.createdAt);
 
+/** 只留最近 30 条已结束的任务：编辑器会定时拉全表，长会话里不能无限长 */
+function pruneTasks() {
+  if (tasks.size <= 40) return;
+  const finished = [...tasks.values()]
+    .filter((t) => t.status === "done" || t.status === "error" || t.status === "cancelled")
+    .sort((a, b) => a.createdAt - b.createdAt);
+  for (const t of finished.slice(0, tasks.size - 30)) tasks.delete(t.id);
+}
+
 /** 取消任务：已结束的返回 false */
 export function cancelTask(id: string): boolean {
   const task = tasks.get(id);
@@ -356,6 +373,8 @@ export function cancelTask(id: string): boolean {
   task.status = "cancelled";
   task.progress = 0;
   task.error = undefined;
+  task.currentFormat = undefined;
+  task.updatedAt = Date.now();
   cancels.get(id)?.();
   return true;
 }
@@ -368,10 +387,27 @@ export function enqueueVideo(
   fileName?: string,
 ): RenderTask {
   ensureVideoDir(project.id);
+  // 请求了一个工程里不存在的画幅（比如 agent 以为还是竖屏、其实工程只剩横屏）时，
+  // 以前会一声不响地把这个画幅 continue 掉：任务「成功」但 outputs 是空的，
+  // 用户拿到一条「渲染完成、0 个文件」。这里直接拒，比渲完给个空结果好。
+  const available = project.formats.map((f) => f.key);
+  if (formats?.length) {
+    const missing = formats.filter((k) => !available.includes(k));
+    if (missing.length === formats.length) {
+      throw new Error(
+        `工程没有这些画幅：${missing.join("、")}（现有：${available.join("、") || "无"}）——先 set_formats 加上，或改用现有画幅`,
+      );
+    }
+    if (missing.length) {
+      // 部分不存在：只渲存在的那些，别让整个任务失败
+      formats = formats.filter((k) => available.includes(k));
+    }
+  }
   const id = `task_${Math.random().toString(36).slice(2, 8)}`;
   const task: RenderTask = {
     id,
     projectId: project.id,
+    projectName: project.name,
     status: "queued",
     progress: 0,
     quality,
@@ -380,8 +416,10 @@ export function enqueueVideo(
     ...(fileName?.trim() ? { fileName: fileName.trim() } : {}),
     outputs: [],
     createdAt: Date.now(),
+    updatedAt: Date.now(),
   };
   tasks.set(id, task);
+  pruneTasks();
 
   // 串行：渲染吃内存，并发容易 OOM
   chain = chain.then(() => runTask(task, project)).catch(() => undefined);
@@ -399,6 +437,7 @@ async function runTask(task: RenderTask, project: Project) {
     if (isCancelled(task)) return;
 
     task.status = "bundling";
+    task.updatedAt = Date.now();
     const serveUrl = await getServeUrl();
     if (isCancelled(task)) return;
 
@@ -407,6 +446,10 @@ async function runTask(task: RenderTask, project: Project) {
       if (isCancelled(task)) return;
 
       task.status = "rendering";
+      // 多画幅是逐个渲的，进度会从 0 重来：带上「当前画幅」编辑器才不会以为卡死/重启
+      task.currentFormat = key;
+      task.progress = 0;
+      task.updatedAt = Date.now();
       const fmt = project.formats.find((f) => f.key === key);
       if (!fmt) continue;
       const compositionId = "Video";
@@ -450,14 +493,18 @@ async function runTask(task: RenderTask, project: Project) {
           // 取消后不再更新进度，避免界面又跳回 30%
           if (isCancelled(task)) return;
           task.progress = Math.round(progress * 100);
+          task.updatedAt = Date.now();
         },
       });
       if (isCancelled(task)) return;
       task.outputs.push({ format: key, url: `/out/projects/${task.projectId}/videos/${file}` });
+      task.updatedAt = Date.now();
     }
 
     task.progress = 100;
     task.status = "done";
+    task.currentFormat = undefined;
+    task.updatedAt = Date.now();
 
     // 出片成功后自动清掉这个工程更早的成片，避免 out/ 无限增长。
     // 只动自己的工程，失败也不影响渲染结果。
@@ -472,6 +519,8 @@ async function runTask(task: RenderTask, project: Project) {
     if (isCancelled(task)) return;
     task.status = "error";
     task.error = err instanceof Error ? err.message : String(err);
+    task.currentFormat = undefined;
+    task.updatedAt = Date.now();
   } finally {
     cancels.delete(task.id);
   }

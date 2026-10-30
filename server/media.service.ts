@@ -9,6 +9,9 @@ import { PUBLIC_DIR } from "./store";
  * （帧数 = ceil((秒数 + 0.7) × 30)）。同一段文字两次合成时长还不一样，
  * 所以改完旁白就得重新量一遍。
  *
+ * 呼吸位（0.7s）**可调**：18 幕 × 0.7s 就是 12.6s，占成片 14% —— 长片嫌拖时
+ * 传 breathSec:0.3 就能压回来，不用自己乘（复盘坑 #9）。
+ *
  * 实现约束：**纯 Node，不 spawn 任何外部进程**（不依赖 ffprobe / ffmpeg 是否装了、
  * 装在哪、版本哪个）。用的都是格式本身写死的结构：
  *   wav    → RIFF 块里 data 长度 / byteRate
@@ -18,6 +21,9 @@ import { PUBLIC_DIR } from "./store";
  * 其余容器（webm / flac / 裸 aac）不猜，直接报"不支持"，让调用方知道而不是给个错数。
  */
 
+/** 幕尾默认留的呼吸位（秒） */
+export const DEFAULT_BREATH_SEC = 0.7;
+
 export type MediaProbe = {
   src: string;
   file: string;
@@ -26,8 +32,10 @@ export type MediaProbe = {
   durationInSeconds: number;
   /** 素材本身的帧数 */
   frames: number;
-  /** 建议的场景时长（含 0.7s 呼吸位），可直接喂 set_scene_timing */
+  /** 建议的场景时长（含呼吸位），可直接喂 set_scene_timing */
   suggestedSceneFrames: number;
+  /** 这次算建议时长用的呼吸位（秒），回执里要说清楚，否则用户不知道为什么多了几秒 */
+  breathSec?: number;
   sampleRate?: number;
   channels?: number;
   /** 时长是怎么算出来的，排查时能看懂 */
@@ -392,8 +400,9 @@ const PARSERS: Record<string, { parse: (buf: Buffer) => ParsedMedia | null; labe
 export const SUPPORTED_FORMATS = Object.keys(PARSERS);
 
 /** 单个素材量时长。失败不抛，把原因放在 error 里，方便批量时不中断 */
-export async function probeMedia(src: string, fps = 30): Promise<MediaProbe> {
+export async function probeMedia(src: string, fps = 30, breathSec = DEFAULT_BREATH_SEC): Promise<MediaProbe> {
   const ext = path.extname(src.split("?")[0]).replace(".", "").toLowerCase();
+  const breath = Number.isFinite(breathSec) ? Math.min(5, Math.max(0, breathSec)) : DEFAULT_BREATH_SEC;
   const base: MediaProbe = {
     src,
     file: path.basename(src.split("?")[0]),
@@ -427,7 +436,8 @@ export async function probeMedia(src: string, fps = 30): Promise<MediaProbe> {
       ...base,
       durationInSeconds: Math.round(info.seconds * 1000) / 1000,
       frames: Math.round(info.seconds * fps),
-      suggestedSceneFrames: Math.max(1, Math.ceil((info.seconds + 0.7) * fps)),
+      suggestedSceneFrames: Math.max(1, Math.ceil((info.seconds + breath) * fps)),
+      breathSec: breath,
       sampleRate: info.sampleRate || undefined,
       channels: info.channels || undefined,
       method: info.method,
@@ -437,8 +447,8 @@ export async function probeMedia(src: string, fps = 30): Promise<MediaProbe> {
   }
 }
 
-export async function probeMany(srcs: string[], fps = 30): Promise<MediaProbe[]> {
+export async function probeMany(srcs: string[], fps = 30, breathSec?: number): Promise<MediaProbe[]> {
   const out: MediaProbe[] = [];
-  for (const src of srcs) out.push(await probeMedia(src, fps));
+  for (const src of srcs) out.push(await probeMedia(src, fps, breathSec));
   return out;
 }

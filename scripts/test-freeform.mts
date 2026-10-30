@@ -8,6 +8,7 @@
  *  只改 el.x 的话，画面上纹丝不动，但回读数据又是新值（最难查的一类 bug）。
  */
 import assert from "node:assert/strict";
+import { applyOps, createSeedProject, type Op } from "../shared/ops";
 import {
   animTouchesLayout,
   evalAnim,
@@ -203,6 +204,87 @@ test("图层：越界序号被忽略，不炸", () => {
   const r = reorderFreeElements(three(), [-1, 9, 1], "front");
   assert.equal(names(r.elements), "a,c,d,b");
   assert.deepEqual(reorderFreeElements([], [0], "front").moved, []);
+});
+
+/* ────────────────────────── op 层接线（MCP 走这里，不是编辑器） ────────────────────────── */
+
+/** 造一个只有一幕自由画布的工程 */
+const freeformProject = (elements: FreeEl[]) => {
+  const r = applyOps(createSeedProject("t_ff"), [
+    { op: "add_scene", type: "freeform", props: { elements } } as Op,
+  ]);
+  const scene = r.project.scenes.find((s) => s.type === "freeform")!;
+  return { project: r.project, sceneId: scene.id, els: (scene.props as any).elements as FreeEl[] };
+};
+
+const animEl = () =>
+  el({
+    id: "title",
+    y: 60,
+    anim: [{ at: [0, 30] as [number, number], from: { y: 70 }, to: { y: 60 } }],
+  });
+
+test("op update_freeform_element：只改 y 时关键帧同步位移（动画落点跟着走）", () => {
+  const { project, sceneId } = freeformProject([animEl()]);
+  const r = applyOps(project, [
+    { op: "update_freeform_element", sceneId, elementId: "title", patch: { y: 40 } },
+  ]);
+  const out = (r.project.scenes.find((s) => s.id === sceneId)!.props as any).elements[0] as FreeEl;
+  assert.equal(out.y, 40);
+  // dy = 40 - 60 = -20 → from 70→50、to 60→40
+  assert.equal(out.anim![0].to!.y, 40, "动画落点没跟着走，播完会弹回旧位置");
+  assert.equal(out.anim![0].from!.y, 50);
+  assert.ok(r.summary.some((s) => s.includes("关键帧已同步位移")), r.summary.join(" | "));
+});
+
+test("op update_freeform_element：显式给 anim 时以调用方为准，不做自动位移", () => {
+  const { project, sceneId } = freeformProject([animEl()]);
+  const r = applyOps(project, [
+    {
+      op: "update_freeform_element",
+      sceneId,
+      elementId: "title",
+      patch: { y: 40, anim: [{ at: [0, 30] as [number, number], to: { y: 40 } }] },
+    },
+  ]);
+  const out = (r.project.scenes.find((s) => s.id === sceneId)!.props as any).elements[0] as FreeEl;
+  assert.equal(out.y, 40);
+  assert.equal(out.anim!.length, 1);
+  assert.equal(out.anim![0].to!.y, 40);
+  assert.equal(out.anim![0].from, undefined, "调用方给了 anim，就不该被自动改写");
+});
+
+test("op update_freeform_element：不带位置字段时不碰 anim（改文字别动动画）", () => {
+  const { project, sceneId } = freeformProject([animEl()]);
+  const r = applyOps(project, [
+    { op: "update_freeform_element", sceneId, elementId: "title", patch: { text: "新标题" } },
+  ]);
+  const out = (r.project.scenes.find((s) => s.id === sceneId)!.props as any).elements[0] as FreeEl;
+  assert.equal(out.text, "新标题");
+  assert.equal(out.anim![0].to!.y, 60);
+  assert.ok(!r.summary.some((s) => s.includes("同步位移")), "没动位置却报告了同步");
+});
+
+test("op reorder_freeform_elements：置顶 = 移到数组末尾（盖住文字）", () => {
+  const red = el({ id: "red", type: "shape", shape: "line" });
+  const txt = el({ id: "txt", text: "¥1000" });
+  const { project, sceneId } = freeformProject([red, txt]);
+  const r = applyOps(project, [
+    { op: "reorder_freeform_elements", sceneId, elementId: "red", mode: "front" },
+  ]);
+  const ids = ((r.project.scenes.find((s) => s.id === sceneId)!.props as any).elements as FreeEl[]).map(
+    (e) => e.id,
+  );
+  assert.deepEqual(ids, ["txt", "red"]);
+  assert.ok(r.summary.some((s) => s.includes("最上层")), r.summary.join(" | "));
+});
+
+test("op reorder_freeform_elements：下标越界要报错，不静默", () => {
+  const { project, sceneId } = freeformProject([el({ id: "a" }), el({ id: "b" })]);
+  assert.throws(
+    () => applyOps(project, [{ op: "reorder_freeform_elements", sceneId, index: 5, mode: "front" }]),
+    /越界/,
+  );
 });
 
 /* ────────────────────────── 收尾 ────────────────────────── */

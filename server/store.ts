@@ -4,6 +4,7 @@ import path from "node:path";
 import type { Project } from "../shared/schema";
 import { createSeedProject } from "../shared/ops";
 import { migrateOverlaysToScenes, projectSchema } from "../shared/schema";
+import { TRANSITION_TYPES } from "../shared/transitions";
 
 export const DATA_DIR = path.join(PROJECT_ROOT, "data", "projects");
 export const OUT_DIR = path.join(PROJECT_ROOT, "out");
@@ -65,9 +66,11 @@ export function readProject(id: string): Project {
 
 /**
  * 只修已知的历史脏值，返回是否改过任何东西。
- * 目前两类：
+ * 目前三类：
  *  - `scene.subtitleStyle.bold` 是布尔（曾把"字重"当布尔写）→ true:700 / false:400
  *  - `scene.transforms` 里有 `"undefined"` 键（旧版 set_transform 参数名写错的产物）→ 删掉
+ *  - `transitionIn/Out.type` 是不存在的转场（旧 crt-vhs 预设写过 "glitch"）→ 改成 blur，
+ *    否则这个工程每次打开都报「数据不合法」，直接打不开
  */
 export function repairKnownDirtyValues(project: Record<string, unknown>): boolean {
   let changed = false;
@@ -83,6 +86,17 @@ export function repairKnownDirtyValues(project: Record<string, unknown>): boolea
       delete transforms.undefined;
       changed = true;
       if (!Object.keys(transforms).length) delete sc.transforms;
+    }
+    for (const key of ["transitionIn", "transitionOut"] as const) {
+      const tr = sc[key] as Record<string, unknown> | undefined;
+      if (!tr || typeof tr !== "object") continue;
+      const type = String(tr.type ?? "");
+      if (TRANSITION_TYPES.includes(type as (typeof TRANSITION_TYPES)[number])) continue;
+      // 有对应观感的就映射过去，没有就退回 blur（"故障/毛刺"类在合法集合里最接近它）
+      const map: Record<string, string> = { glitch: "blur", noise: "blur", flash: "wipe", fadein: "fade" };
+      tr.type = map[type.toLowerCase()] ?? "blur";
+      if (typeof tr.durationInFrames !== "number" || tr.durationInFrames < 0) tr.durationInFrames = 8;
+      changed = true;
     }
   }
   return changed;

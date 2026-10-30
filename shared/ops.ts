@@ -24,7 +24,14 @@ import {
 import { describeSceneBox, normalizeSceneBox, type SceneBox } from "./sceneBox";
 import { droppedProps, getMeta, MIN_SCENE_FRAMES, normalizeProps } from "./sceneMetas";
 import { effectLabel, effectSummaryText } from "./effects";
-import { freeElSchema } from "./freeform";
+import { TRANSITION_TYPES } from "./transitions";
+import {
+  freeElSchema,
+  reorderFreeElements,
+  transformFreeElement,
+  type FreeEl,
+  type ReorderMode,
+} from "./freeform";
 
 /* ────────────────────────────── 操作定义 ────────────────────────────── */
 
@@ -135,7 +142,29 @@ export type Op =
   | { op: "add_freeform_element"; sceneId: string; element: Record<string, unknown> }
   /** 删 freeform 元素（按 id 或 index）；只剩最后一个时报错——freeform 至少要有一个元素 */
   | { op: "remove_freeform_element"; sceneId: string; elementId?: string; index?: number }
-  | { op: "reorder_scenes"; sceneIds: string[] }
+  /**
+   * freeform 元素层级（数组下标 = 层级，没有 z-index）。
+   * 一幕里要让红线压在文字上/垫在文字下都得靠它——以前只能 set_scene_type 整幕重写。
+   */
+  | {
+      op: "reorder_freeform_elements";
+      sceneId: string;
+      /** 单个元素（与 index/indices 三选一） */
+      elementId?: string;
+      index?: number;
+      /** 一批元素（与 elementId/index 三选一） */
+      indices?: number[];
+      mode: ReorderMode;
+    }
+  | {
+      op: "reorder_scenes";
+      sceneIds: string[];
+      /**
+       * true = 顺手清掉**主轨**上被 move_scene 钉死的起点，按新顺序首尾相接。
+       * 不传时老行为不变（钉死的幕时间位置不动）——但那样「重排」其实没生效，回执会硬警告。
+       */
+      reflow?: boolean;
+    }
   /** 主轨恢复连续排布：清掉主轨上的自定义起点，按顺序首尾相接（重排后一定要跟着发） */
   | { op: "compact_main_track" }
   | { op: "remove_scene"; sceneId: string }
@@ -376,7 +405,8 @@ export const OP_FIELDS: Record<string, readonly string[]> = {
   update_freeform_element: ["op", "sceneId", "elementId", "index", "patch"],
   add_freeform_element: ["op", "sceneId", "element"],
   remove_freeform_element: ["op", "sceneId", "elementId", "index"],
-  reorder_scenes: ["op", "sceneIds"],
+  reorder_freeform_elements: ["op", "sceneId", "elementId", "index", "indices", "mode"],
+  reorder_scenes: ["op", "sceneIds", "reflow"],
   compact_main_track: ["op"],
   remove_scene: ["op", "sceneId"],
   duplicate_scene: ["op", "sceneId"],
@@ -395,6 +425,33 @@ export const OP_FIELDS: Record<string, readonly string[]> = {
   update_project: ["op", "patch"],
   restore: ["op", "project", "label"],
 };
+
+/**
+ * 转场对象写入前的校验。
+ *
+ * 为什么必须有：`update_scene` 以前是 `as Scene["transitionIn"]` 硬塞，
+ * 于是 `{type:"glitch"}` 这类不存在的类型会被**写进文件**；而 readProject 用 schema 校验，
+ * 下次打开这个工程就直接「数据不合法」，工程打不开（v1.0 之前 crt-vhs 预设就写过 glitch，
+ * 已经有三四个工程因此读不出来）。宁可当时报错，也不能让脏值落盘。
+ */
+export function normalizeTransition(raw: unknown, label = "transition"): Transition {
+  if (typeof raw !== "object" || raw === null || Array.isArray(raw)) {
+    throw new Error(`${label} 必须是 {type, durationInFrames} 对象（清除请传 null）`);
+  }
+  const o = raw as { type?: unknown; durationInFrames?: unknown };
+  const type = String(o.type ?? "");
+  if (!(TRANSITION_TYPES as readonly string[]).includes(type)) {
+    throw new Error(
+      `${label}.type 不合法：${JSON.stringify(o.type)}（可选：${TRANSITION_TYPES.join(" / ")}）`,
+    );
+  }
+  const fallback = type === "none" ? 0 : 12;
+  const dur = o.durationInFrames === undefined ? fallback : Number(o.durationInFrames);
+  if (!Number.isFinite(dur) || dur < 0) {
+    throw new Error(`${label}.durationInFrames 必须是非负数字（收到 ${JSON.stringify(o.durationInFrames)}）`);
+  }
+  return { type: type as Transition["type"], durationInFrames: Math.round(dur) };
+}
 
 /** 「你是不是想写 X」：字段拼错是 agent 最常见的错法，报错带上建议能省一轮试错 */
 export function closestKey(key: string, candidates: readonly string[]): string | undefined {
@@ -724,11 +781,11 @@ export function applyOps(project: Project, ops: Op[]): OpResult {
         }
         if (patch.transitionIn !== undefined) {
           if (patch.transitionIn === null) delete scene.transitionIn;
-          else scene.transitionIn = patch.transitionIn as Scene["transitionIn"];
+          else scene.transitionIn = normalizeTransition(patch.transitionIn, "transitionIn");
         }
         if (patch.transitionOut !== undefined) {
           if (patch.transitionOut === null) delete scene.transitionOut;
-          else scene.transitionOut = patch.transitionOut as Scene["transitionOut"];
+          else scene.transitionOut = normalizeTransition(patch.transitionOut, "transitionOut");
         }
         if (patch.elements !== undefined) {
           const els = patch.elements as OverlayElement[];
@@ -925,9 +982,54 @@ export function applyOps(project: Project, ops: Op[]): OpResult {
           }
           throw new Error(`update_freeform_element 的 patch 不合法：${describeIssue(issues[0] as never)}`);
         }
-        list[idx] = { ...list[idx], ...checked.data };
+        const prev = list[idx] as FreeEl;
+        const layoutChanged = (["x", "y", "rotate", "scale"] as const).some((k) => k in checked.data);
+        if (layoutChanged && !("anim" in checked.data)) {
+          // 关键帧里的 x/y/rotate/scale 是**绝对值**，窗口内完全覆盖基础值：
+          // 只改 el.y 而不动 anim.to.y，动画播完元素会回到旧位置（静态抽帧看不出来）。
+          // 编辑器拖拽早就这么处理了（shared/freeform.ts#transformFreeElement），这里接上同一条逻辑。
+          const merged = { ...prev, ...checked.data } as FreeEl;
+          const shifted = transformFreeElement(prev, {
+            x: merged.x,
+            y: merged.y,
+            rotate: merged.rotate,
+            scale: merged.scale,
+          });
+          list[idx] = { ...shifted, ...checked.data };
+          if ((prev.anim ?? []).length) {
+            summary.push(`「${scene.name}」元素 #${idx + 1} 的关键帧已同步位移（动画落点跟着走）`);
+          }
+        } else {
+          list[idx] = { ...prev, ...checked.data };
+        }
         scene.props = { ...props, elements: list } as never;
         summary.push(`更新了「${scene.name}」的自由画布元素 #${idx + 1}`);
+        break;
+      }
+
+      case "reorder_freeform_elements": {
+        const scene = mustFind(next, op.sceneId);
+        const props = (scene.props ?? {}) as { elements?: FreeEl[] };
+        const list = Array.isArray(props.elements) ? props.elements : [];
+        if (!list.length) throw new Error(`「${scene.name}」不是自由画布场景（没有 elements），层级重排用不上`);
+        const picked: number[] = [];
+        if (op.indices?.length) picked.push(...op.indices);
+        if (op.elementId !== undefined) {
+          const i = list.findIndex((e) => e["id"] === op.elementId);
+          if (i < 0) throw new Error(`freeform 里没有元素 ${op.elementId}`);
+          picked.push(i);
+        }
+        if (op.index !== undefined) picked.push(op.index);
+        if (!picked.length) throw new Error("要给 elementId、index 或 indices（哪个元素要动层级）");
+        const bad = picked.filter((i) => !Number.isInteger(i) || i < 0 || i >= list.length);
+        if (bad.length) throw new Error(`元素下标越界：${bad.join("、")}（该幕共 ${list.length} 个元素，从 0 开始）`);
+        const { elements, moved } = reorderFreeElements(list, picked, op.mode);
+        scene.props = { ...props, elements } as never;
+        const where = op.mode === "front" ? "最上层" : op.mode === "back" ? "最底层" : op.mode === "forward" ? "上移一层" : "下移一层";
+        summary.push(
+          `「${scene.name}」${picked.length === 1 ? "元素" : `${picked.length} 个元素`}${where}` +
+            `（现层级 ${moved.map((m) => m + 1).join("/")}，共 ${elements.length} 个；数组顺序 = 层级，靠后的盖住靠前的）`,
+        );
         break;
       }
 
@@ -1145,13 +1247,28 @@ export function applyOps(project: Project, ops: Op[]): OpResult {
         // 未列出的场景保持原顺序追加，避免误删
         next.scenes = [...ordered, ...next.scenes.filter((s) => map.has(s.id))];
         {
-          // 顺序变了但时间不一定变：钉死起点的块停在原处，得说清楚，否则"拖了没反应"像 bug
-          const pinned = next.scenes.filter((s) => s.start !== undefined).length;
-          summary.push(
-            pinned
-              ? `调整了场景顺序（其中 ${pinned} 幕有自定义起点，时间位置不变；要挪时间用 move_scene）`
-              : "调整了场景顺序",
-          );
+          // 顺序变了但时间不一定变：钉死起点的块停在原处，得说清楚，否则"拖了没反应"像 bug。
+          // 一开始只写了一句提示，结果被 agent 当成成功漏看（复盘坑 #2）——现在分三种说，警告单独一条且带 ⚠️
+          const mainPinned = next.scenes.filter((s) => (s.track ?? 0) === 0 && s.start !== undefined);
+          const otherPinned = next.scenes.filter((s) => (s.track ?? 0) > 0 && s.start !== undefined);
+          if (op.reflow) {
+            for (const s of mainPinned) delete s.start;
+            summary.push(
+              mainPinned.length
+                ? `调整了场景顺序，主轨 ${mainPinned.length} 幕的自定义起点已清掉、按新顺序首尾相接`
+                : "调整了场景顺序（主轨本来就是连续排布）",
+            );
+            if (otherPinned.length) {
+              summary.push(`ℹ️ 轨道 1 以上有 ${otherPinned.length} 幕保持原起点（画中画不该被主轨重排带走）`);
+            }
+          } else if (mainPinned.length) {
+            summary.push(
+              `⚠️ 调整了场景顺序，但主轨有 ${mainPinned.length} 幕的起点被 move_scene 钉死，**时间位置没变**——幕序其实没生效。` +
+                `重发一次 reorder_scenes 并带 reflow:true（或紧接 compact_main_track）`,
+            );
+          } else {
+            summary.push("调整了场景顺序");
+          }
         }
         break;
       }

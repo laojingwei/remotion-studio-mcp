@@ -52,6 +52,28 @@ try {
     assert.equal(repairKnownDirtyValues(raw), false);
   });
 
+  /* 不存在的转场类型会让工程**打不开**（schema 拒绝整份数据）：旧 crt-vhs 预设写过 "glitch" */
+  test("transitionIn.type: glitch → blur（否则工程每次打开都报数据不合法）", () => {
+    const raw = { scenes: [{ transitionIn: { type: "glitch", durationInFrames: 8 } }] };
+    assert.equal(repairKnownDirtyValues(raw), true);
+    assert.equal((raw.scenes[0].transitionIn as Record<string, unknown>).type, "blur");
+    assert.equal((raw.scenes[0].transitionIn as Record<string, unknown>).durationInFrames, 8);
+  });
+
+  test("合法转场不动；transitionOut 同样修", () => {
+    const raw = {
+      scenes: [
+        { transitionIn: { type: "fade", durationInFrames: 12 } },
+        { transitionOut: { type: "GLITCH" } },
+      ],
+    };
+    assert.equal(repairKnownDirtyValues(raw), true);
+    assert.equal((raw.scenes[0].transitionIn as Record<string, unknown>).type, "fade");
+    assert.equal((raw.scenes[1].transitionOut as Record<string, unknown>).type, "blur");
+    // 没有时长时补一个，别留 undefined 让渲染算出 NaN
+    assert.equal((raw.scenes[1].transitionOut as Record<string, unknown>).durationInFrames, 8);
+  });
+
   /* ── 端到端：readProject 读到脏工程时自愈并写回 ── */
   const seed = createSeedProject();
   const dirty = {

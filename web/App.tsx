@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import type { PlayerRef } from "@remotion/player";
 import { totalDuration } from "@shared/schema";
 import { useDoc } from "./store";
@@ -12,7 +12,8 @@ import { GlobalDropZone } from "./GlobalDropZone";
 // import { AgentChat } from "./panels/AgentChat";
 import { useUi } from "./ui";
 import { setLocalPref } from "./uiPrefs";
-import { cancelRender, fetchHistory, fetchTask, requestRender, requestStills, resetDemoProject, type HistoryEntry } from "./apiClient";
+import { cancelRender, fetchHistory, fetchTask, fetchTasks, requestRender, requestStills, resetDemoProject, type HistoryEntry, type ProjectSummary, type RenderTaskLite } from "./apiClient";
+import { PROJ_SORT_DEFAULT, filterProjects, nextSort, readProjSort, timeOf, type ProjSort, type ProjSortKey } from "./projectFilter";
 import { OutputsDialog } from "./panels/OutputsDialog";
 import { RenderDialog, type RenderFormat, type RenderQuality } from "./panels/RenderDialog";
 import { TtsDialog } from "./panels/TtsDialog";
@@ -32,6 +33,21 @@ const FORMAT_PRESETS = [
   { key: "square", label: "方形 1:1", width: 1080, height: 1080 },
   { key: "tall45", label: "竖版 4:5", width: 1080, height: 1350 },
 ];
+
+/** 画幅 key → 人话（渲染横幅里用，任务本身只带 key） */
+const formatLabel = (key: string | undefined): string =>
+  key ? (FORMAT_PRESETS.find((f) => f.key === key)?.label ?? key) : "";
+
+/** 渲染横幅的一句话状态：多画幅是逐个渲的，光看百分比会以为卡住/重启 */
+function renderPhase(t: RenderTaskLite): string {
+  if (t.status === "queued") return "排队中";
+  if (t.status === "bundling") return "打包中（准备渲染环境）";
+  const i = t.formats.indexOf(t.currentFormat ?? "");
+  const step = i >= 0 ? ` ${i + 1}/${t.formats.length}` : "";
+  return `渲染${formatLabel(t.currentFormat)}${step} · ${Math.round(t.progress)}%`;
+}
+
+const elapsedSec = (t: RenderTaskLite) => Math.max(0, Math.round((Date.now() - t.createdAt) / 1000));
 
 /**
  * 项目列表里的时间戳。
@@ -70,6 +86,72 @@ function IconTimeline() {
     </svg>
   );
 }
+
+/* ─────────── 项目面板的排序图标（按创建 / 按修改 / 按名称） ───────────
+   三个排序条件如果写文字（"创建时间""最后修改时间""名称"）一行放不下，
+   面板窄的时候会被挤成两行或直接溢出，所以只用图标 + title 说明。 */
+
+/** 创建时间：日历 + 加号（"新建"的语义） */
+function IconSortCreated() {
+  return (
+    <svg width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden>
+      <rect x="2.2" y="3.6" width="11.6" height="9.4" rx="2" stroke="currentColor" strokeWidth="1.25" />
+      <path d="M5.4 1.9v2.5M10.6 1.9v2.5" stroke="currentColor" strokeWidth="1.25" strokeLinecap="round" />
+      <path d="M8 6.6v3.8M6.1 8.5h3.8" stroke="currentColor" strokeWidth="1.15" strokeLinecap="round" />
+    </svg>
+  );
+}
+
+/** 最后修改时间：时钟（"改到几点"的语义） */
+function IconSortUpdated() {
+  return (
+    <svg width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden>
+      <circle cx="8" cy="8" r="5.9" stroke="currentColor" strokeWidth="1.25" />
+      <path d="M8 4.6V8l2.6 1.6" stroke="currentColor" strokeWidth="1.25" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  );
+}
+
+/** 名称：AZ（字母序是全世界通用的写法，比"三横线"更能区分于时间排序） */
+function IconSortName() {
+  return (
+    <svg width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden>
+      <text
+        x="1"
+        y="11.6"
+        fill="currentColor"
+        fontSize="8.4"
+        fontWeight="600"
+        fontFamily="Segoe UI, system-ui, sans-serif"
+        letterSpacing="0.2"
+      >
+        AZ
+      </text>
+    </svg>
+  );
+}
+
+/** 排序方向：只有当前生效的那个按钮显示，升序朝上、降序朝下 */
+function IconCaret({ up }: { up?: boolean }) {
+  return (
+    <svg width="9" height="9" viewBox="0 0 10 10" fill="none" aria-hidden>
+      <path
+        d={up ? "M2.3 6.3 5 3.6l2.7 2.7" : "M2.3 3.7 5 6.4l2.7-2.7"}
+        stroke="currentColor"
+        strokeWidth="1.5"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    </svg>
+  );
+}
+
+/** 面板上的三个排序按钮（顺序按用户说的：创建时间 / 最后修改时间 / 名称） */
+const PROJ_SORT_BUTTONS: { key: ProjSortKey; label: string; Icon: () => React.ReactElement }[] = [
+  { key: "created", label: "创建时间", Icon: IconSortCreated },
+  { key: "updated", label: "最后修改时间", Icon: IconSortUpdated },
+  { key: "name", label: "名称", Icon: IconSortName },
+];
 
 export default function App() {
   const { project, projects, load, loading, formatKey, setFormat, undo, redo, past, future, toast, agentActive, error, clearError, loadAssets, loadTemplates, templates, createFromTemplate } =
@@ -158,6 +240,31 @@ export default function App() {
   const [stills, setStills] = useState<{ format: string; url: string }[] | null>(null);
   const [history, setHistory] = useState<HistoryEntry[] | null>(null);
   const [projectMenu, setProjectMenu] = useState(false);
+  /**
+   * 项目面板的搜索词与排序。
+   * 搜索词每次打开面板清空（上次筛掉的项目还在，会让人以为工程丢了）；
+   * 排序记住（这是稳定偏好，反复重置反而烦），存 localStorage。
+   */
+  const [projQuery, setProjQuery] = useState("");
+  const [projSort, setProjSort] = useState<ProjSort>(() => {
+    try {
+      return readProjSort(localStorage.getItem("rms:projSort"));
+    } catch {
+      return PROJ_SORT_DEFAULT;
+    }
+  });
+  /** 面板里真正渲染的列表：先按搜索词筛、再按当前字段排 */
+  const visibleProjects = useMemo(
+    () => filterProjects(projects, projQuery, projSort),
+    [projects, projQuery, projSort],
+  );
+  useEffect(() => {
+    try {
+      localStorage.setItem("rms:projSort", JSON.stringify(projSort));
+    } catch {
+      // 无痕模式写不了 localStorage：只用不存，不影响功能
+    }
+  }, [projSort]);
   const [outputsOpen, setOutputsOpen] = useState(false);
   const [workspaceOpen, setWorkspaceOpen] = useState(false);
   const [ttsOpen, setTtsOpen] = useState(false);
@@ -169,6 +276,38 @@ export default function App() {
   const [customW, setCustomW] = useState("1080");
   const [customH, setCustomH] = useState("1920");
   const pollRef = useRef<ReturnType<typeof setInterval> | undefined>(undefined);
+
+  /**
+   * agent 起的渲染：它跑在服务端，编辑器必须能看见「谁在渲哪个工程、渲到哪了」。
+   * 本页自己点的渲染走 startRender 那条路（按钮上已经有百分比），这里用 localTasks 排掉，
+   * 免得同一件事出现两根进度条。
+   */
+  const [tasks, setTasks] = useState<RenderTaskLite[]>([]);
+  const localTasks = useRef<Set<string>>(new Set());
+
+  useEffect(() => {
+    let alive = true;
+    const tick = async () => {
+      if (document.hidden) return; // 后台标签页不轮询，回来时补一次
+      try {
+        const list = await fetchTasks();
+        if (alive) setTasks(list);
+      } catch {
+        /* 服务重启中：下一轮再试，不打扰用户 */
+      }
+    };
+    void tick();
+    const timer = setInterval(() => void tick(), 2000);
+    const onVisible = () => {
+      if (!document.hidden) void tick();
+    };
+    document.addEventListener("visibilitychange", onVisible);
+    return () => {
+      alive = false;
+      clearInterval(timer);
+      document.removeEventListener("visibilitychange", onVisible);
+    };
+  }, []);
 
   useEffect(() => {
     void load();
@@ -187,7 +326,7 @@ export default function App() {
     const lr = list.getBoundingClientRect();
     if (er.top < lr.top) list.scrollTop -= lr.top - er.top;
     else if (er.bottom > lr.bottom) list.scrollTop += er.bottom - lr.bottom;
-  }, [projectMenu]);
+  }, [projectMenu, projQuery, projSort]);
 
   // 快捷键
   useEffect(() => {
@@ -234,6 +373,7 @@ export default function App() {
     setRenderOpen(false);
     try {
       const task = await requestRender(project.id, formats, quality, format);
+      localTasks.current.add(task.id); // 本页起的：横幅不重复显示（按钮上已有百分比）
       setRender({ id: task.id, status: task.status, progress: 0, outputs: [] });
       pollRef.current = setInterval(async () => {
         try {
@@ -273,6 +413,37 @@ export default function App() {
       setRender(null);
     }
   };
+
+  /** 取消 agent 起的渲染（横幅上的按钮） */
+  const cancelRemoteTask = async (id: string) => {
+    try {
+      await cancelRender(id);
+      useDoc.getState().notify("已取消渲染");
+      setTasks((list) => list.map((t) => (t.id === id ? { ...t, status: "cancelled", progress: 0 } : t)));
+    } catch (err) {
+      useDoc.getState().notify(err instanceof Error ? err.message : "取消失败");
+    }
+  };
+
+  // 服务端的活动任务里，挑一个不是本页起的来显示（同一时刻最多一个在渲，其余排队）
+  const activeTasks = tasks.filter(
+    (t) => (t.status === "queued" || t.status === "bundling" || t.status === "rendering") && !localTasks.current.has(t.id),
+  );
+  const remoteTask = activeTasks[0] ?? null;
+  const queuedBehind = Math.max(0, activeTasks.length - 1);
+  // 任务里带了工程名快照；老服务没有这个字段时从工程列表补，别再退化成显示 id
+  const projectNameOf = (t: RenderTaskLite) =>
+    t.projectName ?? projects.find((x) => x.id === t.projectId)?.name ?? t.projectId;
+  // 刚渲完的停留 10 秒：不点开也能知道「刚才那一下成功了」
+  const justDone =
+    !remoteTask && !busy
+      ? (tasks.find(
+          (t) =>
+            t.status === "done" &&
+            !localTasks.current.has(t.id) &&
+            Date.now() - (t.updatedAt ?? t.createdAt) < 10000,
+        ) ?? null)
+      : null;
 
   const capture = async () => {    if (!project) return;
     const frame = Math.round(playerRef.current?.getCurrentFrame?.() ?? 0);
@@ -375,10 +546,12 @@ export default function App() {
           <button
             className="caret"
             onClick={() => {
-              setProjectMenu((v) => {
-                if (!v) void loadTemplates();
-                return !v;
-              });
+              // 打开面板时清空搜索：上次筛掉的项目还在列表里，会让人以为工程丢了
+              if (!projectMenu) {
+                void loadTemplates();
+                setProjQuery("");
+              }
+              setProjectMenu((v) => !v);
             }}
             title="切换项目"
           >
@@ -390,27 +563,94 @@ export default function App() {
                 项目多的时候不能再让整条菜单无限往下长（会顶出视口，"删除工程"根本点不到）：
                 项目列表单独一个限高滚动区，新建/模板/工程操作固定在它下面。
               */}
-              <div className="menu-group">项目 · {projects.length}</div>
-              <div className="menu-projects">
-                {projects.map((p) => (
-                  <button
-                    key={p.id}
-                    className={`menu-item ${p.id === project.id ? "is-on" : ""}`}
-                    title={`${p.name}\n创建：${fmtTime(p.createdAt, true)}\n最后修改：${fmtTime(p.updatedAt, true)}`}
-                    onClick={() => {
+              <div className="menu-group">
+                项目 · {visibleProjects.length}
+                {visibleProjects.length !== projects.length ? ` / ${projects.length}` : ""}
+              </div>
+              {/*
+                搜索 + 排序：工程一多（几十个）翻列表比打字慢得多。
+                三个排序条件只给图标——"创建时间/最后修改时间/名称"一行文字放不下，
+                面板窄的时候会折行或溢出，图标 + title 才稳。
+              */}
+              <div className="proj-tools">
+                <span className="proj-search-wrap">
+                  <input
+                    className="proj-search"
+                    value={projQuery}
+                    placeholder="搜索项目名 / id"
+                    spellCheck={false}
+                    aria-label="搜索项目"
+                    onChange={(e) => setProjQuery(e.target.value)}
+                    onKeyDown={(e) => {
+                      // 回车直接打开第一条：搜完不用再挪鼠标
+                      if (e.key !== "Enter") return;
+                      const first = visibleProjects[0];
+                      if (!first) return;
                       setProjectMenu(false);
-                      void useDoc.getState().loadProject(p.id);
+                      void useDoc.getState().loadProject(first.id);
                     }}
-                  >
-                    <span className="menu-proj">
-                      <span className="menu-proj-name">{p.name}</span>
-                      <span className="menu-proj-time">{fmtTime(p.createdAt)}</span>
-                    </span>
-                    <span className="menu-meta">
-                      rev{p.rev} · {p.scenes} 场景
-                    </span>
-                  </button>
-                ))}
+                  />
+                  {projQuery ? (
+                    <button
+                      className="proj-clear"
+                      title="清除搜索"
+                      aria-label="清除搜索"
+                      onClick={() => setProjQuery("")}
+                    >
+                      ×
+                    </button>
+                  ) : null}
+                </span>
+                <div className="proj-sorts" role="group" aria-label="排序方式">
+                  {PROJ_SORT_BUTTONS.map(({ key, label, Icon }) => {
+                    const on = projSort.key === key;
+                    const dirText = projSort.dir === "asc" ? "升序" : "降序";
+                    return (
+                      <button
+                        key={key}
+                        className={`proj-sort${on ? " is-on" : ""}`}
+                        title={`按${label}排序${on ? `（当前${dirText}，再点切换）` : ""}`}
+                        aria-label={`按${label}排序`}
+                        aria-pressed={on}
+                        onClick={() => setProjSort((cur) => nextSort(cur, key))}
+                      >
+                        <Icon />
+                        {on ? <IconCaret up={projSort.dir === "asc"} /> : null}
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+              <div className="menu-projects">
+                {visibleProjects.length ? (
+                  visibleProjects.map((p) => (
+                    <button
+                      key={p.id}
+                      className={`menu-item ${p.id === project.id ? "is-on" : ""}`}
+                      title={`${p.name}\n创建：${fmtTime(p.createdAt, true)}\n最后修改：${fmtTime(p.updatedAt, true)}`}
+                      onClick={() => {
+                        setProjectMenu(false);
+                        void useDoc.getState().loadProject(p.id);
+                      }}
+                    >
+                      <span className="menu-proj">
+                        <span className="menu-proj-name">{p.name}</span>
+                        {/* 右侧时间跟排序字段一致：按"修改"排却显示创建时间，看着像乱序 */}
+                        <span className="menu-proj-time">{fmtTime(timeOf(p, projSort.key))}</span>
+                      </span>
+                      <span className="menu-meta">
+                        rev{p.rev} · {p.scenes} 场景
+                      </span>
+                    </button>
+                  ))
+                ) : (
+                  <div className="proj-empty">
+                    <span>没有匹配「{projQuery.trim()}」的工程</span>
+                    <button className="proj-empty-clear" onClick={() => setProjQuery("")}>
+                      清除搜索
+                    </button>
+                  </div>
+                )}
               </div>
               <button
                 className={`menu-item accent ${showTpls ? "is-on" : ""}`}
@@ -844,6 +1084,61 @@ export default function App() {
         {busy ? (
           <div className="render-progress" title={`渲染中 ${render?.progress ?? 0}%`}>
             <span style={{ width: `${Math.max(2, render?.progress ?? 0)}%` }} />
+          </div>
+        ) : null}
+
+        {remoteTask ? (
+          <div className="render-banner" role="status" aria-live="polite">
+            <span className="rb-spark" aria-hidden />
+            <div className="rb-body">
+              <div className="rb-title">
+                Agent 正在渲染「{projectNameOf(remoteTask)}」
+                {queuedBehind ? <span className="rb-queue">还有 {queuedBehind} 个排队</span> : null}
+              </div>
+              <div className="rb-sub">
+                {renderPhase(remoteTask)} · 已用 {elapsedSec(remoteTask)}s
+              </div>
+              <div
+                className={`rb-bar ${remoteTask.status === "rendering" ? "" : "is-indeterminate"}`}
+                aria-hidden
+              >
+                <span
+                  style={{
+                    width:
+                      remoteTask.status === "rendering" ? `${Math.max(2, remoteTask.progress)}%` : undefined,
+                  }}
+                />
+              </div>
+            </div>
+            {project && remoteTask.projectId !== project.id ? (
+              <button className="ghost" onClick={() => void useDoc.getState().loadProject(remoteTask.projectId)}>
+                去看看
+              </button>
+            ) : null}
+            <button
+              className="ghost danger"
+              onClick={() => void cancelRemoteTask(remoteTask.id)}
+              title="停掉这次渲染（agent 那边也会收到取消）"
+            >
+              取消
+            </button>
+          </div>
+        ) : justDone ? (
+          <div className="render-banner is-done" role="status" aria-live="polite">
+            <span className="rb-spark is-done" aria-hidden />
+            <div className="rb-body">
+              <div className="rb-title">「{projectNameOf(justDone)}」渲染完成</div>
+              <div className="rb-sub">
+                {justDone.outputs.length
+                  ? `生成 ${justDone.outputs.length} 个文件（${justDone.outputs.map((o) => formatLabel(o.format)).join(" / ")}）`
+                  : "完成但没有产出文件——确认这个画幅还在工程里"}
+              </div>
+            </div>
+            {justDone.outputs[0] ? (
+              <a className="ghost" href={justDone.outputs[0].url} target="_blank" rel="noreferrer">
+                打开
+              </a>
+            ) : null}
           </div>
         ) : null}
         </div>

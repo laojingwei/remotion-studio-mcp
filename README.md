@@ -143,7 +143,7 @@ get_guide(name="manual", section="…")   → 按需读指南（不常驻）
 | 场景 | `list_scene_types` / `add_scene` / `update_scene` / `get_scene` / `set_scene_type` / `set_scene_timing` / `remove_scene` / `duplicate_scene` / `reorder_scenes` / `move_scene`（多轨定位）/ `set_scene_box`（画中画） |
 | 批量 | `apply_ops`（整批原子，回传新增的 scene/element id） |
 | 元素 | `list_element_library` / `add_element` / `update_element` / `remove_element` / `set_transform` / `layout_grid` / `align_elements` |
-| 自由画布 | `add_freeform_element` / `update_freeform_element` / `remove_freeform_element` |
+| 自由画布 | `add_freeform_element` / `update_freeform_element` / `remove_freeform_element` / `reorder_freeform_elements`（层级） |
 | 特效轨 | `list_effect_types` / `add_effect` / `update_effect` / `remove_effect` |
 | 转场 | `set_transition`（单幕）/ `set_transitions`（批量，给全部或指定场景套同一套） |
 | 音频 | `set_audio`（含 ducking 人声避让）/ `add_audio_track` / `update_audio_track` / `remove_audio_track` / `balance_audio`（响度配平）/ `compress_audio`（动态压缩）/ `analyze_audio`（BPM + 拍点）/ `set_beat_grid`（手填 BPM） |

@@ -111,6 +111,28 @@ export async function fetchTask(taskId: string) {
   return data.task;
 }
 
+/** 渲染任务（agent 起的也算）：编辑器用它显示「谁在渲哪个工程」 */
+export type RenderTaskLite = {
+  id: string;
+  projectId: string;
+  projectName?: string;
+  status: "queued" | "bundling" | "rendering" | "done" | "error" | "cancelled";
+  progress: number;
+  formats: string[];
+  currentFormat?: string;
+  outputs: { format: string; url: string }[];
+  error?: string;
+  createdAt: number;
+  updatedAt?: number;
+};
+
+export async function fetchTasks(): Promise<RenderTaskLite[]> {
+  const res = await fetch("/api/tasks");
+  const data = await res.json();
+  if (!res.ok) throw new Error(data.error ?? "读取渲染任务失败");
+  return (data.tasks ?? []) as RenderTaskLite[];
+}
+
 export async function cancelRender(taskId: string): Promise<void> {
   const res = await fetch(`/api/tasks/${taskId}/cancel`, { method: "POST" });
   const data = await res.json();

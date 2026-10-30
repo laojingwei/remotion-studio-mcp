@@ -267,6 +267,34 @@ const DIRTY_HINT =
   String.fromCharCode(10) +
   "⚠️ 这一轮改动还没抽帧确认：preview_frame / preview_frames 看一眼（并把图发给用户），再往下走。";
 
+/**
+ * ops 回执的统一拼装：⚠️ 开头的项**单独成行排在最前**。
+ *
+ * 以前一律 `summary.join("；")`，警告就埋在长句尾巴上——agent 扫一眼以为全成功，
+ * 实际问题（比如「5 幕有自定义起点，时间位置不变」）就在那行末尾，被漏掉过一次。
+ */
+function fmtSummary(summary: string[] | undefined): string {
+  const list = (summary ?? []).filter((s) => String(s).trim());
+  if (!list.length) return "";
+  const isWarn = (s: string) => s.includes("⚠");
+  const warns = list.filter(isWarn);
+  const rest = list.filter((s) => !isWarn(s));
+  if (!warns.length) return list.join("；");
+  return [warns.join("\n"), rest.join("；")].filter(Boolean).join("\n");
+}
+
+/** 把输出里带 ⚠️ 的行提到最前（第一行标题保持不动） */
+function liftWarnings(out: string): string {
+  if (!out.includes("⚠️")) return out;
+  const lines = out.split("\n");
+  if (lines.length < 3) return out;
+  const isWarnLine = (s: string) => s.includes("⚠️");
+  const warn = lines.slice(1).filter(isWarnLine);
+  if (!warn.length) return out;
+  const rest = lines.slice(1).filter((s) => !isWarnLine(s));
+  return [lines[0], ...warn, ...rest].join("\n");
+}
+
 /** 清脏的工具（看过画面的都算） */
 const PREVIEW_TOOLS = new Set(["preview_frame", "preview_frames", "render_cover", "probe_style"]);
 
@@ -823,9 +851,58 @@ const summarizeProps = (s: { type?: string; props: Record<string, unknown> }) =>
 
 /* ────────────────────────────── 工具注册 ────────────────────────────── */
 
+/**
+ * 让工程幕序对齐分镜表（幕序自愈）。
+ *
+ * 为什么必须有：build_storyboard 是「按调用顺序 append」的——先建第 1、6 幕当风格样张，
+ * 再依次建第 2–18 幕，时间轴就成了 1→6→2→3…。片子于是先抛结论再演推理，钩子全废，
+ * 而且**工具全程报成功**（复盘坑 #1，会毁片）。分镜表里每幕都回填了 sceneId，
+ * 那个顺序才是用户确认过的唯一真相，不一致就以它为准。
+ *
+ * 只动顺序、不动内容；不在分镜表里的场景（样张 / 模板残留）保持它原来的位置——
+ * 在块前面还在前面，在块后面还在后面。
+ */
+async function alignScenesToStoryboard(
+  projectId: string,
+  sb: Storyboard,
+): Promise<{ notes: string[]; extraCount: number }> {
+  const doc = await api<{ project: ProjectLite }>(`/api/projects/${projectId}`);
+  const scenes = (doc.project.scenes ?? []) as { id: string; name?: string }[];
+  const current = scenes.map((s) => s.id);
+  const known = new Set(current);
+  const intended = sb.shots
+    .map((s) => s.sceneId)
+    .filter((id): id is string => !!id && known.has(id));
+  if (intended.length < 2) return { notes: [], extraCount: 0 };
+
+  const intendedSet = new Set(intended);
+  const firstAt = current.indexOf(intended[0]);
+  const extras = current.filter((id) => !intendedSet.has(id));
+  const before = current.slice(0, Math.max(0, firstAt)).filter((id) => !intendedSet.has(id));
+  const after = extras.filter((id) => !before.includes(id));
+  const target = [...before, ...intended, ...after];
+  const already = target.length === current.length && target.every((id, i) => id === current[i]);
+  if (already) return { notes: [], extraCount: extras.length };
+
+  const res = await api<{ summary: string[] }>(`/api/projects/${projectId}/ops`, {
+    method: "POST",
+    body: JSON.stringify({
+      actor: "agent",
+      // reflow:true —— 建幕阶段就是要一条干净的主轨；被 move_scene 钉过的起点留着，
+      // 重排只改数组不会改时间，等于白排（这正是坑 #2 的现场）
+      ops: [{ op: "reorder_scenes", sceneIds: target, reflow: true }],
+    }),
+  });
+  const notes = [`已按分镜顺序重排幕序（之前是按建幕顺序排的，先建样板再补中间幕就会错位）`];
+  const warn = (res.summary ?? []).filter((x) => String(x).includes("⚠"));
+  notes.push(...warn);
+  return { notes, extraCount: extras.length };
+}
+
+
 /* ────────────────────────────── 素材时长 ────────────────────────────── */
 
-type MediaProbe = {
+type   MediaProbe = {
   src: string;
   file: string;
   format: string;
@@ -833,6 +910,7 @@ type MediaProbe = {
   durationInSeconds: number;
   frames: number;
   suggestedSceneFrames: number;
+  breathSec?: number;
   sampleRate?: number;
   channels?: number;
   method?: string;
@@ -840,18 +918,20 @@ type MediaProbe = {
 };
 
 /** 量素材时长（转发给服务端，MCP 不自己解析文件） */
-async function probeAssets(srcs: string[], fps?: number): Promise<MediaProbe[]> {
+async function probeAssets(srcs: string[], fps?: number, breathSec?: number): Promise<MediaProbe[]> {
   const q = srcs.map((s) => `src=${encodeURIComponent(s)}`).join("&");
   const { probes } = await api<{ probes: MediaProbe[] }>(
-    `/api/assets/probe?${q}${fps ? `&fps=${fps}` : ""}`,
+    `/api/assets/probe?${q}${fps ? `&fps=${fps}` : ""}${
+      breathSec === undefined ? "" : `&breath=${breathSec}`
+    }`,
   );
   return probes ?? [];
 }
 
 /** 单个素材时长；量不到就返回 null（不打断主流程） */
-async function probeOne(src: string, fps?: number): Promise<MediaProbe | null> {
+async function probeOne(src: string, fps?: number, breathSec?: number): Promise<MediaProbe | null> {
   try {
-    const [p] = await probeAssets([src], fps);
+    const [p] = await probeAssets([src], fps, breathSec);
     return p && !p.error ? p : null;
   } catch {
     return null;
@@ -919,7 +999,7 @@ const TOOLS: ToolDef[] = [
         "17. 交付 → render_cover 出封面候选给用户挑（要单独设计封面就另建一幕再抽）；再 remember / save_template",
         "",
         "所有指南：list_guides；只读某一节：get_guide(name, section)",
-        "工具分两层：常驻 4 个（start_guide / get_guide / tool_search / tool_call），其余 99 个按需调用——",
+        `工具分两层：常驻 4 个（start_guide / get_guide / tool_search / tool_call），其余 ${TOOLS.length - CORE_TOOL_NAMES.size} 个按需调用——`,
         "  找工具：tool_search(\"画中画\")；执行：tool_call(name=\"move_scene\", args={...})；全表与铁律：get_guide(\"manual\")",
       ];
 
@@ -1013,6 +1093,25 @@ const TOOLS: ToolDef[] = [
       }
       if (slugs.length > 3) throw new Error("一次最多 3 个候选：太多了用户挑不动");
 
+      // 先把「根本没有这个风格」和「有但没预设」分开报：
+      // brief.style 里常写中文名（「白板手绘」），一律回"没有预设"会让人以为库里真有这一项
+      {
+        const all = listStyles();
+        const known = new Set(all.map((x) => x.slug));
+        const unknown = slugs.filter((s) => !known.has(s));
+        if (unknown.length) {
+          const guess = all
+            .filter((x) => unknown.some((u) => x.name.includes(u) || u.includes(x.name.replace(/（.*$/, ""))))
+            .map((x) => `${x.slug}（${x.name}）`);
+          throw new Error(
+            `没有这些风格：${unknown.join("、")}${String.fromCharCode(10)}` +
+              (guess.length
+                ? `看着像想找：${guess.join("、")}——风格参数要传 slug，不是中文名`
+                : `参数是 slug，不是中文名；用 list_styles 看全部 ${all.length} 个`),
+          );
+        }
+      }
+
       // 「仅规则」的风格套不上，抽出来的其实是上一个风格的画面 —— 假样张比没样张更误导：
       // 用户会以为自己选的这个风格就长这样。所以宁可直接拒，也不给一张不属于它的图。
       const noPreset = slugs.filter((s) => !presetOf(s));
@@ -1024,7 +1123,7 @@ const TOOLS: ToolDef[] = [
           `这些风格没有结构化预设，出不了真样张：${noPreset.join("、")}${String.fromCharCode(10)}` +
             `样张必须是「这个风格真实的样子」。没有预设时抽出来的其实是当前主题，` +
             `用户会当成这个风格就是长这样——比不出样张更误导。${String.fromCharCode(10)}` +
-            `两条路：① 换带【可一键套用】的（共 ${ready.length} 个：${ready.slice(0, 8).join("、")}…）；` +
+            `两条路：① 换一个已带预设的风格（list_styles 里没标「仅规则」的都是，共 ${ready.length} 个）；` +
             `② 先用 get_style 读规则 → set_theme 手动改到位 → preview_frame 抽这一帧自己看（不走样张对比）`,
         );
       }
@@ -1196,16 +1295,18 @@ const TOOLS: ToolDef[] = [
   {
     name: "list_styles",
     description:
-      "列出风格库（来自 motion-showreel 的风格规则）：slug、名称、是否可一键套用。共 40+ 种（暗色发布会/瑞士编辑/粗野排版/电影片头/像素/国潮…）。",
+      "列出风格库：slug + 名称，全部都能 apply_style 一键套、能 probe_style 出真样张（少数只标「仅规则」的例外会注明）。共 40+ 种（暗色发布会/瑞士编辑/粗野排版/电影片头/像素/国潮/水墨/白板手绘…）。",
     shape: {},
     run: async () => {
       const list = listStyles();
       const nl = String.fromCharCode(10);
+      const ready = list.filter((x) => x.hasPreset).length;
       return (
-        `共 ${list.length} 种风格：` +
+        `共 ${list.length} 种风格（${ready} 种可一键套用）：` +
         nl +
         list
-          .map((x) => `- ${x.slug}：${x.name}${x.hasPreset ? " 【可一键套用】" : "（仅规则）"}`)
+          // 全都有预设时不再逐行打「可一键套用」——43 个一样的标记只是噪音，只标例外
+          .map((x) => `- ${x.slug}：${x.name}${x.hasPreset ? "" : "（仅规则，套不上）"}`)
           .join(nl)
       );
     },
@@ -1223,7 +1324,7 @@ const TOOLS: ToolDef[] = [
   {
     name: "apply_style",
     description:
-      "一键套用风格：改主题（配色/字体/圆角）+ 所有场景入场转场，返回推荐版式与禁止项。仅对 list_styles 里标【可一键套用】 的风格有效。",
+      "一键套用风格：改主题（配色/字体/圆角）+ 所有场景入场转场，返回推荐版式与禁止项。风格库 43 种全部支持（个别标「仅规则」的例外会报错）。只覆盖「系统的值」，版式与文案仍按风格规则重做。",
     shape: {
       slug: z.string().describe("风格 slug"),
       transitions: z.boolean().optional().describe("是否同时应用转场，默认 true"),
@@ -1232,8 +1333,19 @@ const TOOLS: ToolDef[] = [
     run: async (a) => {
       const preset = presetOf(a.slug);
       if (!preset) {
+        const all = listStyles();
+        const known = all.some((x) => x.slug === a.slug);
+        if (!known) {
+          const guess = all
+            .filter((x) => x.name.includes(a.slug) || a.slug.includes(x.name.replace(/（.*$/, "")))
+            .map((x) => `${x.slug}（${x.name}）`);
+          throw new Error(
+            `没有这个风格：「${a.slug}」。参数是 slug 不是中文名；` +
+              (guess.length ? `看着像想找 ${guess.join("、")}` : `用 list_styles 看全部 ${all.length} 个`),
+          );
+        }
         throw new Error(
-          `「${a.slug}」还没有结构化预设：用 get_style 读规则后手动 set_theme；或选一个带【可一键套用】的风格。`,
+          `「${a.slug}」还没有结构化预设（server/styles/presets.json 里缺这一条）：用 get_style 读规则后手动 set_theme + set_transition。`,
         );
       }
       const p = await resolveProject(a.projectId);
@@ -1561,7 +1673,7 @@ const TOOLS: ToolDef[] = [
           ],
         }),
       });
-      return `已创建场景 id=${res.createdSceneIds[0]}\n${res.summary.join("；")}\n\n${brief(res.project)}`;
+      return `已创建场景 id=${res.createdSceneIds[0]}\n${fmtSummary(res.summary)}\n\n${brief(res.project)}`;
     },
   },
   {
@@ -1590,7 +1702,7 @@ const TOOLS: ToolDef[] = [
           ],
         }),
       });
-      return `${res.summary.join("；")}\nrev=${res.project.rev}`;
+      return `${fmtSummary(res.summary)}\nrev=${res.project.rev}`;
     },
   },
   {
@@ -1643,7 +1755,7 @@ const TOOLS: ToolDef[] = [
           ops: [{ op: "set_scene_timing", sceneId: a.sceneId, durationInFrames: a.durationInFrames }],
         }),
       });
-      return res.summary.join("；");
+      return fmtSummary(res.summary);
     },
   },
   {
@@ -1666,7 +1778,7 @@ const TOOLS: ToolDef[] = [
           ops: [{ op: "move_scene", sceneId: a.sceneId, start: a.start, track: a.track }],
         }),
       });
-      return res.summary.join("；");
+      return fmtSummary(res.summary);
     },
   },
   {
@@ -1708,7 +1820,7 @@ const TOOLS: ToolDef[] = [
         method: "POST",
         body: JSON.stringify({ actor: "agent", ops: [{ op: "set_scene_box", sceneId: a.sceneId, box }] }),
       });
-      return res.summary.join("；");
+      return fmtSummary(res.summary);
     },
   },
   {
@@ -1720,7 +1832,7 @@ const TOOLS: ToolDef[] = [
       "  ② op 形状（包裹）：{op:'add_element', sceneId, element:{kind:'text', text:'光晕', x:50, y:50}}\n" +
       "  update_element 同理：{op:'update_element', sceneId, elementId, opacity:0.5} 或 {..., patch:{opacity:0.5}}。\n" +
       "可用操作：add_scene / update_scene / set_scene_timing / set_scene_type / set_transform / add_element / update_element / " +
-      "remove_element / add_freeform_element / update_freeform_element / remove_freeform_element / remove_scene / duplicate_scene / reorder_scenes / compact_main_track / move_scene / set_scene_box / set_theme / set_audio / add_audio_track / " +
+      "remove_element / add_freeform_element / update_freeform_element / remove_freeform_element / reorder_freeform_elements / remove_scene / duplicate_scene / reorder_scenes / compact_main_track / move_scene / set_scene_box / set_theme / set_audio / add_audio_track / " +
       "update_audio_track / remove_audio_track / add_effect / update_effect / remove_effect / set_formats / update_project / restore。\n" +
       "freeform 场景的元素（svg 图形 / fx 氛围层 / 带 anim 关键帧的）走 add_freeform_element：" +
       "{op:'add_freeform_element', sceneId, element:{type:'svg', svg:'…', viewBox:'0 0 920 420', x:50, y:47}}，扁平字段也会自动包裹；" +
@@ -1773,20 +1885,75 @@ const TOOLS: ToolDef[] = [
         );
       }
       const nl = String.fromCharCode(10);
-      return `已执行 ${a.ops.length} 个操作${nl}${res.summary.join(nl)}${nl}rev=${res.project.rev}${addedText}`;
+      // 逐条列每一项，但 ⚠️ 排在最前（批量里某一项被夹取/丢弃最容易扫漏）
+      const all = res.summary as string[];
+      const ordered = [...all.filter((s) => s.includes("⚠")), ...all.filter((s) => !s.includes("⚠"))];
+      return `已执行 ${a.ops.length} 个操作${nl}${ordered.join(nl)}${nl}rev=${res.project.rev}${addedText}`;
     },
   },
   {
     name: "reorder_scenes",
-    description: "重排场景顺序。sceneIds 必须是全部场景 id 的完整顺序。",
-    shape: { sceneIds: z.array(z.string()), projectId: z.string().optional() },
+    description:
+      "重排场景顺序。sceneIds 必须是全部场景 id 的完整顺序。\n" +
+      "⚠️ 如果某几幕之前用 move_scene 拖过（起点被钉死），光重排**时间轴不会动**——必须带 reflow:true（清掉主轨起点、按新顺序首尾相接）。不带 reflow 而工程里有钉死幕时，回执第一行会警告「幕序其实没生效」。",
+    shape: {
+      sceneIds: z.array(z.string()).describe("全部场景 id 的完整顺序"),
+      reflow: z
+        .boolean()
+        .optional()
+        .describe("true = 顺手清掉主轨被 move_scene 钉死的起点（画中画所在的轨道 1+ 不受影响）；不传 = 保持老行为"),
+      projectId: z.string().optional(),
+    },
     run: async (a) => {
       const p = await resolveProject(a.projectId);
       const res = await api<any>(`/api/projects/${p.id}/ops`, {
         method: "POST",
-        body: JSON.stringify({ actor: "agent", ops: [{ op: "reorder_scenes", sceneIds: a.sceneIds }] }),
+        body: JSON.stringify({
+          actor: "agent",
+          ops: [{ op: "reorder_scenes", sceneIds: a.sceneIds, reflow: a.reflow }],
+        }),
       });
-      return res.summary.join("；");
+      return fmtSummary(res.summary as string[]);
+    },
+  },
+  {
+    name: "reorder_freeform_elements",
+    description:
+      "调自由画布元素的层级（数组顺序 = 层级，靠后的盖住靠前的；没有 z-index）。\n" +
+      "典型用法：红色横线要当「删除线」穿过文字 → 先把它移到文字之后（front）。以前只能 set_scene_type 整幕重写。\n" +
+      "给 elementId（该幕 elements[].id）或 index（从 0 开始），mode=front/back/forward/backward；一批一起动传 indices。",
+    shape: {
+      projectId: z.string().optional().describe("要操作的工程 id，不传 = 当前默认工程（list_projects 查）"),
+      sceneId: z.string(),
+      elementId: z.string().optional().describe("元素的 id（get_scene 的 props.elements[].id）"),
+      index: z.number().int().min(0).optional().describe("没有 id 时按下标（从 0 开始）"),
+      indices: z.array(z.number().int().min(0)).optional().describe("一批元素下标（一起移层）"),
+      mode: z
+        .enum(["front", "back", "forward", "backward"])
+        .describe("front=最上层（盖住别人）/ back=最底层 / forward=上移一层 / backward=下移一层"),
+    },
+    run: async (a) => {
+      if (!a.elementId && a.index === undefined && !a.indices?.length) {
+        throw new Error("elementId / index / indices 至少给一个（哪个元素要动层级）");
+      }
+      const p = await resolveProject(a.projectId);
+      const res = await api<{ summary: string[] }>(`/api/projects/${p.id}/ops`, {
+        method: "POST",
+        body: JSON.stringify({
+          actor: "agent",
+          ops: [
+            {
+              op: "reorder_freeform_elements",
+              sceneId: a.sceneId,
+              ...(a.elementId ? { elementId: a.elementId } : {}),
+              ...(a.index !== undefined ? { index: a.index } : {}),
+              ...(a.indices?.length ? { indices: a.indices } : {}),
+              mode: a.mode,
+            },
+          ],
+        }),
+      });
+      return fmtSummary(res.summary);
     },
   },
   {
@@ -1799,7 +1966,7 @@ const TOOLS: ToolDef[] = [
         method: "POST",
         body: JSON.stringify({ actor: "agent", ops: [{ op: "remove_scene", sceneId: a.sceneId }] }),
       });
-      return res.summary.join("；");
+      return fmtSummary(res.summary);
     },
   },
   {
@@ -1919,7 +2086,7 @@ const TOOLS: ToolDef[] = [
           ops: [{ op: "update_scene", sceneId: a.sceneId, patch }],
         }),
       });
-      return res.summary.join("；");
+      return fmtSummary(res.summary);
     },
   },
   {
@@ -1998,7 +2165,7 @@ const TOOLS: ToolDef[] = [
           method: "POST",
           body: JSON.stringify({ actor: "agent", ops: [{ op: "set_audio", audio: null }] }),
         });
-        return res.summary.join("；");
+        return fmtSummary(res.summary);
       }
 
       // 只改一部分字段时，其余沿用现有音频 —— 否则"只调音量"会把 fadeIn/loop/避让全部打回默认
@@ -2038,7 +2205,7 @@ const TOOLS: ToolDef[] = [
           ],
         }),
       });
-      const lines = [res.summary.join("；")];
+      const lines = [fmtSummary(res.summary)];
       const warn = await clipWarning(src, a.volume ?? prev?.volume ?? 0.8);
       if (warn) lines.push(warn);
       return lines.join(String.fromCharCode(10));
@@ -2143,7 +2310,7 @@ const TOOLS: ToolDef[] = [
         method: "POST",
         body: JSON.stringify({ actor: "agent", ops }),
       });
-      return [head, ...rows, "", res.summary.join("；")].join(String.fromCharCode(10)) + tail;
+      return [head, ...rows, "", fmtSummary(res.summary)].join(String.fromCharCode(10)) + tail;
     },
   },
   {
@@ -2256,7 +2423,7 @@ const TOOLS: ToolDef[] = [
         ? ""
         : "\n提示：压缩只改**起伏**，不改整段平均响度；但补与压是耦合的——ratio 越大，整体增益也会跟着抬（实测同一条素材 1→3→10 时均值 69%→119%→167%）。" +
           "整体偏小请先用 balance_audio 定基调，再用这个压动态。";
-      return [rows.join(String.fromCharCode(10)), "", res.summary.join("；")].join(String.fromCharCode(10)) + advice;
+      return [rows.join(String.fromCharCode(10)), "", fmtSummary(res.summary)].join(String.fromCharCode(10)) + advice;
     },
   },
   {
@@ -2344,7 +2511,7 @@ const TOOLS: ToolDef[] = [
             ],
           }),
         });
-        lines.push(res.summary.join("；"));
+        lines.push(fmtSummary(res.summary));
       } else if (a.save && !reliable) {
         lines.push("（置信度不足，没有写入节拍网格）");
       }
@@ -2370,7 +2537,7 @@ const TOOLS: ToolDef[] = [
           method: "POST",
           body: JSON.stringify({ actor: "agent", ops: [{ op: "set_beat_grid", grid: null }] }),
         });
-        return res.summary.join("；");
+        return fmtSummary(res.summary);
       }
       if (a.bpm === undefined) throw new Error("需要传 bpm（或用 clear=true 清除）");
       const grid = { bpm: a.bpm, offsetSec: a.offsetSec ?? 0, source: "manual" as const };
@@ -2381,7 +2548,7 @@ const TOOLS: ToolDef[] = [
       const frames = beatFrames(grid, total / p.fps, p.fps);
       const nl = String.fromCharCode(10);
       return (
-        res.summary.join("；") +
+        fmtSummary(res.summary) +
         `${nl}全片 ${frames.length} 拍，前 12 拍帧号：${frames.slice(0, 12).join(", ")}` +
         `${nl}用法：转场/特效的 from 对着这些帧号放，就是卡点。`
       );
@@ -2461,7 +2628,7 @@ const TOOLS: ToolDef[] = [
         method: "POST",
         body: JSON.stringify({ actor: "agent", ops: [{ op: "add_audio_track", clip }] }),
       });
-      return res.summary.join("；");
+      return fmtSummary(res.summary);
     },
   },
   {
@@ -2486,7 +2653,7 @@ const TOOLS: ToolDef[] = [
         method: "POST",
         body: JSON.stringify({ actor: "agent", ops: [{ op: "update_audio_track", trackId: a.trackId, patch }] }),
       });
-      return res.summary.join("；");
+      return fmtSummary(res.summary);
     },
   },
   {
@@ -2499,7 +2666,7 @@ const TOOLS: ToolDef[] = [
         method: "POST",
         body: JSON.stringify({ actor: "agent", ops: [{ op: "remove_audio_track", trackId: a.trackId }] }),
       });
-      return res.summary.join("；");
+      return fmtSummary(res.summary);
     },
   },
   {
@@ -2596,7 +2763,7 @@ const TOOLS: ToolDef[] = [
         method: "POST",
         body: JSON.stringify({ actor: "agent", ops: [{ op: "add_effect", clip }] }),
       });
-      return res.summary.join("；");
+      return fmtSummary(res.summary);
     },
   },
   {
@@ -2644,7 +2811,7 @@ const TOOLS: ToolDef[] = [
         method: "POST",
         body: JSON.stringify({ actor: "agent", ops: [{ op: "update_effect", effectId: a.effectId, patch }] }),
       });
-      return res.summary.join("；");
+      return fmtSummary(res.summary);
     },
   },
   {
@@ -2657,7 +2824,7 @@ const TOOLS: ToolDef[] = [
         method: "POST",
         body: JSON.stringify({ actor: "agent", ops: [{ op: "remove_effect", effectId: a.effectId }] }),
       });
-      return res.summary.join("；");
+      return fmtSummary(res.summary);
     },
   },
   {
@@ -2799,6 +2966,12 @@ const TOOLS: ToolDef[] = [
         .optional()
         .describe("同时写入场景字幕（一行一句）；不传则用 text 原文，传空字符串则不写字幕"),
       projectId: z.string().optional().describe("要操作的工程 id，不传 = 当前默认工程（list_projects 查）"),
+      breathSec: z
+        .number()
+        .min(0)
+        .max(5)
+        .optional()
+        .describe("建议场景时长里留的呼吸位（秒），默认 0.7；长片嫌拖可传 0.3"),
     },
     run: async (a) => {
       await ensureServer();
@@ -2823,9 +2996,9 @@ const TOOLS: ToolDef[] = [
       const absPath = path.join(ROOT, "public", String(data.url).replace(/^\/+/, ""));
       const fileNote = `${String.fromCharCode(10)}本地文件：${absPath}`;
       // 顺势把时长量出来：合成接口本身不返回时长，而幕长必须按配音长度倒推
-      const probe = await probeOne(data.url);
+      const probe = await probeOne(data.url, owner.fps || 30, a.breathSec);
       const tip = probe
-        ? `\n时长 ${probe.durationInSeconds}s ≈ ${probe.frames} 帧；建议场景时长 ${probe.suggestedSceneFrames} 帧（含 0.7s 呼吸位）`
+        ? `\n时长 ${probe.durationInSeconds}s ≈ ${probe.frames} 帧；建议场景时长 ${probe.suggestedSceneFrames} 帧（含 ${probe.breathSec ?? 0.7}s 呼吸位）`
         : "";
       if (a.sceneId) {
         const p = await resolveProject(a.projectId);
@@ -2905,16 +3078,17 @@ const TOOLS: ToolDef[] = [
           ops: [{ op: "set_subtitle", sceneId: a.sceneId, style: a.style }],
         }),
       });
-      return res.summary.join("；");
+      return fmtSummary(res.summary);
     },
   },
   {
     name: "tts_narration",
     description:
-      "多段旁白一次合成（每段对应一幕）：返回每段音频 URL/本地路径/真实时长/建议场景帧数；applyToScenes=true 时直接把音频写进各场景、按配音长度对齐场景时长、并写字幕。" +
+      "多段旁白一次合成（每段对应一幕）：返回每段音频 URL/本地路径/真实时长/建议场景帧数；applyToScenes=true 时直接把音频写进各场景、按配音长度对齐场景时长、并写字幕（keepSubtitles=true 则不碰已有字幕）。" +
       "\n**顺序很重要**：改幕长**不会**自动调整已经放进去的元素/贴纸（它们的 durationInFrames 在落库时就固化成当时的幕长）。" +
       "所以正确顺序是「先 tts_narration 定幕长 → 再 add_element 放定时元素」；" +
-      "顺序反了（先放元素后配音）元素会在幕中间消失，必须回头 update_element 改时长。",
+      "顺序反了（先放元素后配音）元素会在幕中间消失，必须回头 update_element 改时长。" +
+      "\n**幕尾呼吸位**默认 0.7s/幕（18 幕就是 12.6s）：总长超 brief.durationSec 时会当场警告并给出三个旋钮，breathSec 可调到 0.3。",
     shape: {
       segments: z
         .array(
@@ -2939,6 +3113,20 @@ const TOOLS: ToolDef[] = [
       voice: z.string().optional().describe("默认音色（段内可覆盖）"),
       speed: z.number().min(0.25).max(4).optional(),
       format: z.enum(["mp3", "wav", "ogg"]).optional(),
+      breathSec: z
+        .number()
+        .min(0)
+        .max(5)
+        .optional()
+        .describe(
+          "每幕尾巴留的呼吸位（秒），默认 0.7。18 幕 × 0.7 = 12.6 秒（占成片 14%），长片嫌拖就传 0.3–0.4",
+        ),
+      keepSubtitles: z
+        .boolean()
+        .optional()
+        .describe(
+          "true = 只写音频和幕长，**不动已有字幕**（保留手工拆的断句/钩子三拍）。默认 false 会用旁白文本重写字幕",
+        ),
       projectId: z.string().optional().describe("要操作的工程 id，不传 = 当前默认工程（list_projects 查）"),
     },
     run: async (a) => {
@@ -2986,7 +3174,7 @@ const TOOLS: ToolDef[] = [
         });
         const data = (await res.json()) as any;
         if (!res.ok) throw new Error(data.error ?? "合成失败");
-        const probe = await probeOne(data.url);
+        const probe = await probeOne(data.url, owner.fps || 30, a.breathSec);
         results.push({
           text: seg.text,
           sceneId: seg.sceneId,
@@ -3023,12 +3211,15 @@ const TOOLS: ToolDef[] = [
             sceneId: r.sceneId,
             patch: { durationInFrames: r.suggested },
           });
-          // 旁白文本往往是一整句，直接当字幕上屏就是一屏几十字：先拆再存
-          ops.push({
-            op: "set_subtitle",
-            sceneId: r.sceneId,
-            text: subtitleToField(normalizeSubtitle(r.text, { maxChars: SUBTITLE_LIMITS.max }).lines),
-          });
+          // 旁白文本往往是一整句，直接当字幕上屏就是一屏几十字：先拆再存。
+          // keepSubtitles=true 时跳过——钩子幕手工拆的三拍断点会被整句覆盖掉（复盘坑 #8）
+          if (!a.keepSubtitles) {
+            ops.push({
+              op: "set_subtitle",
+              sceneId: r.sceneId,
+              text: subtitleToField(normalizeSubtitle(r.text, { maxChars: SUBTITLE_LIMITS.max }).lines),
+            });
+          }
           ops.push({
             op: "add_element",
             sceneId: r.sceneId,
@@ -3052,7 +3243,32 @@ const TOOLS: ToolDef[] = [
             body: JSON.stringify({ actor: "agent", ops }),
           });
         }
-        lines.push(`已应用到 ${applied} 个场景：场景时长按配音对齐、字幕写入、音频放入（重复应用会先清旧音频）`);
+        lines.push(
+          a.keepSubtitles
+            ? `已应用到 ${applied} 个场景：场景时长按配音对齐、音频放入（字幕按 keepSubtitles 保持原样，请自己复查断句）`
+            : `已应用到 ${applied} 个场景：场景时长按配音对齐、字幕写入、音频放入（重复应用会先清旧音频；手工拆过的字幕已被覆盖，要复查）`,
+        );
+      }
+
+      // 总长预警：呼吸位 × 幕数是隐形加长项（18 幕 × 0.7s = 12.6s，占 14%）。
+      // 等渲出来才发现超目标，前面每一幕的坐标都要跟着重排（复盘坑 #9）
+      {
+        const totalFrames = results.reduce((s, r) => s + (r.suggested || 0), 0);
+        const totalSec = totalFrames / (owner.fps || 30);
+        const briefNow = readBrief(owner.id);
+        const target = Number(briefNow?.durationSec ?? 0);
+        const breath = a.breathSec ?? 0.7;
+        const tail =
+          `合计 ${totalSec.toFixed(1)}s（含每幕 ${breath}s 呼吸位，共 ${(results.length * breath).toFixed(1)}s）`;
+        if (target > 0 && totalSec > target + 2) {
+          lines.push(
+            `⚠️ 比 brief 里的目标时长（${target}s）长了 ${(totalSec - target).toFixed(1)}s：${tail}。` +
+              `三个旋钮：breathSec 降到 0.3（省 ${(results.length * 0.3).toFixed(1)}s）、语速提到 1.1–1.15、删一两幕。` +
+              `现在就定，别等渲完再回头改幕长（改幕长后面每幕元素都要重排）`,
+          );
+        } else if (target > 0) {
+          lines.push(`ℹ️ ${tail}，目标 ${target}s，在容差内`);
+        }
       }
 
       return `已合成 ${results.length} 段旁白${nl}${lines.join(nl)}${nl}下一步：preview_frames 抽帧自检 → render_video(dryRun=true) 预检 → render_video`;
@@ -3239,25 +3455,31 @@ const TOOLS: ToolDef[] = [
           ops: [{ op: "set_theme", palette: a.palette, font: a.font, radius: a.radius, motion: a.motion }],
         }),
       });
-      return res.summary.join("；");
+      return fmtSummary(res.summary);
     },
   },
   {
     name: "set_formats",
     description:
-      "调整画幅尺寸（竖屏/横屏/方形/竖版等）。只传要改的画幅 key + 宽高即可，其余保持不变；宽高范围 16–7680。例：把竖屏改成 1080×1920。",
+      "设定工程的画幅（竖屏/横屏/方形/竖版，宽高 16–7680）。**语义是「工程的画幅就是这些」**：列表里没写的画幅会被删掉——\n" +
+      "用户说「只要竖屏」就只传 portrait，否则编辑器顶栏还留着横屏按钮，用户会以为你没按要求做。\n" +
+      "只想改尺寸、保留其它画幅时传 merge:true。至少保留一种；删掉了哪些会写进回执。",
     shape: {
       projectId: z.string().optional().describe("要操作的工程 id，不传 = 当前默认工程（list_projects 查）"),
       formats: z
         .array(
           z.object({
             key: z.string().describe("画幅 key：portrait / landscape / square / tall45 或自定义"),
-            label: z.string().optional().describe("显示名（如「方形 1:1」），不传用 key"),
+            label: z.string().optional().describe("显示名（如「方形 1:1」），不传沿用旧名或 key"),
             width: z.number().int().min(16).max(7680),
             height: z.number().int().min(16).max(7680),
           }),
         )
         .min(1),
+      merge: z
+        .boolean()
+        .optional()
+        .describe("true = 只改/加，保留没写进来的画幅（老的合并行为）；不传 = 覆盖，没写的一律删掉"),
     },
     run: async (a) => {
       const p = await resolveProject(a.projectId);
@@ -3267,25 +3489,48 @@ const TOOLS: ToolDef[] = [
         width: number;
         height: number;
       }[];
-      const next = p.formats.map((f) => {
-        const u = incoming.find((x) => x.key === f.key);
-        return u ? { ...f, width: u.width, height: u.height, label: u.label ?? f.label } : f;
+      const prev = p.formats;
+      const withLabel = (u: { key: string; label?: string; width: number; height: number }) => ({
+        key: u.key,
+        label: u.label ?? prev.find((f) => f.key === u.key)?.label ?? u.key,
+        width: u.width,
+        height: u.height,
       });
-      for (const u of incoming) {
-        if (!next.some((f) => f.key === u.key)) {
-          next.push({
-            key: u.key,
-            label: u.label ?? u.key,
-            width: u.width,
-            height: u.height,
-          });
-        }
-      }
+      const keepOthers = a.merge === true;
+      const next = keepOthers
+        ? [
+            ...prev.map((f) => {
+              const u = incoming.find((x) => x.key === f.key);
+              return u ? { ...f, width: u.width, height: u.height, label: u.label ?? f.label } : f;
+            }),
+            ...incoming.filter((u) => !prev.some((f) => f.key === u.key)).map(withLabel),
+          ]
+        : incoming.map(withLabel);
+
+      const wanted = new Set(incoming.map((u) => u.key));
+      const dropped = prev.filter((f) => !wanted.has(f.key));
       const res = await api<{ summary: string[] }>(`/api/projects/${p.id}/ops`, {
         method: "POST",
         body: JSON.stringify({ actor: "agent", ops: [{ op: "set_formats", formats: next }] }),
       });
-      return res.summary.join("；");
+
+      const nl = String.fromCharCode(10);
+      const notes: string[] = [];
+      if (!keepOthers && dropped.length) {
+        notes.push(
+          `已删掉画幅：${dropped.map((f) => `${f.label}（${f.key} ${f.width}×${f.height}）`).join("、")} —— 没写进 formats 的一律删掉`,
+        );
+      }
+      if (keepOthers && dropped.length) {
+        notes.push(
+          `⚠️ 这几个画幅还在工程里：${dropped.map((f) => `${f.label}（${f.key}）`).join("、")}。` +
+            `用户如果只要 formats 里那几版，重发一次并去掉 merge（默认就是覆盖）——不然编辑器顶栏会多出画幅，用户以为你没按要求做`,
+        );
+      }
+      if (next.length > 1) {
+        notes.push(`工程有 ${next.length} 个画幅：预览/渲染默认会一起出，验收时用户也会看到多版`);
+      }
+      return [fmtSummary(res.summary), ...notes].join(nl);
     },
   },
   {
@@ -3420,7 +3665,10 @@ const TOOLS: ToolDef[] = [
   {
     name: "render_video",
     description:
-      "提交渲染任务（默认两种画幅都出）。默认异步返回，用 get_render_status 查询；传 wait=true 会等到完成再返回（省轮询）。\n**渲染前用户必须在编辑器里看过片**（request_review → confirm_review）；没验收会拒绝，用户明确让你直接渲染才传 force=true。",
+      "提交渲染任务（默认把工程里所有画幅都出一版）。默认异步返回，用 get_render_status 查询；传 wait=true 会等到完成再返回（省轮询）。\n" +
+      "**渲染进度编辑器看得见**：agent 起的任务也会在编辑器顶部显示「正在渲染哪个工程 + 画幅进度」，用户不用问你。\n" +
+      "formats 里写工程没有的画幅会直接报错（以前会「成功」但一个文件都没出）。\n" +
+      "**渲染前用户必须在编辑器里看过片**（request_review → confirm_review）；没验收会拒绝，用户明确让你直接渲染才传 force=true。",
     shape: {
       formats: z
         .union([z.string(), z.array(z.string())])
@@ -4098,12 +4346,27 @@ const TOOLS: ToolDef[] = [
       loop: z.boolean().optional().describe("视频是否循环，默认 false（循环视频在时间轴上可以无限拉长）"),
       audioSrc: z.string().optional().describe("音频元素：/assets/xxx.wav（先 upload_asset）或 https 地址"),
       startFrom: z.number().int().min(0).optional().describe("从素材第几帧开始播（视频/音频通用，跳过文件开头，如旁白前的空白）"),
+      overlay: z
+        .boolean()
+        .optional()
+        .describe("目标幕是自由画布时才会用到：true = 明知是叠加层也要放（水印/贴纸）。默认拒绝并提示用 add_freeform_element"),
     },
     run: async (a) => {
       const p = await resolveProject(a.projectId);
       // 组装逻辑与批量 apply_ops 共用 composeElement：libraryId 解析、kind 推导、
       // 音视频按素材真实时长 —— 只有一份实现，不会两条路径越改越不一样
       const { element, sceneId } = await composeElement(a as Record<string, unknown>, p);
+      const target = (p.scenes ?? []).find((s: any) => s.id === sceneId) as any;
+      // 自由画布场景上 add_element 放的是**叠加层**，不进画布 elements 数组：
+      // 画布里已有同名 kicker 时就渲染成重复两行（复盘坑 #6）。音频除外（旁白要能挂）。
+      if (target?.type === "freeform" && element.kind !== "audio" && !a.overlay) {
+        throw new Error(
+          `「${target.name ?? sceneId}」是自由画布场景：add_element 放的是叠加层，不会成为画布里的元素——` +
+            `画布里已有同名文字时会渲染成重复两行，而且不支持 anim / fx。\n` +
+            `两条路：① 画布内元素用 add_freeform_element(sceneId, element:{type,text/svg,x,y,…})；` +
+            `② 确实要压在画布上的叠加层（水印/贴纸），显式传 overlay:true。`,
+        );
+      }
       await api(`/api/projects/${p.id}/ops`, {
         method: "POST",
         body: JSON.stringify({
@@ -4223,7 +4486,7 @@ const TOOLS: ToolDef[] = [
           }),
         },
       );
-      return res.summary.join("；") || "已更新";
+      return fmtSummary(res.summary) || "已更新";
     },
   },
   {
@@ -4257,7 +4520,7 @@ const TOOLS: ToolDef[] = [
           ],
         }),
       });
-      return res.summary.join("；");
+      return fmtSummary(res.summary);
     },
   },
   {
@@ -4284,7 +4547,7 @@ const TOOLS: ToolDef[] = [
       const scene = (doc.project?.scenes ?? []).find((s: { id: string }) => s.id === sceneId);
       const els = (scene?.props?.elements ?? []) as { id?: string }[];
       const added = els[els.length - 1]?.id;
-      return `${res.summary.join("；")}（id=${added ?? "?"}，该幕现有 ${els.length} 个元素）`;
+      return `${fmtSummary(res.summary)}（id=${added ?? "?"}，该幕现有 ${els.length} 个元素）`;
     },
   },
   {
@@ -4316,7 +4579,7 @@ const TOOLS: ToolDef[] = [
           ],
         }),
       });
-      return res.summary.join("；");
+      return fmtSummary(res.summary);
     },
   },
   {
@@ -4336,7 +4599,7 @@ const TOOLS: ToolDef[] = [
           ops: [{ op: "remove_element", sceneId: a.sceneId, elementId: a.elementId }],
         }),
       });
-      return res.summary.join("；") || "已删除";
+      return fmtSummary(res.summary) || "已删除";
     },
   },
   {
@@ -4404,7 +4667,7 @@ const TOOLS: ToolDef[] = [
         `/api/projects/${p.id}/restore/${a.rev}`,
         { method: "POST" },
       );
-      return `已回滚到 rev ${a.rev}，当前 rev=${res.project.rev}。${res.summary.join("；")}`;
+      return `已回滚到 rev ${a.rev}，当前 rev=${res.project.rev}。${fmtSummary(res.summary)}`;
     },
   },
   {
@@ -4502,7 +4765,7 @@ const TOOLS: ToolDef[] = [
           method: "POST",
           body: JSON.stringify({ actor: "agent", ops }),
         });
-        return res.summary.join("；");
+        return fmtSummary(res.summary);
       }
 
       const list = els.map(pick);
@@ -4547,7 +4810,7 @@ const TOOLS: ToolDef[] = [
         method: "POST",
         body: JSON.stringify({ actor: "agent", ops }),
       });
-      return res.summary.join("；");
+      return fmtSummary(res.summary);
     },
   },
   {
@@ -4601,6 +4864,44 @@ const TOOLS: ToolDef[] = [
       const spans = sceneSpans(scenes as any[]);
       const KEY_TEXT = ["title", "heading", "text", "quote", "leftTitle", "rightTitle", "value"];
 
+      // 幕序 vs 分镜表：build_storyboard 按调用顺序 append，先建样板再补中间幕就会错位，
+      // 而画面每一幕单看都是对的 —— 人眼和抽帧都发现不了，只有对顺序才查得出（复盘坑 #1）
+      {
+        const sbNow = readStoryboard(p.id);
+        const known = new Set(scenes.map((s) => s.id));
+        const intended = (sbNow?.shots ?? [])
+          .map((s) => s.sceneId)
+          .filter((id): id is string => !!id && known.has(id));
+        if (intended.length >= 2) {
+          const pos = intended.map((id) => scenes.findIndex((s) => s.id === id));
+          const jump = pos.findIndex((v, i) => i > 0 && v < pos[i - 1]);
+          if (jump > 0) {
+            const want = intended[jump];
+            const at = pos[jump] + 1;
+            const shotNo = (sbNow?.shots ?? []).findIndex((s) => s.sceneId === want) + 1;
+            issues.push(
+              `⚠️ 幕序和分镜表不一致：分镜第 ${shotNo} 幕对应的场景排在第 ${at} 位` +
+                `（应该是第 ${shotNo} 位）。这种错位单看每一幕都正常，播起来却是「先给答案再给推理」` +
+                ` → reorder_scenes(按分镜顺序的完整 id, reflow=true)`,
+            );
+          }
+          const extra = scenes.filter((s) => !intended.includes(s.id));
+          if (extra.length) {
+            issues.push(
+              `⚠️ 有 ${extra.length} 幕不在分镜表里：${extra
+                .map((s) => `「${s.name}」`)
+                .slice(0, 6)
+                .join("、")}${extra.length > 6 ? " 等" : ""}` +
+                ` —— 模板开场/结尾、风格样张这类中间产物，成片前要 remove_scene 或 build_storyboard(replace=true)`,
+            );
+          }
+        }
+        const temp = scenes.filter((s) => /样张|风格候选|STYLE PROBE/i.test(String(s.name ?? "")));
+        if (temp.length && !intended.length) {
+          issues.push(`⚠️ 工程里有样张幕（${temp.map((s) => `「${s.name}」`).join("、")}）：成片前删掉，别混进片子`);
+        }
+      }
+
       for (const sc of scenes as any[]) {
         if (sc.durationInFrames < 30) {
           issues.push(`⚠️「${sc.name}」只有 ${sc.durationInFrames} 帧，短到看不清`);
@@ -4619,8 +4920,33 @@ const TOOLS: ToolDef[] = [
         }
       }
 
-      // 字幕：又臭又长是成片观感的第一杀手（一屏几十字 + 标点全上屏）
+      // 画幅与 brief 对齐：用户说「只要竖屏」，工程里却留着横屏 →
+      // 编辑器顶栏多一个画幅按钮、预览和渲染也多出一版，用户会以为 agent 没按要求做
       {
+        const briefNow = readBrief(p.id);
+        const aspect = String((briefNow as any)?.aspect ?? "").trim();
+        const allFmt = (((p as any).formats ?? []) as { key: string; label: string; width: number; height: number }[]);
+        const m = aspect.replace(/：/g, ":").match(/(\d+(?:\.\d+)?)\s*[:x×]\s*(\d+(?:\.\d+)?)/);
+        if (m && allFmt.length > 1 && Number(m[1]) > 0 && Number(m[2]) > 0) {
+          const want = Number(m[1]) / Number(m[2]);
+          const best = allFmt.reduce(
+            (acc, f) => (Math.abs(f.width / f.height - want) < Math.abs(acc.width / acc.height - want) ? f : acc),
+            allFmt[0],
+          );
+          const extra = allFmt.filter((f) => f.key !== best.key);
+          if (extra.length) {
+            issues.push(
+              `ℹ️ brief 要的画幅是 ${aspect}（≈「${best.label}」），工程里还留着 ${extra.length} 个：${extra
+                .map((f) => `${f.label} ${f.width}×${f.height}`)
+                .join("、")} —— 预览/渲染默认会一起出，编辑器顶栏也会多出按钮，用户容易以为没按要求做。` +
+                `只要一版：set_formats(只传 ${best.key})；确实是多画幅工程就忽略这条`,
+            );
+          }
+        }
+      }
+
+      {
+        // 字幕：又臭又长是成片观感的第一杀手（一屏几十字 + 标点全上屏）
         const audit = auditSubtitles(p);
         issues.push(...audit.hard.map((x) => `⚠️ ${x}`), ...audit.issues);
         if (audit.hard.length) {
@@ -4708,6 +5034,30 @@ const TOOLS: ToolDef[] = [
             }
           }
           if (!isAmbient && el.y !== undefined) ys.push({ label, y: Number(el.y) });
+          // 基础 y 和动画落点是两笔账：只改 el.y 不改 anim[].to.y，动画播完元素会回到旧位置。
+          // 静态抽帧常常正好抽在动画窗口外，看不出问题（复盘坑 #3）。只查「停到幕尾」的段，
+          // 飞出去的动画（to.y 明显越界）是有意设计，不报。
+          {
+            const segs = (el.anim ?? []) as { at?: number[]; to?: { y?: number } }[];
+            const last = [...segs].reverse().find((a) => typeof a?.to?.y === "number");
+            const end = Number(last?.at?.[1] ?? -1);
+            const toY = last?.to?.y;
+            if (
+              typeof toY === "number" &&
+              typeof el.y === "number" &&
+              end >= dur - 5 &&
+              toY > -5 &&
+              toY < 105
+            ) {
+              const diff = Math.abs(toY - Number(el.y));
+              if (diff > 0.5 && diff < 30) {
+                issues.push(
+                  `⚠️「${sc.name}」${label}：基础 y=${el.y}，动画落点 anim.to.y=${toY} —— 播完会停在 ${toY}% 而不是 ${el.y}%。` +
+                    `改位置用 update_freeform_element（会自动同步关键帧），手写 patch 要连 anim 一起改`,
+                );
+              }
+            }
+          }
         });
         // 只报「差一点点」的错位：差 5% 以内说明本来想对齐、手抖了。
         // 差 20% 是两行内容，本来就该不同 y —— 以前按「y 值不止一个」判，一屏多行永远在报（实测 50 条噪音）
@@ -5309,6 +5659,18 @@ const TOOLS: ToolDef[] = [
       if (onlyIdx < 0 && a.replace) {
         for (const sc of p.scenes ?? []) ops.push({ op: "remove_scene", sceneId: sc.id });
       }
+      // 单幕模式要**插到分镜里前一幕的后面**，不能一律 append：
+      // 先建第 1、6 幕当样板、再补第 2–18 幕，append 出来的时间轴是 1→6→2→3…（坑 #1，会毁片）。
+      // 找不到「已建的前一幕」时不插（末尾追加），后面 alignScenesToStoryboard 还会兜一次底。
+      const aliveIds = new Set((p.scenes ?? []).map((s: { id: string }) => s.id));
+      const anchorFor = (shotIdx: number): string | undefined => {
+        for (let k = shotIdx - 1; k >= 0; k--) {
+          const id = sb.shots[k]?.sceneId;
+          if (id && aliveIds.has(id)) return id;
+        }
+        return undefined;
+      };
+      const anchor = onlyIdx >= 0 ? anchorFor(onlyIdx) : undefined;
       for (const shot of targets) {
         ops.push({
           op: "add_scene",
@@ -5316,6 +5678,7 @@ const TOOLS: ToolDef[] = [
           ...(shot.name ? { name: shot.name } : {}),
           ...(shot.durationInFrames ? { durationInFrames: shot.durationInFrames } : {}),
           ...(shot.props ? { props: shot.props } : {}),
+          ...(anchor ? { afterSceneId: anchor } : {}),
         });
       }
       const res = await api<{ createdSceneIds: string[] }>(`/api/projects/${p.id}/ops`, {
@@ -5347,12 +5710,15 @@ const TOOLS: ToolDef[] = [
       }
 
       // sceneId 回填，和分镜一一对应（单幕模式只回填那一幕，其余保持原值）
-      saveStoryboard(p.id, {
+      const saved = saveStoryboard(p.id, {
         ...sb,
         shots: sb.shots.map((s, i) =>
           onlyIdx >= 0 ? (i === onlyIdx ? { ...s, sceneId: ids[0] } : s) : { ...s, sceneId: ids[i] },
         ),
       });
+
+      // 幕序自愈：建完立刻和分镜顺序对一遍。这一步不做，片子会「看起来完整、内部已经错位」
+      const align = await alignScenesToStoryboard(p.id, saved);
       const nl = String.fromCharCode(10);
       const visionNote = visionMissing.length
         ? `${nl}💬 观感还没定（${visionMissing.join("、")}）：intake(11) 问一下再收尾——request_review 会因为这几项没填而拒绝。`
@@ -5362,6 +5728,12 @@ const TOOLS: ToolDef[] = [
             subReport.length > 6 ? `…共 ${subReport.length} 处` : ""
           }`
         : "";
+      const orderNote = align.notes.length ? `${nl}🔧 ${align.notes.join(`${nl}🔧 `)}` : "";
+      const leftoverNote = align.extraCount
+        ? `${nl}⚠️ 工程里还有 ${align.extraCount} 幕不在分镜表里（模板开场/结尾、风格样张之类）：` +
+          `确认要不要 remove_scene 掉；要全部重建就 build_storyboard(replace=true)。` +
+          `不清掉它们会混进成片。`
+        : "";
       if (onlyIdx >= 0) {
         return (
           visionNote +
@@ -5369,10 +5741,10 @@ const TOOLS: ToolDef[] = [
           `已建第 ${onlyIdx + 1} 幕做风格帧（${sb.shots[onlyIdx]?.type}，id=${ids[0]}）。${nl}` +
           `下一步：preview_frame 抽 1–3 帧给用户过目（场景 id=${ids[0]}）——` +
           `配色/字体/版式方向 OK 再 build_storyboard(replace=true) 全量铺开（会重建这一幕，正常）；` +
-          `不对就 save_storyboard 改这一幕再 build_storyboard(shot=${onlyIdx + 1})，只重做 1 幕。${subNote}`
+          `不对就 save_storyboard 改这一幕再 build_storyboard(shot=${onlyIdx + 1})，只重做 1 幕。${subNote}${orderNote}`
         );
       }
-      return `已按分镜建了 ${ids.length} 幕：${nl}${ids.map((id, i) => `${i + 1}. ${id}（${sb.shots[i]?.type}）`).join(nl)}${nl}下一步：tts_narration 配音（applyToScenes=true 自动对齐场景时长和字幕）${subNote}${visionNote}`;
+      return `已按分镜建了 ${ids.length} 幕：${nl}${ids.map((id, i) => `${i + 1}. ${id}（${sb.shots[i]?.type}）`).join(nl)}${nl}下一步：tts_narration 配音（applyToScenes=true 自动对齐场景时长和字幕）${orderNote}${leftoverNote}${subNote}${visionNote}`;
     },
   },
   {
@@ -5529,6 +5901,7 @@ const TOOLS: ToolDef[] = [
       if (!def) throw new Error(`没有工具「${name}」。先 tool_search 找（传 all=true 看全量目录），注意拼写`);
       let out = await def.run(validateToolArgs(def, (a.args ?? {}) as Record<string, unknown>) as never);
       // 门面模式下所有工具都从这里过：脏提醒必须挂在这儿，注册层的包装覆盖不到
+      out = liftWarnings(String(out));
       if (dirtySincePreview && needsDirtyHint(name)) out = String(out) + DIRTY_HINT;
       return out;
     },
@@ -5721,6 +6094,13 @@ const SEARCH_ALIASES: Record<string, string[]> = {
   加: ["add_scene", "add_element"],
   复制: ["duplicate_scene"],
   顺序: ["reorder_scenes", "move_scene", "compact_main_track"],
+  幕序: ["reorder_scenes", "check_project", "build_storyboard"],
+  排序: ["reorder_scenes"],
+  层级: ["reorder_freeform_elements", "add_freeform_element"],
+  图层: ["reorder_freeform_elements", "add_freeform_element"],
+  盖住: ["reorder_freeform_elements"],
+  呼吸位: ["tts_narration"],
+  断句: ["set_subtitle", "tts_narration"],
   时长: ["set_scene_timing"],
   多版本: ["duplicate_scene"],
   模板: ["list_templates", "save_template"],
@@ -5774,6 +6154,7 @@ export function buildMcpServer(): McpServer {
     const handler = async (args: Record<string, any>) => {
       try {
         let out = await def.run(args ?? {});
+        out = liftWarnings(String(out));
         if (dirtySincePreview && needsDirtyHint(def.name)) out = String(out) + DIRTY_HINT;
         return { content: [{ type: "text" as const, text: text(out) }] };
       } catch (err) {

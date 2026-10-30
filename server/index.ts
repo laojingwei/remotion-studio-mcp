@@ -1160,7 +1160,10 @@ app.get("/api/assets/probe", async (c) => {
     if (!srcs.length) return c.json({ error: "至少传一个 src" }, 400);
     if (srcs.length > 50) return c.json({ error: "一次最多量 50 个" }, 400);
     const fps = Number(c.req.query("fps") ?? 30) || 30;
-    return c.json({ probes: await probeMany(srcs, fps) });
+    // breath：幕尾呼吸位（秒），默认 0.7；长片嫌拖可以传 0.3
+    const breathRaw = c.req.query("breath");
+    const breath = breathRaw === undefined ? undefined : Number(breathRaw);
+    return c.json({ probes: await probeMany(srcs, fps, Number.isFinite(breath as number) ? (breath as number) : undefined) });
   } catch (err) {
     return fail(c, err);
   }

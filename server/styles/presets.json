@@ -53,7 +53,7 @@
     "motion": "硬切、巨字、强节奏；不用缓动",
     "transition": { "type": "none", "durationInFrames": 0 },
     "sceneBias": ["title", "bigtext", "quote", "list"],
-    "subtitle": { "color": "#FFFFFF", "bg": "#000000", "bgOpacity": 0.0, "stroke": 0.3, "strokeColor": "#000000" },
+    "subtitle": { "color": "#FFFFFF", "bg": "#000000", "bgOpacity": 0, "stroke": 0.3, "strokeColor": "#000000" },
     "forbidden": ["柔和渐变", "细衬线", "弹簧动画"]
   },
   "editorial-collage": {
@@ -146,7 +146,7 @@
     "font": { "heading": "\"VT323\", \"Courier New\", monospace", "body": "\"Courier New\", \"Microsoft YaHei\", monospace" },
     "radius": 0,
     "motion": "扫描线、色差、跟踪噪声；步进感",
-    "transition": { "type": "glitch", "durationInFrames": 8 },
+    "transition": { "type": "blur", "durationInFrames": 8 },
     "sceneBias": ["title", "bigtext", "chat", "stats"],
     "subtitle": { "color": "#FFD400", "bg": "#000000", "bgOpacity": 0.6 },
     "forbidden": ["现代扁平", "干净的科技感"]
@@ -207,5 +207,613 @@
     "sceneBias": ["title", "stats", "list", "bigtext"],
     "subtitle": { "color": "#F4D58D", "bg": "#0D0B1E", "bgOpacity": 0.85 },
     "forbidden": ["抗锯齿平滑", "现代极简"]
+  },
+  "art-deco": {
+    "name": "装饰艺术",
+    "palette": {
+      "background": "#162C2A",
+      "surface": "#1F3A36",
+      "text": "#F3E9D5",
+      "textMuted": "#A99A7D",
+      "primary": "#C4A064",
+      "secondary": "#963F32",
+      "accent": "#E8D5A8"
+    },
+    "font": { "heading": "\"Poiret One\", \"Jost\", \"Microsoft YaHei\", sans-serif", "body": "\"Jost\", \"Microsoft YaHei\", sans-serif" },
+    "radius": 0,
+    "motion": "阶梯逐级抬升、扇面绕轴张开；构件有机械行程，停下时干净，装饰不各自弹跳",
+    "transition": { "type": "wipe", "durationInFrames": 14 },
+    "sceneBias": ["title", "hero", "bigtext", "quote"],
+    "subtitle": { "color": "#F3E9D5", "bg": "#162C2A", "bgOpacity": 0.55 },
+    "forbidden": ["霓虹描边", "圆角卡通", "弹簧回弹", "多色渐变"]
+  },
+  "blueprint": {
+    "name": "工程蓝图",
+    "palette": {
+      "background": "#153C68",
+      "surface": "#1C4A7C",
+      "text": "#E5F0EB",
+      "textMuted": "#93B4C6",
+      "primary": "#EDBB72",
+      "secondary": "#E5F0EB",
+      "accent": "#EDBB72"
+    },
+    "font": { "heading": "\"IBM Plex Mono\", \"Roboto Mono\", \"Microsoft YaHei\", sans-serif", "body": "\"IBM Plex Mono\", \"Roboto Mono\", \"Microsoft YaHei\", sans-serif" },
+    "radius": 0,
+    "motion": "先给整体轮廓再揭示连接；装配沿轴平移、几乎不回弹；尺寸线在结构稳定后才出现",
+    "transition": { "type": "wipe", "durationInFrames": 12 },
+    "sceneBias": ["tech", "compare", "steps", "title"],
+    "subtitle": { "color": "#E5F0EB", "bg": "#153C68", "bgOpacity": 0.6 },
+    "forbidden": ["圆角卡片", "彩色插画", "弹性回弹", "装饰光晕"]
+  },
+  "cel-anime-80s": {
+    "name": "80 年代赛璐璐动画",
+    "palette": {
+      "background": "#B9C8C7",
+      "surface": "#EBD8A8",
+      "text": "#22303A",
+      "textMuted": "#665C76",
+      "primary": "#C97954",
+      "secondary": "#B6564D",
+      "accent": "#EBD8A8"
+    },
+    "font": { "heading": "\"Barlow Condensed\", \"Archivo Black\", \"Microsoft YaHei\", sans-serif", "body": "\"IBM Plex Sans\", \"Microsoft YaHei\", sans-serif" },
+    "radius": 1,
+    "motion": "先设计准备/发力/停住的姿态再决定中间帧；快动作少帧、表情转折留停顿；冲击画只用于动作峰值",
+    "transition": { "type": "wipe", "durationInFrames": 8 },
+    "sceneBias": ["title", "life", "chat", "image"],
+    "subtitle": { "color": "#FFF6E4", "bg": "#22303A", "bgOpacity": 0.6 },
+    "forbidden": ["全片统一跳帧", "连续高反差闪烁", "现代渐变高光", "粗描边发光"]
+  },
+  "comic-pop": {
+    "name": "漫画分格",
+    "palette": {
+      "background": "#F4ECD8",
+      "surface": "#FAF5E9",
+      "text": "#16130F",
+      "textMuted": "#6E675C",
+      "primary": "#E53A6E",
+      "secondary": "#1FA2D8",
+      "accent": "#F7D23E"
+    },
+    "font": { "heading": "\"Bangers\", \"Luckiest Guy\", \"Microsoft YaHei\", sans-serif", "body": "\"Comic Neue\", \"Patrick Hand\", \"Microsoft YaHei\", sans-serif" },
+    "radius": 0,
+    "motion": "格内动作按 8–12fps 步进：预备 → 一两帧拖影 → 定格最高点 → 拟声字炸开；换格硬切或沿阅读顺序滑一格",
+    "transition": { "type": "none", "durationInFrames": 0 },
+    "sceneBias": ["title", "bigtext", "chat", "versus"],
+    "subtitle": { "color": "#16130F", "bg": "#F4ECD8", "bgOpacity": 0.9 },
+    "forbidden": ["柔和渐变", "细线插画", "平滑缓动", "写实阴影"]
+  },
+  "concept-morph": {
+    "name": "数学／概念形变",
+    "palette": {
+      "background": "#17252D",
+      "surface": "#1E2F38",
+      "text": "#E8F1EE",
+      "textMuted": "#7E8F92",
+      "primary": "#73D0C3",
+      "secondary": "#F2BB68",
+      "accent": "#DE997D"
+    },
+    "font": { "heading": "\"STIX Two Math\", \"Noto Serif SC\", \"Microsoft YaHei\", sans-serif", "body": "\"DM Sans\", \"Microsoft YaHei\", sans-serif" },
+    "radius": 2,
+    "motion": "解释关系时保持可追踪的平滑变换；参数读数必须跟真实参数一致；几何值变化不用可能越界的弹簧",
+    "transition": { "type": "fade", "durationInFrames": 16 },
+    "sceneBias": ["title", "compare", "chart", "steps"],
+    "subtitle": { "color": "#E8F1EE", "bg": "#17252D", "bgOpacity": 0.55 },
+    "forbidden": ["装饰性粒子", "无对应关系的淡化", "卡通回弹", "多强调色"]
+  },
+  "copperplate-engraving": {
+    "name": "铜版雕刻",
+    "palette": {
+      "background": "#F2EBDD",
+      "surface": "#F8F3E8",
+      "text": "#27231F",
+      "textMuted": "#7A7268",
+      "primary": "#B88952",
+      "secondary": "#27231F",
+      "accent": "#B85D51"
+    },
+    "font": { "heading": "\"EB Garamond\", \"Libre Baskerville\", \"Microsoft YaHei\", sans-serif", "body": "\"Libre Baskerville\", \"Microsoft YaHei\", sans-serif" },
+    "radius": 0,
+    "motion": "按轮廓 → 浅排线 → 交叉暗部逐层显现；线条推进稳定、局部收笔略慢；大幅回弹会破坏刻刀力度",
+    "transition": { "type": "fade", "durationInFrames": 14 },
+    "sceneBias": ["title", "image", "quote", "gallery"],
+    "subtitle": { "color": "#27231F", "bg": "#F2EBDD", "bgOpacity": 0.9 },
+    "forbidden": ["粗描边", "大幅弹簧回弹", "彩色渐变", "发光"]
+  },
+  "crayon-storybook": {
+    "name": "蜡笔绘本",
+    "palette": {
+      "background": "#F7F1E3",
+      "surface": "#FDF9F0",
+      "text": "#3B2F2A",
+      "textMuted": "#8A7D72",
+      "primary": "#E8664A",
+      "secondary": "#6FA8DC",
+      "accent": "#F4C95D"
+    },
+    "font": { "heading": "\"Patrick Hand\", \"Caveat\", \"Microsoft YaHei\", sans-serif", "body": "\"Gaegu\", \"Patrick Hand\", \"Microsoft YaHei\", sans-serif" },
+    "radius": 4,
+    "motion": "12fps 步进，动作夸张但慢；转场用「重画」——新画面一笔笔画出、旧的被擦掉",
+    "transition": { "type": "wipe", "durationInFrames": 14 },
+    "sceneBias": ["title", "image", "life", "steps"],
+    "subtitle": { "color": "#3B2F2A", "bg": "#F7F1E3", "bgOpacity": 0.9 },
+    "forbidden": ["纯黑", "平滑矢量边缘", "3D 阴影", "高饱和数码色"]
+  },
+  "generative-geometry": {
+    "name": "生成几何",
+    "palette": {
+      "background": "#0B0B0D",
+      "surface": "#151517",
+      "text": "#F2EEE6",
+      "textMuted": "#807F7C",
+      "primary": "#FF4D2E",
+      "secondary": "#F2EEE6",
+      "accent": "#FF4D2E"
+    },
+    "font": { "heading": "\"Space Grotesk\", \"Outfit\", \"Microsoft YaHei\", sans-serif", "body": "\"Space Grotesk\", \"Microsoft YaHei\", sans-serif" },
+    "radius": 0,
+    "motion": "周期运动：匀速旋转与正弦振荡；每 2 或 4 拍完成一次展开→收拢，重拍上翻转或反相；整体呼吸缩放 1.0↔1.04",
+    "transition": { "type": "fade", "durationInFrames": 10 },
+    "sceneBias": ["title", "bigtext", "neon", "gallery"],
+    "subtitle": { "color": "#F2EEE6", "bg": "#0B0B0D", "bgOpacity": 0.7 },
+    "forbidden": ["装饰性插图", "随机噪点", "多强调色", "手绘质感"]
+  },
+  "glass-material": {
+    "name": "玻璃金属材质",
+    "palette": {
+      "background": "#08090B",
+      "surface": "#14161A",
+      "text": "#E8EAEE",
+      "textMuted": "#7C828C",
+      "primary": "#9FD8FF",
+      "secondary": "#CBB8FF",
+      "accent": "#9FD8FF"
+    },
+    "font": { "heading": "\"Inter Tight\", \"Helvetica Neue\", \"Microsoft YaHei\", sans-serif", "body": "\"Inter\", \"Microsoft YaHei\", sans-serif" },
+    "radius": 2,
+    "motion": "镜头一直在漂（缓慢环绕或推近）；爆炸图沿轴拉开、短暂悬浮、在重拍上用很短 ease-in 合拢；光脉冲跟拍点",
+    "transition": { "type": "blur", "durationInFrames": 14 },
+    "sceneBias": ["hero", "title", "image", "gallery"],
+    "subtitle": { "color": "#E8EAEE", "bg": "#08090B", "bgOpacity": 0.45 },
+    "forbidden": ["彩色渐变铺底", "卡通描边", "表面彩虹色散", "满屏粒子"]
+  },
+  "glitch-digital": {
+    "name": "数字故障",
+    "palette": {
+      "background": "#0A0A0A",
+      "surface": "#141414",
+      "text": "#F2F2F2",
+      "textMuted": "#7A7A7A",
+      "primary": "#FF2A2A",
+      "secondary": "#00B3FF",
+      "accent": "#FF00A8"
+    },
+    "font": { "heading": "\"Archivo Black\", \"Space Grotesk\", \"Microsoft YaHei\", sans-serif", "body": "\"JetBrains Mono\", \"IBM Plex Mono\", \"Microsoft YaHei\", sans-serif" },
+    "radius": 0,
+    "motion": "故障是瞬时的：2–8 帧强故障配重拍，之后迅速恢复干净；乱码逐字落定 30–60ms；偶尔冻结卡帧 3–4 次",
+    "transition": { "type": "blur", "durationInFrames": 6 },
+    "sceneBias": ["title", "bigtext", "chat", "stats"],
+    "subtitle": { "color": "#F2F2F2", "bg": "#0A0A0A", "bgOpacity": 0.65 },
+    "forbidden": ["柔和渐变", "长时虚化", "装饰性彩虹", "圆角卡片"]
+  },
+  "hologram-hud": {
+    "name": "全息空间界面",
+    "palette": {
+      "background": "#101B27",
+      "surface": "#16273A",
+      "text": "#DCE7EA",
+      "textMuted": "#6F8A94",
+      "primary": "#70D8DE",
+      "secondary": "#F0B66C",
+      "accent": "#70D8DE"
+    },
+    "font": { "heading": "\"Space Grotesk\", \"Microsoft YaHei\", sans-serif", "body": "\"IBM Plex Mono\", \"Microsoft YaHei\", sans-serif" },
+    "radius": 1,
+    "motion": "对象慢到能认清结构，查看某处时减速或停住；面板按所解释的结构依次出现；弹性只用于轻界面反馈",
+    "transition": { "type": "blur", "durationInFrames": 12 },
+    "sceneBias": ["title", "tech", "stats", "gallery"],
+    "subtitle": { "color": "#DCE7EA", "bg": "#101B27", "bgOpacity": 0.55 },
+    "forbidden": ["文字逐行扫描", "整空间弹性", "多个环形件同时自转", "高饱和色块"]
+  },
+  "illuminated-manuscript": {
+    "name": "泥金手抄本",
+    "palette": {
+      "background": "#EDE0BF",
+      "surface": "#F4EAD2",
+      "text": "#294A79",
+      "textMuted": "#7E7460",
+      "primary": "#A93F35",
+      "secondary": "#B58A39",
+      "accent": "#415F46"
+    },
+    "font": { "heading": "\"UnifrakturMaguntia\", \"Cormorant Garamond\", \"Microsoft YaHei\", sans-serif", "body": "\"Noto Serif SC\", \"Microsoft YaHei\", sans-serif" },
+    "radius": 0,
+    "motion": "书页是稳定舞台，藤蔓鸟兽按内容作局部动作；叶子依茎顺序展开、不一起呼吸；翻页要处理正反面与遮挡",
+    "transition": { "type": "fade", "durationInFrames": 16 },
+    "sceneBias": ["title", "quote", "gallery", "image"],
+    "subtitle": { "color": "#3A2E22", "bg": "#EDE0BF", "bgOpacity": 0.9 },
+    "forbidden": ["装饰同时呼吸", "伪拉丁语", "全篇哥特体长文", "高饱和色块"]
+  },
+  "ink-wash": {
+    "name": "水墨",
+    "palette": {
+      "background": "#F3EEE2",
+      "surface": "#FAF6EC",
+      "text": "#151412",
+      "textMuted": "#8A857B",
+      "primary": "#B8262A",
+      "secondary": "#C9C3B6",
+      "accent": "#B8262A"
+    },
+    "font": { "heading": "\"EB Garamond\", \"Noto Serif SC\", \"Microsoft YaHei\", sans-serif", "body": "\"Noto Serif SC\", \"Microsoft YaHei\", sans-serif" },
+    "radius": 0,
+    "motion": "慢：晕开 1–3 秒、一笔 0.3–0.8 秒，节奏像呼吸；运笔有提按，起笔重、行笔细、收笔回锋；转场墨滴落下晕开",
+    "transition": { "type": "circle", "durationInFrames": 18 },
+    "sceneBias": ["title", "quote", "image", "bigtext"],
+    "subtitle": { "color": "#151412", "bg": "#F3EEE2", "bgOpacity": 0.85 },
+    "forbidden": ["高饱和色块", "硬边描边", "满屏装饰", "朱红多处"]
+  },
+  "isometric-infographic": {
+    "name": "等距信息图",
+    "palette": {
+      "background": "#F3F1EC",
+      "surface": "#FFFFFF",
+      "text": "#1B2430",
+      "textMuted": "#8A8F98",
+      "primary": "#2F6BFF",
+      "secondary": "#FF7A1A",
+      "accent": "#2F6BFF"
+    },
+    "font": { "heading": "\"Manrope\", \"DM Sans\", \"Microsoft YaHei\", sans-serif", "body": "\"Manrope\", \"DM Sans\", \"Microsoft YaHei\", sans-serif" },
+    "radius": 2,
+    "motion": "方块从上方落下、弹簧 {2.4, 0.7} 带一点挤压、按依赖错峰；点亮面渐变到强调色加一次脉冲；数据流匀速",
+    "transition": { "type": "slide", "durationInFrames": 14 },
+    "sceneBias": ["steps", "stats", "chart", "gallery"],
+    "subtitle": { "color": "#1B2430", "bg": "#FFFFFF", "bgOpacity": 0.9 },
+    "forbidden": ["等距与斜投影混用", "满屏装饰", "卡通描边", "结构件用强调色"]
+  },
+  "liquid-shader": {
+    "name": "液态着色器",
+    "palette": {
+      "background": "#08090B",
+      "surface": "#14161A",
+      "text": "#E6E8EB",
+      "textMuted": "#8A8F98",
+      "primary": "#9FD8FF",
+      "secondary": "#FF5A1F",
+      "accent": "#CBB8FF"
+    },
+    "font": { "heading": "\"Inter Tight\", \"Microsoft YaHei\", sans-serif", "body": "\"Inter\", \"Microsoft YaHei\", sans-serif" },
+    "radius": 3,
+    "motion": "流动周期 4–12 秒，节拍到来时 k 值或尺寸脉冲一次；SDF 用 mix + smooth min 插值，过程中自然拉丝；循环走周期函数",
+    "transition": { "type": "circle", "durationInFrames": 18 },
+    "sceneBias": ["title", "hero", "image", "gallery"],
+    "subtitle": { "color": "#E6E8EB", "bg": "#08090B", "bgOpacity": 0.5 },
+    "forbidden": ["彩虹渐变", "硬边几何", "抖动噪点", "静态金属贴图"]
+  },
+  "mixed-media-era": {
+    "name": "年代媒介混搭",
+    "palette": {
+      "background": "#EDE9E2",
+      "surface": "#F7F4EE",
+      "text": "#1B1B1B",
+      "textMuted": "#7B7B76",
+      "primary": "#E4572E",
+      "secondary": "#4A4D55",
+      "accent": "#E4572E"
+    },
+    "font": { "heading": "\"Space Mono\", \"IBM Plex Mono\", \"Microsoft YaHei\", sans-serif", "body": "\"Inter\", \"Microsoft YaHei\", sans-serif" },
+    "radius": 1,
+    "motion": "每段守各自媒介的规则；贯穿元素按全片 t 走、换段不重来；转场是「升级」——分辨率提高、平面倒成地面、像素细化成矢量",
+    "transition": { "type": "zoom", "durationInFrames": 10 },
+    "sceneBias": ["timeline", "title", "gallery", "compare"],
+    "subtitle": { "color": "#1B1B1B", "bg": "#F7F4EE", "bgOpacity": 0.9 },
+    "forbidden": ["每段各自从头演", "多种强调色", "字卡字体不统一", "转场语法不一致"]
+  },
+  "one-line": {
+    "name": "一笔线描",
+    "palette": {
+      "background": "#F5F0E6",
+      "surface": "#FBF7EF",
+      "text": "#252A2B",
+      "textMuted": "#7A7A72",
+      "primary": "#C35F4A",
+      "secondary": "#252A2B",
+      "accent": "#C35F4A"
+    },
+    "font": { "heading": "\"DM Sans\", \"Manrope\", \"Microsoft YaHei\", sans-serif", "body": "\"DM Sans\", \"Manrope\", \"Microsoft YaHei\", sans-serif" },
+    "radius": 2,
+    "motion": "线头沿路径推进、长直段快、识别形体处略停；变形保住端点与主要交叉关系；退场沿线收回，不必擦掉",
+    "transition": { "type": "fade", "durationInFrames": 12 },
+    "sceneBias": ["title", "bigtext", "steps", "quote"],
+    "subtitle": { "color": "#252A2B", "bg": "#F5F0E6", "bgOpacity": 0.9 },
+    "forbidden": ["整片填色", "多层描边", "复杂纹理", "粗重阴影"]
+  },
+  "painterly": {
+    "name": "油画笔触",
+    "palette": {
+      "background": "#EFE6D2",
+      "surface": "#F7F0E0",
+      "text": "#2B1D14",
+      "textMuted": "#7A6A5B",
+      "primary": "#6FA8DC",
+      "secondary": "#F6D365",
+      "accent": "#8E7CC3"
+    },
+    "font": { "heading": "\"Cormorant Garamond\", \"EB Garamond\", \"Microsoft YaHei\", sans-serif", "body": "\"Noto Serif SC\", \"Microsoft YaHei\", sans-serif" },
+    "radius": 2,
+    "motion": "笔触位置固定，运动来自方向场摆动与光斑移动；开场可「画出来」（0.5–1.5 秒逐笔）；镜头慢推、主体可 12fps",
+    "transition": { "type": "fade", "durationInFrames": 16 },
+    "sceneBias": ["image", "title", "quote", "gallery"],
+    "subtitle": { "color": "#2B1D14", "bg": "#EFE6D2", "bgOpacity": 0.85 },
+    "forbidden": ["黑色画阴影", "平滑矢量边缘", "高饱和数码渐变", "硬边描边"]
+  },
+  "paper-cut": {
+    "name": "纸艺分层",
+    "palette": {
+      "background": "#F3EDE0",
+      "surface": "#FBF6EA",
+      "text": "#2C3340",
+      "textMuted": "#7E8592",
+      "primary": "#C2543F",
+      "secondary": "#6E8FA3",
+      "accent": "#E0A458"
+    },
+    "font": { "heading": "\"Young Serif\", \"Fraunces\", \"Microsoft YaHei\", sans-serif", "body": "\"Nunito\", \"Microsoft YaHei\", sans-serif" },
+    "radius": 2,
+    "motion": "层从下方或后方「立起来」弹簧 {2.2, 0.8}，错峰 60–100ms；翻开绕折线 90°、0.6–0.9 秒；可 12fps 做定格质感",
+    "transition": { "type": "slide", "durationInFrames": 14 },
+    "sceneBias": ["title", "gallery", "image", "steps"],
+    "subtitle": { "color": "#2C3340", "bg": "#FBF6EA", "bgOpacity": 0.9 },
+    "forbidden": ["平滑渐变", "单层平涂", "写实投影", "多色相混用"]
+  },
+  "particle-field": {
+    "name": "粒子场",
+    "palette": {
+      "background": "#0B0B0D",
+      "surface": "#151517",
+      "text": "#EFEBE3",
+      "textMuted": "#7C7C78",
+      "primary": "#16C172",
+      "secondary": "#EFEBE3",
+      "accent": "#16C172"
+    },
+    "font": { "heading": "\"Archivo Black\", \"Anton\", \"Microsoft YaHei\", sans-serif", "body": "\"Inter\", \"Microsoft YaHei\", sans-serif" },
+    "radius": 0,
+    "motion": "聚合弹簧 {1.5, 0.82}、每粒子随机延迟 0–0.9 秒；炸开 outExpo 0.4–0.8 秒；一个形状停留 ≥1.5 秒再变下一个",
+    "transition": { "type": "fade", "durationInFrames": 10 },
+    "sceneBias": ["title", "bigtext", "hero", "neon"],
+    "subtitle": { "color": "#EFEBE3", "bg": "#0B0B0D", "bgOpacity": 0.7 },
+    "forbidden": ["粒子多色", "无停留连续变形", "彩色渐变背景", "装饰性插图"]
+  },
+  "pixel-diorama": {
+    "name": "像素立体场景",
+    "palette": {
+      "background": "#33485A",
+      "surface": "#41586B",
+      "text": "#EFEAD8",
+      "textMuted": "#9AA6A0",
+      "primary": "#CC754C",
+      "secondary": "#71845C",
+      "accent": "#E0B56E"
+    },
+    "font": { "heading": "\"Pixelify Sans\", \"IBM Plex Sans\", \"Microsoft YaHei\", sans-serif", "body": "\"IBM Plex Sans\", \"Microsoft YaHei\", sans-serif" },
+    "radius": 0,
+    "motion": "角色靠少量关键姿态表达重心、落脚与位移匹配；镜头可平滑、人物可步进、灯光可缓变；进出场走门与遮挡",
+    "transition": { "type": "none", "durationInFrames": 0 },
+    "sceneBias": ["game", "life", "gallery", "title"],
+    "subtitle": { "color": "#EFEAD8", "bg": "#33485A", "bgOpacity": 0.7 },
+    "forbidden": ["整图上下弹动", "全片统一跳帧", "屏幕中央爆炸", "抗锯齿平滑"]
+  },
+  "risograph-print": {
+    "name": "孔版印刷",
+    "palette": {
+      "background": "#F6F1E7",
+      "surface": "#FBF7EF",
+      "text": "#2B2B2B",
+      "textMuted": "#6E6A62",
+      "primary": "#FF48B0",
+      "secondary": "#0078BF",
+      "accent": "#FFE800"
+    },
+    "font": { "heading": "\"Space Grotesk\", \"Syne\", \"Microsoft YaHei\", sans-serif", "body": "\"Space Grotesk\", \"Microsoft YaHei\", sans-serif" },
+    "radius": 1,
+    "motion": "元素像被「印」上来：先出一个色版、再出第二个（错开 2–4 帧）；可用 12fps 增加手作感，镜头保持平滑",
+    "transition": { "type": "fade", "durationInFrames": 12 },
+    "sceneBias": ["title", "bigtext", "cards", "gallery"],
+    "subtitle": { "color": "#2B2B2B", "bg": "#F6F1E7", "bgOpacity": 0.9 },
+    "forbidden": ["渐变", "平滑抗锯齿", "专色以外的颜色", "重阴影"]
+  },
+  "rubber-hose": {
+    "name": "橡皮管动画",
+    "palette": {
+      "background": "#EDE3CF",
+      "surface": "#F6EEDC",
+      "text": "#292725",
+      "textMuted": "#7D766C",
+      "primary": "#BE684E",
+      "secondary": "#CE8B45",
+      "accent": "#42685B"
+    },
+    "font": { "heading": "\"Bowlby One SC\", \"Archivo Black\", \"Microsoft YaHei\", sans-serif", "body": "\"DM Sans\", \"Microsoft YaHei\", sans-serif" },
+    "radius": 3,
+    "motion": "预备 → 快速发力 → 少量过冲跟随；身体走圆弧、四肢连续弯曲；停顿是喜剧节奏的一部分",
+    "transition": { "type": "slide", "durationInFrames": 12 },
+    "sceneBias": ["title", "life", "chat", "steps"],
+    "subtitle": { "color": "#292725", "bg": "#EDE3CF", "bgOpacity": 0.9 },
+    "forbidden": ["僵硬直线", "写实阴影", "棕黄滤镜", "连续极速挤压"]
+  },
+  "shadow-puppet": {
+    "name": "透光皮影",
+    "palette": {
+      "background": "#EAD4A5",
+      "surface": "#F2E3C2",
+      "text": "#3E3027",
+      "textMuted": "#7C6A57",
+      "primary": "#A34A32",
+      "secondary": "#8D743D",
+      "accent": "#B39348"
+    },
+    "font": { "heading": "\"Noto Serif SC\", \"Alegreya\", \"Microsoft YaHei\", sans-serif", "body": "\"Noto Serif SC\", \"Microsoft YaHei\", sans-serif" },
+    "radius": 1,
+    "motion": "先定支撑与手中物件再安排关节角度；动作有提、送、停的操纵感；多沿横向舞台移动，击打短促后留停顿",
+    "transition": { "type": "wipe", "durationInFrames": 12 },
+    "sceneBias": ["title", "image", "life", "gallery"],
+    "subtitle": { "color": "#3E3027", "bg": "#EAD4A5", "bgOpacity": 0.9 },
+    "forbidden": ["关节同时自由摇摆", "高饱和发光边", "三维头部", "全片平摇"]
+  },
+  "soft-3d-toy": {
+    "name": "软萌 3D",
+    "palette": {
+      "background": "#FFF4E6",
+      "surface": "#FFFFFF",
+      "text": "#2B2540",
+      "textMuted": "#9B93AD",
+      "primary": "#FF8A73",
+      "secondary": "#7ED9C3",
+      "accent": "#FFD66B"
+    },
+    "font": { "heading": "\"Fredoka\", \"Baloo 2\", \"Nunito\", \"Microsoft YaHei\", sans-serif", "body": "\"Fredoka\", \"Nunito\", \"Microsoft YaHei\", sans-serif" },
+    "radius": 4,
+    "motion": "弹簧 {2.8, 0.45} 明显回弹；落地挤压（y 缩 30%）、弹起拉伸；预备夸张，耳朵天线等跟随动作晚一点停",
+    "transition": { "type": "slide", "durationInFrames": 12 },
+    "sceneBias": ["title", "cards", "life", "steps"],
+    "subtitle": { "color": "#2B2540", "bg": "#FFFFFF", "bgOpacity": 0.9 },
+    "forbidden": ["硬边描边", "深色高对比", "写实材质", "多个物体同时回弹"]
+  },
+  "soft-organic": {
+    "name": "柔光有机",
+    "palette": {
+      "background": "#FFF4E6",
+      "surface": "#FFFBF4",
+      "text": "#3A2E2A",
+      "textMuted": "#8C7A72",
+      "primary": "#C97C5D",
+      "secondary": "#A3B18A",
+      "accent": "#D8A7B1"
+    },
+    "font": { "heading": "\"Instrument Serif\", \"Cormorant Garamond\", \"Microsoft YaHei\", sans-serif", "body": "\"Inter\", \"DM Sans\", \"Microsoft YaHei\", sans-serif" },
+    "radius": 4,
+    "motion": "主元素进场 0.8–1.5 秒（glide 或 {1.2, 1.0} 无回弹）；有机形状 6–12 秒慢变形；文字从轻微模糊与下方浮上来",
+    "transition": { "type": "fade", "durationInFrames": 18 },
+    "sceneBias": ["quote", "image", "title", "gallery"],
+    "subtitle": { "color": "#3A2E2A", "bg": "#FFF4E6", "bgOpacity": 0.85 },
+    "forbidden": ["硬切", "高饱和渐变", "锐利几何", "纯黑文字"]
+  },
+  "stained-glass": {
+    "name": "彩色玻璃镶嵌",
+    "palette": {
+      "background": "#18262D",
+      "surface": "#222F36",
+      "text": "#E8E2D2",
+      "textMuted": "#8C9AA0",
+      "primary": "#D99A43",
+      "secondary": "#326E9C",
+      "accent": "#BC8796"
+    },
+    "font": { "heading": "\"Cormorant Garamond\", \"Marcellus\", \"Microsoft YaHei\", sans-serif", "body": "\"Jost\", \"Microsoft YaHei\", sans-serif" },
+    "radius": 0,
+    "motion": "玻璃片绕明确边缘翻转或沿槽位归位、轻微减速后停稳；以光变化为主时窗体保持稳定；不做软弹簧挤压",
+    "transition": { "type": "wipe", "durationInFrames": 14 },
+    "sceneBias": ["title", "gallery", "quote", "image"],
+    "subtitle": { "color": "#E8E2D2", "bg": "#18262D", "bgOpacity": 0.6 },
+    "forbidden": ["玻璃自发光无投影", "软弹簧挤压", "高饱和平涂", "多色相乱用"]
+  },
+  "synthwave-neon": {
+    "name": "合成波霓虹",
+    "palette": {
+      "background": "#140A2E",
+      "surface": "#1E1240",
+      "text": "#F2E9FF",
+      "textMuted": "#8B7FB0",
+      "primary": "#FF2E97",
+      "secondary": "#00E5FF",
+      "accent": "#FFB300"
+    },
+    "font": { "heading": "\"Audiowide\", \"Michroma\", \"Microsoft YaHei\", sans-serif", "body": "\"Space Grotesk\", \"Microsoft YaHei\", sans-serif" },
+    "radius": 1,
+    "motion": "前进感靠网格滚动/光轨后退/路灯掠过，匀速是对的；霓虹先闪两下再稳定亮；重拍上亮度脉冲一次",
+    "transition": { "type": "fade", "durationInFrames": 12 },
+    "sceneBias": ["title", "bigtext", "neon", "hero"],
+    "subtitle": { "color": "#F2E9FF", "bg": "#140A2E", "bgOpacity": 0.55 },
+    "forbidden": ["白天场景", "发光铺满背景", "多色霓虹乱用", "柔和粉彩"]
+  },
+  "terminal-ascii": {
+    "name": "终端 / ASCII",
+    "palette": {
+      "background": "#0C0C0C",
+      "surface": "#151515",
+      "text": "#D0D0D0",
+      "textMuted": "#6E6E6E",
+      "primary": "#5FD75F",
+      "secondary": "#FFD75F",
+      "accent": "#FF8C3B"
+    },
+    "font": { "heading": "\"JetBrains Mono\", \"IBM Plex Mono\", \"Microsoft YaHei\", sans-serif", "body": "\"JetBrains Mono\", \"IBM Plex Mono\", \"Microsoft YaHei\", sans-serif" },
+    "radius": 0,
+    "motion": "打字每字符 20–45ms、标点后稍停；输出一次性或分块出现；滚动整行跳、不做平滑滚动；语义色只表示成功/警告/错误",
+    "transition": { "type": "none", "durationInFrames": 0 },
+    "sceneBias": ["tech", "chat", "stats", "title"],
+    "subtitle": { "color": "#D0D0D0", "bg": "#0C0C0C", "bgOpacity": 0.7 },
+    "forbidden": ["平滑滚动", "多字体混排", "装饰性渐变", "圆角卡片"]
+  },
+  "tilt-shift-miniature": {
+    "name": "移轴微缩",
+    "palette": {
+      "background": "#DCE5DD",
+      "surface": "#F2F5F1",
+      "text": "#22303A",
+      "textMuted": "#7D8A8F",
+      "primary": "#B95743",
+      "secondary": "#D7B44B",
+      "accent": "#637C5D"
+    },
+    "font": { "heading": "\"Manrope\", \"Public Sans\", \"Microsoft YaHei\", sans-serif", "body": "\"Manrope\", \"Public Sans\", \"Microsoft YaHei\", sans-serif" },
+    "radius": 3,
+    "motion": "小物件有目的地、转弯和停靠；焦点与镜头平稳，不同时用三种速度；进场从局部活动拉远或先见底座",
+    "transition": { "type": "zoom", "durationInFrames": 14 },
+    "sceneBias": ["image", "steps", "life", "gallery"],
+    "subtitle": { "color": "#22303A", "bg": "#F2F5F1", "bgOpacity": 0.9 },
+    "forbidden": ["全画面皆清晰", "三种速度争抢", "高饱和小物件", "穿楼滑行"]
+  },
+  "ukiyo-e": {
+    "name": "浮世绘木版",
+    "palette": {
+      "background": "#EEE3C6",
+      "surface": "#F5EDD6",
+      "text": "#253D4B",
+      "textMuted": "#6E7B84",
+      "primary": "#4C7B96",
+      "secondary": "#B45B44",
+      "accent": "#C6A35D"
+    },
+    "font": { "heading": "\"Noto Serif SC\", \"EB Garamond\", \"Microsoft YaHei\", sans-serif", "body": "\"Noto Serif SC\", \"Microsoft YaHei\", sans-serif" },
+    "radius": 1,
+    "motion": "主轮廓稳定，水纹衣褶云带按各自形态变；分层平移比大幅三维旋转更贴合版画；进场可分版套印",
+    "transition": { "type": "wipe", "durationInFrames": 12 },
+    "sceneBias": ["title", "image", "gallery", "quote"],
+    "subtitle": { "color": "#253D4B", "bg": "#EEE3C6", "bgOpacity": 0.9 },
+    "forbidden": ["伪日文笔画", "大幅三维旋转", "高饱和霓虹", "无意义印章"]
+  },
+  "whiteboard-explainer": {
+    "name": "白板手绘解说",
+    "palette": {
+      "background": "#FAFAF5",
+      "surface": "#FFFFFF",
+      "text": "#26343A",
+      "textMuted": "#7A868B",
+      "primary": "#D66B42",
+      "secondary": "#2C807E",
+      "accent": "#B64844"
+    },
+    "font": { "heading": "\"Caveat\", \"Patrick Hand\", \"Microsoft YaHei\", sans-serif", "body": "\"Noto Sans SC\", \"Microsoft YaHei\", sans-serif" },
+    "radius": 2,
+    "motion": "绘制顺序就是解释顺序；箭杆先到、箭头最后确定方向；画笔工作时镜头少动；笔画结束留抬笔与转移时间",
+    "transition": { "type": "fade", "durationInFrames": 10 },
+    "sceneBias": ["steps", "compare", "tech", "title"],
+    "subtitle": { "color": "#26343A", "bg": "#FFFFFF", "bgOpacity": 0.9 },
+    "forbidden": ["平滑淡入出现", "一根线画完所有", "每个镜头换语义色", "满屏填色"]
   }
 }

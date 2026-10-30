@@ -360,15 +360,81 @@ test("compact_main_track：主轨本来就连续时不给假 summary", () => {
   assert.ok(packed.summary.some((x) => x.includes("本来就是连续")), packed.summary.join(" | "));
 });
 
-test("reorder_scenes：有自定义起点时 summary 说明「时间位置不变」", () => {
+test("reorder_scenes：主轨有钉死起点时，summary 必须明说「时间位置没变」（否则像成功）", () => {
   const p = seed();
-  const pinned = one(p, { op: "move_scene", sceneId: p.scenes[2].id, start: 500, track: 1 });
+  // 钉在主轨上（track 0）——这正是复盘坑 #2 的现场：挪完再重排，幕序看着改了、时间没动
+  const pinned = one(p, { op: "move_scene", sceneId: p.scenes[2].id, start: 500 });
   const ids = [...pinned.project.scenes].reverse().map((s) => s.id);
   const r = one(pinned.project, { op: "reorder_scenes", sceneIds: ids });
+  const warn = r.summary.find((s) => s.includes("⚠"));
+  assert.ok(warn, `没有警告行：${r.summary.join(" | ")}`);
+  assert.ok(/没变|没生效/.test(warn!), `警告没说清后果：${warn}`);
+  // 警告里要有解法，否则 agent 只能试错
+  assert.ok(/reflow/.test(warn!), `警告没给解法：${warn}`);
+  // 起点确实没被动
+  const pinnedScene = r.project.scenes.find((s) => s.id === p.scenes[2].id)!;
+  assert.equal(pinnedScene.start, 500);
+});
+
+test("reorder_scenes(reflow:true)：主轨钉死起点被清掉，时间按新顺序首尾相接", () => {
+  const p = seed();
+  const pinned = one(p, { op: "move_scene", sceneId: p.scenes[2].id, start: 500 });
+  const ids = [...pinned.project.scenes].reverse().map((s) => s.id);
+  const r = one(pinned.project, { op: "reorder_scenes", sceneIds: ids, reflow: true });
   assert.ok(
-    r.summary.some((s) => s.includes("时间位置不变")),
-    `summary 没说清：${r.summary.join(" | ")}`,
+    r.project.scenes.every((s) => s.start === undefined),
+    "主轨还留着自定义起点",
   );
+  const spans = sceneSpans(r.project.scenes);
+  let acc = 0;
+  spans.forEach((sp) => {
+    assert.equal(sp.start, acc, `「${sp.id}」起点没接在上一块后面`);
+    acc = sp.end;
+  });
+  assert.ok(r.summary.some((s) => s.includes("首尾相接")), r.summary.join(" | "));
+});
+
+test("reorder_scenes(reflow:true)：轨道 1 以上的起点保留（画中画不该被主轨重排带走）", () => {
+  const p = seed();
+  const pip = one(p, { op: "move_scene", sceneId: p.scenes[2].id, start: 40, track: 1 });
+  const ids = [...pip.project.scenes].reverse().map((s) => s.id);
+  const r = one(pip.project, { op: "reorder_scenes", sceneIds: ids, reflow: true });
+  const scene = r.project.scenes.find((s) => s.id === p.scenes[2].id)!;
+  assert.equal(scene.start, 40, "画中画的起点被清掉了");
+  assert.equal(scene.track, 1);
+});
+
+/* ────────────────────── 转场类型：写错会毁整个工程 ────────────────────── */
+
+test("update_scene 拒绝不存在的转场类型（以前会写进文件 → 工程再也打不开）", () => {
+  const p = seed();
+  assert.throws(
+    () =>
+      one(p, {
+        op: "update_scene",
+        sceneId: p.scenes[0].id,
+        patch: { transitionIn: { type: "glitch", durationInFrames: 8 } as never },
+      }),
+    /不合法/,
+  );
+});
+
+test("update_scene 接受合法转场；没给时长按 12 帧兜底，none 给 0", () => {
+  const p = seed();
+  const r = one(p, {
+    op: "update_scene",
+    sceneId: p.scenes[0].id,
+    patch: { transitionOut: { type: "wipe" } as never },
+  });
+  assert.equal(r.project.scenes[0].transitionOut?.type, "wipe");
+  assert.equal(r.project.scenes[0].transitionOut?.durationInFrames, 12);
+
+  const r2 = one(r.project, {
+    op: "update_scene",
+    sceneId: p.scenes[0].id,
+    patch: { transitionOut: { type: "none" } as never },
+  });
+  assert.equal(r2.project.scenes[0].transitionOut?.durationInFrames, 0);
 });
 
 /* ────────────────────────── 汇总 ────────────────────────── */

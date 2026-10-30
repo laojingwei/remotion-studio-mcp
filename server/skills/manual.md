@@ -5,9 +5,9 @@
 
 **工具分两层（先搞懂这个）**：
 - **常驻核心 4 个**：`start_guide`（开工入口）、`get_guide`（读指南/本书）、`tool_search`（找工具）、`tool_call`（执行工具）
-- **其余 86 个**：不在常驻列表里。用法：`tool_search("画中画")` 找到工具（返回名字/说明/参数表）→ `tool_call(name="move_scene", args={...})` 执行。
+- **其余 100 个**：不在常驻列表里。用法：`tool_search("画中画")` 找到工具（返回名字/说明/参数表）→ `tool_call(name="move_scene", args={...})` 执行。
   全量目录：`tool_search(all=true)`；某几个工具的完整文档：`tool_search(names=["add_element"])`
-- 本书的工具全表（§3）覆盖**全部** 99 个——先查表再搜索，比盲搜快
+- 本书的工具全表（§3）覆盖**全部** 104 个（含 4 个核心）——先查表再搜索，比盲搜快
 
 **读法**：
 - 第一次接活：通读 §1 行为契约 + §2 能力地图，其余用到哪节读哪节
@@ -67,8 +67,8 @@
 | 多轨 | 任意条轨道、画中画小窗（缩放/位置/圆角）、同轨自动防重叠 | `move_scene` `set_scene_box` |
 | 音频 | TTS 配音（单段/多段**自动对齐幕长并写字幕**）、BGM 全局轨、场景内音频裁时间窗、音量调节 | `tts_narration` `add_audio_track` `set_audio` |
 | 字幕 | 硬字幕烧录（**一屏 8–16 字、不带标点**，写入自动拆段）+ SRT/VTT 导出，两者同一套时间 | `set_subtitle` `fix_subtitles` `set_subtitle_style` `export_subtitles` |
-| 风格 | **44 种风格规则库**（12 种可一键套用：改主题色+转场+推荐版式）、风格文件可改造/混搭/自定义 | `list_styles` `get_style` `apply_style` |
-| 画幅 | 多画幅并存（9:16 / 16:9 / 1:1 / 自定义 16–7680） | `set_formats` |
+| 风格 | **43 种风格规则库，全部带结构化预设**（`apply_style` 一键套：主题色+字体+圆角+转场+推荐版式+禁止项），也都能 `probe_style` 出真样张；风格文件可改造/混搭/自定义 | `list_styles` `get_style` `apply_style` |
+| 画幅 | 多画幅并存（9:16 / 16:9 / 1:1 / 自定义 16–7680）。**`set_formats` 默认覆盖**：没写进 formats 的画幅会被删掉（用户说「只要竖屏」就只传 portrait，否则编辑器顶栏会留着横屏按钮）；只改尺寸传 `merge:true` | `set_formats` |
 | 预览 | 单帧/多帧抽帧（按场景偏移）、真实浏览器渲染前 dryRun 预检 | `preview_frame(s)` `render_video(dryRun)` |
 | 渲染 | 正式出片（可等完成）、进度查询、取消、历史产物清理 | `render_video` `get_render_status` `cancel_render` `cleanup_renders` |
 | 素材 | **分两层目录**：`assets/library/`（我的素材，跨工程复用）+ `assets/projects/<工程id>/`（工程私有，删工程连带清）；素材库上传/列表/改名、探测真实时长、图标装饰元素库 | `upload_asset` `list_assets` `list_project_assets` `delete_project_asset` `organize_assets` `get_asset_info` |
@@ -80,7 +80,7 @@
 
 ---
 
-## 3. 工具全表（99 个，按域）
+## 3. 工具全表（104 个，按域；含 4 个核心）
 
 > 除 4 个核心工具（start_guide / get_guide / tool_search / tool_call）外，
 > 下面的工具都用 `tool_call(name, args)` 执行；参数表用 `tool_search(names=["工具名"])` 取。
@@ -99,11 +99,11 @@
 
 **稿件**：`save_script(segments[])`（一段一幕，带每段预估秒数；改稿会让确认失效）· `get_script` · `confirm_script`（稿子没确认不能写分镜，`scriptType=无稿` 除外）
 
-**场景**：`list_scene_types` · `add_scene` · `update_scene` · `set_scene_type`（换版式，同名 key 迁移）· `set_scene_timing` · `duplicate_scene` · `reorder_scenes` · `remove_scene` · `move_scene`（绝对帧/换轨）· `set_scene_box`（画中画）· `set_transition` · `set_transitions`（批量）
+**场景**：`list_scene_types` · `add_scene` · `update_scene` · `set_scene_type`（换版式，同名 key 迁移）· `set_scene_timing` · `duplicate_scene` · `reorder_scenes`（**幕序的真相是分镜表**；有被 `move_scene` 钉死的幕时必须带 `reflow:true`，否则时间轴不动） · `remove_scene` · `move_scene`（绝对帧/换轨；会给这一幕**钉死起点**）· `set_scene_box`（画中画）· `set_transition` · `set_transitions`（批量）
 
 **批量**：`apply_ops(ops[])`——**整批原子**，op 形状支持单工具扁平写法，报错带「第 N/M 个操作」
 
-**元素**：`list_element_library` · `add_element` · `update_element` · `remove_element` · `set_transform`（自由元素变换）· `add_freeform_element` · `update_freeform_element` · `remove_freeform_element` · `layout_grid` · `align_elements`
+**元素**：`list_element_library` · `add_element`（**叠加层**：目标幕是 freeform 会被拒，画布内元素走 `add_freeform_element`；确要叠加传 `overlay:true`）· `update_element` · `remove_element` · `set_transform`（自由元素变换）· `add_freeform_element` · `update_freeform_element`（改 x/y/rotate/scale 会**自动同步关键帧**）· `remove_freeform_element` · `reorder_freeform_elements`（层级：数组顺序 = 谁盖谁）· `layout_grid` · `align_elements`
 
 **特效**：`list_effect_types` · `add_effect` · `update_effect` · `remove_effect`
 
@@ -159,7 +159,7 @@
 | 做画中画 | `move_scene(start, track=1)` → `set_scene_box(scale, x, y, radius)` |
 | 卡点 | 有 BGM 文件：`analyze_audio(src)` 拿 BPM + 拍点帧号（**置信度 <2.5 别自动用**，问用户 BPM 后 `set_beat_grid`）；再把转场/特效的 from 对着拍点放 |
 | 配音前发现 TTS 没开 | `tts_check()` 探连通 → `tts_check(deep=true)` 验配置。**开工时做**，别等第 6 步 |
-| 换全套视觉 | `list_styles` → `get_style` → `apply_style`（可套用的 12 种）或 `set_theme` 手调 |
+| 换全套视觉 | `list_styles` → `get_style`（读规则）→ `apply_style`（43 种都能一键套：配色/字体/圆角/转场）。预设只覆盖"系统的值"，版式与文案仍要按风格规则重做；要改得更像品牌，再 `set_theme` 覆盖三个值 |
 | 数字/图表页 | `stats`/`chart`/`ring` 版式自带滚动；数据只能来自用户或可靠来源 |
 | 元素动画 | `update_element(anim=[{frame,from,to}])`；弹簧手感 = 过冲关键帧（craft §4） |
 | 完全自定义画面 | `freeform` 场景（`get_guide("freeform")`），上限 40 元素，`layout_grid`/`align_elements` 辅助排版 |
@@ -179,7 +179,14 @@
 | props 写了没反应 | 未知 key 被 schema 剥掉，summary 里有 ⚠ 告警（原值→实际值）；按 schema 改 key |
 | 元素中途消失 | **元素时长不随幕长变**。先 `tts_narration` 定幕长、再放元素；反了就 `update_element(durationInFrames)` 修 |
 | 场景被推走 | 同轨不能重叠：撞上会被自动往后**吸附**，结果写在 summary 里；判重叠按时间先后不按数组顺序 |
-| 拖主轨后邻居叠住 | 主轨 = 顺序即时间；`reorder_scenes` 后跟 `compact_main_track` 压实 |
+| 幕序和分镜不一样 | `build_storyboard` 是按**建幕顺序** append 的（先建样板再补中间幕必错位）。现在建完会自动按分镜表重排并回执「已重排」；手工重排用 `reorder_scenes(完整 id, reflow:true)` |
+| 重排了但时间轴没动 | 那几幕被 `move_scene` 钉死了起点。`reorder_scenes` 只改数组顺序，钉死的块时间不变 → 必须 `reflow:true`（只清主轨，画中画不动） |
+| 动画播完元素弹回原位 | 关键帧的 `to.y` 是绝对值，和基础 `y` 是两笔账。用 `update_freeform_element` 改位置会自动同步关键帧；手写 patch 要连 `anim` 一起改（`check_project` 会报这种不一致） |
+| 自由画布元素盖错层 | 数组顺序 = 层级（没有 z-index，靠后的盖住靠前的）。用 `reorder_freeform_elements(mode:front/back/forward/backward)` |
+| 自由画布上加了元素变成两行字 | `add_element` 放的是**叠加层**，不进画布数组。画布内元素用 `add_freeform_element` |
+| 拖主轨后邻居叠住 | 主轨 = 顺序即时间；`reorder_scenes(reflow:true)` 一次搞定（老写法 `reorder_scenes` + `compact_main_track` 也还认） |
+| 编辑器里还留着旧的画幅 | `set_formats` **默认是覆盖**（只传要的那几个）；以前是合并语义，于是「只要竖屏」的片子顶栏还挂着横屏。只改尺寸才传 `merge:true` |
+| 转场写了没生效 / 工程打不开 | 转场 `type` 只认 none/fade/slide/wipe/zoom/blur/flip/circle；写 `glitch` 这类会**落盘成脏值**（旧版 crt-vhs 预设踩过，工程当场读不出来）。现在 op 层直接拒绝，读到旧脏值会自动改成 `blur` 并写回 |
 | 元素画不出来 | `z` 必须 ≥ 0，负 z 画到背景下面 |
 | 成片没声音 | 视频元素 `muted` 默认 true；音频元素默认 false。不传就按这个来 |
 | 缩幕长弹回去 | 场景时长下限由版式决定（30–60 帧起），夹回是设计行为 |

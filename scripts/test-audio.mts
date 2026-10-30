@@ -215,7 +215,8 @@ test("gainForTarget：上限倍数生效，静音素材不动", () => {
 
 test("buildCompressCurve：安静的段落补、响的段落压（起伏被压平）", () => {
   const lufs = [-40, -40, -12, -12, -40, -40];
-  const g = buildCompressCurve(lufs, { targetLufs: -20, ratio: 4, attackSteps: 1, releaseSteps: 1 });
+  // buildCompressCurve 现在返回 {values, peakLimited, ...}，断言只看 values
+  const { values: g } = buildCompressCurve(lufs, { targetLufs: -20, ratio: 4, attackSteps: 1, releaseSteps: 1 });
   assert.ok(g[0] > 1.5, `前段应补：${g[0]}`);
   assert.ok(g[2] < g[0], `响的段落应压得更少：${g[2]} vs ${g[0]}`);
   const flat = summarizeCurve(g);
@@ -224,12 +225,12 @@ test("buildCompressCurve：安静的段落补、响的段落压（起伏被压�
 
 test("buildCompressCurve：ratio=1 只做整体增益，轻响差完全保持（不压动态）", () => {
   // 平均 -20 恰好在目标 → 整体增益 0 → 三段增益全 1：轻响差 10dB 原样保留
-  const g = buildCompressCurve([-30, -20, -10], { targetLufs: -20, ratio: 1, attackSteps: 1, releaseSteps: 1 });
+  const { values: g } = buildCompressCurve([-30, -20, -10], { targetLufs: -20, ratio: 1, attackSteps: 1, releaseSteps: 1 });
   for (const [i, v] of g.entries()) {
     assert.ok(Math.abs(v - 1) < 0.02, `ratio=1 不该改动态（第 ${i} 点 ${v}）`);
   }
   // 平均 -25、目标 -20 → 整体 +5dB，但三段增益必须一致（只有整体平移，动态不变）
-  const g2 = buildCompressCurve([-30, -20, -25], { targetLufs: -20, ratio: 1, attackSteps: 1, releaseSteps: 1 });
+  const { values: g2 } = buildCompressCurve([-30, -20, -25], { targetLufs: -20, ratio: 1, attackSteps: 1, releaseSteps: 1 });
   const want = Math.pow(10, 5 / 20);
   for (const [i, v] of g2.entries()) {
     assert.ok(Math.abs(v - want) < 0.05, `整体增益应一致（第 ${i} 点 ${v}，期望 ${want.toFixed(3)}）`);
@@ -237,13 +238,13 @@ test("buildCompressCurve：ratio=1 只做整体增益，轻响差完全保持（
 });
 
 test("buildCompressCurve：静音段不被放大（不把底噪放大成嘶声）", () => {
-  const g = buildCompressCurve([-20, -Infinity, -Infinity], { targetLufs: -20, ratio: 3 });
+  const { values: g } = buildCompressCurve([-20, -Infinity, -Infinity], { targetLufs: -20, ratio: 3 });
   assert.equal(g[1], g[0]);
   assert.equal(g[2], g[0]);
 });
 
 test("buildCompressCurve：增益被 maxGain 与 MAX_VOLUME 双重夹住", () => {
-  const g = buildCompressCurve([-70, -70, -70], { targetLufs: -16, ratio: 3, maxGainDb: 40, attackSteps: 8 });
+  const { values: g } = buildCompressCurve([-70, -70, -70], { targetLufs: -16, ratio: 3, maxGainDb: 40, attackSteps: 8 });
   for (const v of g) assert.ok(v <= 5 && v >= 0, `越界 ${v}`);
 });
 
@@ -253,7 +254,7 @@ test("summarizeCurve：空曲线返回 1", () => {
 
 test("buildCompressCurve：轻响差被压到约 1/ratio（F15 回归锁）", () => {
   // 轻 -30 / 响 -12（差 18dB），目标 = 平均 → 整体增益 0，纯看压缩
-  const g = buildCompressCurve([-30, -30, -12, -12], {
+  const { values: g } = buildCompressCurve([-30, -30, -12, -12], {
     targetLufs: -21,
     ratio: 3,
     attackSteps: 1,
