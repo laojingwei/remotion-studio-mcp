@@ -33,6 +33,7 @@ import {
   effectParamsOf,
 } from "../shared/effects";
 import { customEffectSchema, MAX_VOLUME, sceneSpans, totalDuration } from "../shared/schema";
+import { animLandingIssues } from "../shared/freeform";
 import { SUBTITLE_LIMITS, normalizeSubtitle, subtitleToField } from "../shared/subtitleText";
 import { sceneSubtitleLines, subtitleMaxChars } from "../shared/subtitle";
 import { detectFlavor } from "../shared/aiFlavor";
@@ -5034,28 +5035,33 @@ const TOOLS: ToolDef[] = [
             }
           }
           if (!isAmbient && el.y !== undefined) ys.push({ label, y: Number(el.y) });
-          // 基础 y 和动画落点是两笔账：只改 el.y 不改 anim[].to.y，动画播完元素会回到旧位置。
-          // 静态抽帧常常正好抽在动画窗口外，看不出问题（复盘坑 #3）。只查「停到幕尾」的段，
-          // 飞出去的动画（to.y 明显越界）是有意设计，不报。
-          {
-            const segs = (el.anim ?? []) as { at?: number[]; to?: { y?: number } }[];
-            const last = [...segs].reverse().find((a) => typeof a?.to?.y === "number");
-            const end = Number(last?.at?.[1] ?? -1);
-            const toY = last?.to?.y;
-            if (
-              typeof toY === "number" &&
-              typeof el.y === "number" &&
-              end >= dur - 5 &&
-              toY > -5 &&
-              toY < 105
-            ) {
-              const diff = Math.abs(toY - Number(el.y));
-              if (diff > 0.5 && diff < 30) {
-                issues.push(
-                  `⚠️「${sc.name}」${label}：基础 y=${el.y}，动画落点 anim.to.y=${toY} —— 播完会停在 ${toY}% 而不是 ${el.y}%。` +
-                    `改位置用 update_freeform_element（会自动同步关键帧），手写 patch 要连 anim 一起改`,
-                );
-              }
+          // 基础 y 与动画落点是两笔账：只改 el.y 不改 anim[].to.y，动画播完会回到旧位置；
+          // 反过来 at 的结束帧留在幕中间，元素会在中途**跳回**基础值。静态抽帧常常正好
+          // 抽在动画窗口外，看不出问题（复盘坑 #3），所以读一次就体检一遍。
+          // 判据集中在 shared/freeform.ts#animLandingIssues，单测锁着，避免这里越改越窄。
+          for (const issue of animLandingIssues(el as never, dur)) {
+            if (issue.kind === "dead") {
+              issues.push(
+                `⚠️「${sc.name}」${label} 第 ${issue.segment} 段关键帧没有可动画的 to（数值）—— 这段不会生效：` +
+                  `数值动画必须写 to（例：anim:[{at:[0,30], to:{y:40}}]），只写 from 是空转`,
+              );
+              continue;
+            }
+            if (isAmbient) continue; // fx 氛围层的位移多为装饰，不追这条
+            const far = Math.abs((issue.toY as number) - (issue.baseY as number)) > 8;
+            const sev = far ? "⚠️" : "ℹ️";
+            if (issue.kind === "landing") {
+              issues.push(
+                `${sev}「${sc.name}」${label}：基础 y=${issue.baseY}，动画落点 to.y=${issue.toY} —— ` +
+                  `播完停在 ${issue.toY}%，基础 y 只在第 ${issue.endFrame} 帧之前有效。` +
+                  `要挪位置用 update_freeform_element（会自动同步关键帧），手写 patch 要连 anim 一起改；` +
+                  `若 ${issue.toY} 就是想要的落点，把 y 改成一致`,
+              );
+            } else {
+              issues.push(
+                `${sev}「${sc.name}」${label}：关键帧在第 ${issue.endFrame} 帧就结束（元素可见到第 ${issue.visibleEnd} 帧），` +
+                  `之后会跳回基础 y=${issue.baseY} —— 把 at 的结束帧延到幕尾，或让 y 与落点 ${issue.toY} 一致`,
+              );
             }
           }
         });

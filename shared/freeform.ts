@@ -149,6 +149,79 @@ export function evalAnim(el: FreeEl, frame: number): EvalResult {
   return out;
 }
 
+/* ────────────────────── 关键帧体检（check_project 用） ────────────────────── */
+
+/**
+ * 一处关键帧与基础位置的账对不上。
+ *
+ * 三种，严重程度和修法都不同：
+ *  - `dead`     ：这段关键帧没有可动画的数值 `to`（往往只写了 from）—— `evalAnim` 要读
+ *                 `to[key]` 才动手，所以整段等于没写，画面纹丝不动。这是纯静默失败。
+ *  - `landing`  ：动画停在幕尾，但落点 `to.y` 与基础 `y` 不是一个值。基础值只在动画开始前
+ *                 有效，改完 y 忘了改 anim（或反之）就会得到"设了 80、播完停在 40"。
+ *  - `snapback` ：动画在幕中间就结束，之后元素**跳回**基础 y。除非是有意的"沉一下再回来"，
+ *                 否则就是漏改 at 的结束帧。
+ *
+ * 为什么按「最后一帧可见的位置」而不是「有没有 anim」判：`evalAnim` 只在 `[at0, at1]`
+ * 窗口内覆盖数值，窗口外一律回落到基础值 —— 上下两个坑都源于这条。
+ */
+export type AnimLandingIssue = {
+  kind: "dead" | "landing" | "snapback";
+  /** 出问题的是第几段（1 起） */
+  segment: number;
+  /** 该段结束帧 */
+  endFrame: number;
+  /** 元素最后一帧可见的帧号（min(幕长, from + durationInFrames)） */
+  visibleEnd: number;
+  baseY?: number;
+  toY?: number;
+};
+
+/** 落点差多少才算"不是同一个位置"：2% ≈ 11px（1080p 短边），再小就是舍入或刻意微移 */
+export const ANIM_Y_TOLERANCE = 2;
+/** 明显飞出画面的落点（< -10 或 > 110）当设计处理：不报 */
+export const ANIM_Y_OFFSCREEN = { top: -10, bottom: 110 };
+
+export function animLandingIssues(el: FreeEl, sceneDur: number): AnimLandingIssue[] {
+  const issues: AnimLandingIssue[] = [];
+  const segs = el.anim ?? [];
+  if (!segs.length) return issues;
+
+  const dur = Math.max(0, sceneDur);
+  const from = num(el.from, 0);
+  // 元素不一定活到幕尾（durationInFrames 可以更短）：跳回只在"它还在画面上"时才算 bug
+  const visibleEnd = Math.min(dur, from + num(el.durationInFrames, Math.max(0, dur - from)));
+
+  // ① 死段：to 里一个可动画的数值都没有
+  segs.forEach((a, i) => {
+    const hasNumericTo = NUM_KEYS.some((k) => typeof a.to?.[k] === "number");
+    if (!hasNumericTo) {
+      issues.push({ kind: "dead", segment: i + 1, endFrame: a.at?.[1] ?? 0, visibleEnd });
+    }
+  });
+
+  // ② 落点：只看最后一段带 to.y 的（后面的段会覆盖前面的）
+  const withY = segs.filter((a) => typeof a.to?.y === "number");
+  const last = withY[withY.length - 1];
+  if (!last) return issues;
+
+  const toY = last.to!.y as number;
+  const baseY = num(el.y, 50);
+  if (Math.abs(toY - baseY) <= ANIM_Y_TOLERANCE) return issues;
+  if (toY < ANIM_Y_OFFSCREEN.top || toY > ANIM_Y_OFFSCREEN.bottom) return issues;
+
+  const end = last.at?.[1] ?? 0;
+  issues.push({
+    kind: end >= visibleEnd - 2 ? "landing" : "snapback",
+    segment: segs.indexOf(last) + 1,
+    endFrame: end,
+    visibleEnd,
+    baseY,
+    toY,
+  });
+  return issues;
+}
+
 /* ────────────────────────── 编辑器用：拖动 / 图层 / 命名 ────────────────────────── */
 
 /**

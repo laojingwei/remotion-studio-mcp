@@ -26,6 +26,7 @@ import { droppedProps, getMeta, MIN_SCENE_FRAMES, normalizeProps } from "./scene
 import { effectLabel, effectSummaryText } from "./effects";
 import { TRANSITION_TYPES } from "./transitions";
 import {
+  animLandingIssues,
   freeElSchema,
   reorderFreeElements,
   transformFreeElement,
@@ -1001,6 +1002,24 @@ export function applyOps(project: Project, ops: Op[]): OpResult {
           }
         } else {
           list[idx] = { ...prev, ...checked.data };
+          /**
+           * 显式传 anim 会**绕过**上面的自动同步（transformFreeElement）。
+           * 这正是"改了 y、动画一跑就归位"最常见的复现方式：调用方把旧 anim 一起发回来。
+           * 所以这里读一遍落点，对不上就当场说——不能等抽帧才发现（静态帧常在窗口外）。
+           */
+          if (layoutChanged && "anim" in checked.data) {
+            const after = list[idx] as FreeEl;
+            const bad = animLandingIssues(after, Number(scene.durationInFrames) || 0).find(
+              (i) => i.kind !== "dead",
+            );
+            if (bad) {
+              summary.push(
+                `⚠️「${scene.name}」元素 #${idx + 1}：这次显式传了 anim，没走"关键帧随位移同步"——` +
+                  `新 y=${after.y}，动画落点 to.y=${bad.toY} 对不上，播完会停在 ${bad.toY}%。` +
+                  `只想挪位置就别传 anim；确实要改关键帧，把 y 也写成落点`,
+              );
+            }
+          }
         }
         scene.props = { ...props, elements: list } as never;
         summary.push(`更新了「${scene.name}」的自由画布元素 #${idx + 1}`);

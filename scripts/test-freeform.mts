@@ -10,6 +10,7 @@
 import assert from "node:assert/strict";
 import { applyOps, createSeedProject, type Op } from "../shared/ops";
 import {
+  animLandingIssues,
   animTouchesLayout,
   evalAnim,
   freeElementLabel,
@@ -263,6 +264,106 @@ test("op update_freeform_element：不带位置字段时不碰 anim（改文字�
   assert.equal(out.text, "新标题");
   assert.equal(out.anim![0].to!.y, 60);
   assert.ok(!r.summary.some((s) => s.includes("同步位移")), "没动位置却报告了同步");
+});
+
+/* ──────────────── animLandingIssues：关键帧落点体检 ────────────────
+   这条检查曾经形同虚设：条件写成「段末必须在幕尾 5 帧内」且「差值必须 < 30」，
+   于是「动画中途结束会跳回」和「大幅不一致」全被过滤掉，5 种构造一个都不报。
+   下面把三种坑逐个锁住。 */
+
+const issueKinds = (e: FreeEl, dur: number) => animLandingIssues(e, dur).map((i) => i.kind);
+
+test("落点体检：基础 y 与落点一致时不报", () => {
+  const e = el({ y: 44, anim: [{ at: [20, 110], to: { y: 44 } }] });
+  assert.deepEqual(issueKinds(e, 120), []);
+});
+
+test("落点体检：差 1.5% 之内算舍入/刻意微移，不报", () => {
+  const e = el({ y: 44, anim: [{ at: [20, 118], to: { y: 45.5 } }] });
+  assert.deepEqual(issueKinds(e, 120), []);
+});
+
+test("落点体检：停在幕尾但落点差 50 —— landing（曾经被 diff<30 挡掉）", () => {
+  const e = el({ y: 90, anim: [{ at: [20, 118], to: { y: 40 } }] });
+  assert.deepEqual(issueKinds(e, 120), ["landing"]);
+});
+
+test("落点体检：动画在幕中间结束、之后跳回基础值 —— snapback", () => {
+  const e = el({ y: 80, anim: [{ at: [20, 60], to: { y: 40 } }] });
+  const [issue] = animLandingIssues(e, 120);
+  assert.equal(issue.kind, "snapback");
+  assert.equal(issue.endFrame, 60);
+  assert.equal(issue.visibleEnd, 120);
+});
+
+test("落点体检：元素自己更早就消失时，以元素末帧判断（不算跳回）", () => {
+  // 元素只活到第 60 帧，动画也停在 60 —— 没有"跳回"可看
+  const e = el({ y: 80, from: 0, durationInFrames: 60, anim: [{ at: [20, 60], to: { y: 40 } }] });
+  assert.deepEqual(issueKinds(e, 120), ["landing"]);
+});
+
+test("落点体检：飞出画面（to.y < -10 或 > 110）是有意设计，不报", () => {
+  assert.deepEqual(issueKinds(el({ y: 50, anim: [{ at: [0, 30], to: { y: -40 } }] }), 120), []);
+  assert.deepEqual(issueKinds(el({ y: 50, anim: [{ at: [0, 30], to: { y: 130 } }] }), 120), []);
+});
+
+test("落点体检：只有 from 没有 to —— dead（evalAnim 只认 to，整段空转）", () => {
+  const e = el({ y: 90, anim: [{ at: [20, 118], from: { y: 0 } }] });
+  assert.deepEqual(issueKinds(e, 120), ["dead"]);
+});
+
+test("落点体检：to 只给了颜色（非数值）也算 dead", () => {
+  const e = el({ y: 40, anim: [{ at: [0, 30], to: { color: "#fff" } }] });
+  assert.deepEqual(issueKinds(e, 120), ["dead"]);
+});
+
+test("落点体检：多段时只看最后一段的落点", () => {
+  const e = el({
+    y: 40,
+    anim: [
+      { at: [0, 30], to: { y: 40 } },
+      { at: [60, 118], to: { y: 40 } },
+    ],
+  });
+  assert.deepEqual(issueKinds(e, 120), []);
+  const bad = el({
+    y: 40,
+    anim: [
+      { at: [0, 30], to: { y: 40 } },
+      { at: [60, 118], to: { y: 90 } },
+    ],
+  });
+  assert.deepEqual(issueKinds(bad, 120), ["landing"]);
+});
+
+test("op 写入侧：显式带旧 anim 绕过同步、落点对不上 → 回执里当场警告", () => {
+  const { project, sceneId } = freeformProject([animEl()]);
+  const r = applyOps(project, [
+    {
+      op: "update_freeform_element",
+      sceneId,
+      elementId: "title",
+      // 典型现场：把整条 element 发回来，anim 是编辑前的旧值
+      patch: { y: 80, anim: [{ at: [0, 30] as [number, number], to: { y: 60 } }] },
+    },
+  ]);
+  assert.ok(
+    r.summary.some((s) => s.includes("⚠️") && s.includes("对不上")),
+    `没提醒：${r.summary.join(" | ")}`,
+  );
+});
+
+test("op 写入侧：显式给 anim 且落点一致 → 不啰嗦", () => {
+  const { project, sceneId } = freeformProject([animEl()]);
+  const r = applyOps(project, [
+    {
+      op: "update_freeform_element",
+      sceneId,
+      elementId: "title",
+      patch: { y: 40, anim: [{ at: [0, 30] as [number, number], to: { y: 40 } }] },
+    },
+  ]);
+  assert.ok(!r.summary.some((s) => s.includes("对不上")), r.summary.join(" | "));
 });
 
 test("op reorder_freeform_elements：置顶 = 移到数组末尾（盖住文字）", () => {
