@@ -976,7 +976,7 @@ export const maskrevealMeta: SceneMeta = {
   summary: "每行文案从裁切框里升起，逐行错峰；适合金句与结论页",
   schema: z.object({
     kicker: z.string().default("").describe("顶部小标签，可留空"),
-    lines: z.array(z.string()).min(1).max(4).describe("文案行，1–4 行，一行一句"),
+    lines: z.array(z.string()).min(1).describe("文案行，行数不限；行多时字号自动缩小排进画面"),
     accentLine: z.string().default("").describe("要高亮的那一行（换强调色），可留空"),
   }),
   defaultProps: {
@@ -1153,7 +1153,7 @@ export const wipeMeta: SceneMeta = {
   summary: "色带横向推开露出文案，逐行错峰；比遮罩上翻更有速度感，适合清单与步骤",
   schema: z.object({
     kicker: z.string().default("").describe("顶部小标签，可留空"),
-    lines: z.array(z.string()).min(1).max(3).describe("文案行，1–3 行，一行一句"),
+    lines: z.array(z.string()).min(1).describe("文案行，行数不限；行多时字号自动缩小排进画面"),
     accentLine: z.string().default("").describe("要用主题色擦的那一行，可留空"),
   }),
   defaultProps: {
@@ -1171,7 +1171,7 @@ export const marqueeMeta: SceneMeta = {
   category: "动效",
   summary: "几行大字不停往一侧滚，行与行方向可相反；用来制造「信息很多」的体感",
   schema: z.object({
-    rows: z.array(z.string()).min(1).max(3).describe("跑马灯内容，1–3 行"),
+    rows: z.array(z.string()).min(1).describe("跑马灯内容，行数不限；行多时字号自动缩小排进画面"),
     speed: z.number().min(1).max(80).default(14).describe("每秒滚过一个文案宽度（10–30 最舒服）"),
     direction: z.enum(["左", "右", "交替"]).default("交替").describe("滚动方向；交替 = 相邻行反向"),
     separator: z.string().default(" · ").describe("文案之间的分隔符，可留空"),
@@ -1747,6 +1747,15 @@ export type FieldDesc = {
   itemShape?: FieldDesc[];
   /** 数组元素的形态：字符串/数字数组没有 itemShape，编辑器按这个渲染单输入框 */
   itemKind?: "string" | "number";
+  /** 数组条数上下限（来自 z.array().min()/.max()）：编辑器据此控制增删按钮 */
+  minItems?: number;
+  maxItems?: number;
+  /** 数值字段的范围与形态（来自 z.number().min()/.max()/.int()）：编辑器据此渲染滑动条 */
+  numMin?: number;
+  numMax?: number;
+  numInt?: boolean;
+  /** 滑动条步进值：整数走 1，其余按范围宽度推导 */
+  numStep?: number;
 };
 
 export function describeFields(schema: z.ZodObject<z.ZodRawShape>): FieldDesc[] {
@@ -1766,7 +1775,34 @@ export function describeFields(schema: z.ZodObject<z.ZodRawShape>): FieldDesc[] 
       return { key, kind: "enum", label: desc, required, default: def, options: node.options as string[] };
     }
     if (node instanceof z.ZodNumber) {
-      return { key, kind: "number", label: desc, required, default: def };
+      // 把 schema 里的 .min()/.max()/.int() 抽出来：面板按范围渲染滑动条，
+      // 步进值跟随范围（团数 3–8 走 1，倍率 0.3–2 走 0.1，浓度 0–1 走 0.05）
+      const checks = (node._def.checks ?? []) as Array<{ kind: string; value?: number }>;
+      let numMin: number | undefined;
+      let numMax: number | undefined;
+      let numInt = false;
+      for (const chk of checks) {
+        if (chk.kind === "min") numMin = chk.value;
+        else if (chk.kind === "max") numMax = chk.value;
+        else if (chk.kind === "int") numInt = true;
+      }
+      let numStep: number | undefined;
+      if (numInt) numStep = 1;
+      else if (numMin != null && numMax != null) {
+        const range = numMax - numMin;
+        numStep = range <= 1 ? 0.05 : range <= 2.5 ? 0.1 : range <= 10 ? 0.5 : 1;
+      }
+      return {
+        key,
+        kind: "number",
+        label: desc,
+        required,
+        default: def,
+        numMin,
+        numMax,
+        numInt: numInt || undefined,
+        numStep,
+      };
     }
     if (node instanceof z.ZodBoolean) {
       return { key, kind: "boolean", label: desc, required, default: def };
@@ -1792,6 +1828,10 @@ export function describeFields(schema: z.ZodObject<z.ZodRawShape>): FieldDesc[] 
         default: def,
         itemShape: inner instanceof z.ZodObject ? describeFields(inner as z.ZodObject<z.ZodRawShape>) : [],
         itemKind,
+        // 跑马灯 rows 这类带 .min()/.max() 的数组：编辑器必须在边界收住增删按钮，
+        // 否则加到第 4 条才被服务端 zod 拒，用户只看到一句「rows 超出范围」
+        minItems: node._def.minLength?.value,
+        maxItems: node._def.maxLength?.value,
       };
     }
     // 对象/记录/联合（如 freeform.background）：不能当文本——按字符串传会直接校验失败

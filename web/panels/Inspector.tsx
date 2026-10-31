@@ -41,6 +41,27 @@ const Field: React.FC<{
   }
 
   if (field.kind === "number") {
+    const v = typeof value === "number" && Number.isFinite(value) ? value : (field.default as number) ?? 0;
+    // schema 声明了 min/max 的数量字段（团数/倍率/浓度…）渲染滑动条：
+    // 步进值在 describeFields 里按范围推导（整数走 1，窄范围走 0.05/0.1）
+    if (field.numMin != null && field.numMax != null && field.numStep != null) {
+      const dec = field.numStep >= 1 ? 0 : field.numStep >= 0.1 ? 1 : 2;
+      return (
+        <div className="field">
+          <label>
+            {field.label}
+            <span className="num">{field.numInt ? String(Math.round(v)) : v.toFixed(dec)}</span>
+          </label>
+          <RangeInput
+            value={Math.min(field.numMax, Math.max(field.numMin, v))}
+            min={field.numMin}
+            max={field.numMax}
+            step={field.numStep}
+            onChange={(n) => onChange(Number(n.toFixed(dec)))}
+          />
+        </div>
+      );
+    }
     return (
       <div className="field">
         <label>{field.label}</label>
@@ -74,6 +95,8 @@ const Field: React.FC<{
      */
     const simpleKind = field.itemKind;
     if (simpleKind === "string" || simpleKind === "number") {
+      // 条数边界：到 max 隐藏「添加一项」、到 min 隐藏「删除」，别让用户点了才被服务端拒
+      const atMax = field.maxItems != null && list.length >= field.maxItems;
       return (
         <div className="field">
           <label>{field.label}</label>
@@ -82,13 +105,15 @@ const Field: React.FC<{
               <div className="array-item" key={i}>
                 <div className="array-item-head">
                   <span>#{i + 1}</span>
-                  <button
-                    className="mini"
-                    onClick={() => onChange(list.filter((_, idx) => idx !== i))}
-                    title="删除这一项"
-                  >
-                    删除
-                  </button>
+                  {!(field.minItems != null && list.length <= field.minItems) && (
+                    <button
+                      className="mini"
+                      onClick={() => onChange(list.filter((_, idx) => idx !== i))}
+                      title="删除这一项"
+                    >
+                      删除
+                    </button>
+                  )}
                 </div>
                 <input
                   type={simpleKind === "number" ? "number" : "text"}
@@ -103,13 +128,16 @@ const Field: React.FC<{
                 />
               </div>
             ))}
-            <button className="mini add" onClick={() => onChange([...list, simpleKind === "number" ? 0 : ""])}>
-              ＋ 添加一项
-            </button>
+            {!atMax && (
+              <button className="mini add" onClick={() => onChange([...list, simpleKind === "number" ? 0 : ""])}>
+                ＋ 添加一项
+              </button>
+            )}
           </div>
         </div>
       );
     }
+    const atMaxObj = field.maxItems != null && list.length >= field.maxItems;
     return (
       <div className="field">
         <label>{field.label}</label>
@@ -118,13 +146,15 @@ const Field: React.FC<{
             <div className="array-item" key={i}>
               <div className="array-item-head">
                 <span>#{i + 1}</span>
-                <button
-                  className="mini"
-                  onClick={() => onChange(list.filter((_, idx) => idx !== i))}
-                  title="删除这一项"
-                >
-                  删除
-                </button>
+                {!(field.minItems != null && list.length <= field.minItems) && (
+                  <button
+                    className="mini"
+                    onClick={() => onChange(list.filter((_, idx) => idx !== i))}
+                    title="删除这一项"
+                  >
+                    删除
+                  </button>
+                )}
               </div>
               {(field.itemShape ?? []).map((sub) => (
                 <Field
@@ -142,18 +172,20 @@ const Field: React.FC<{
               ))}
             </div>
           ))}
-          <button
-            className="mini add"
-            onClick={() => {
-              const blank: Record<string, unknown> = {};
-              for (const sub of field.itemShape ?? []) {
-                blank[sub.key] = sub.default ?? (sub.kind === "number" ? 0 : "");
-              }
-              onChange([...list, blank]);
-            }}
-          >
-            ＋ 添加一项
-          </button>
+          {!atMaxObj && (
+            <button
+              className="mini add"
+              onClick={() => {
+                const blank: Record<string, unknown> = {};
+                for (const sub of field.itemShape ?? []) {
+                  blank[sub.key] = sub.default ?? (sub.kind === "number" ? 0 : "");
+                }
+                onChange([...list, blank]);
+              }}
+            >
+              ＋ 添加一项
+            </button>
+          )}
         </div>
       </div>
     );

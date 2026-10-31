@@ -8,7 +8,7 @@ export type MaskRevealProps = {
   theme: Theme;
   /** 顶部小标签，可留空 */
   kicker: string;
-  /** 逐行上翻的文案：一行一块，最多 4 行 */
+  /** 逐行上翻的文案：一行一块，行数不限（行多时字号自动缩小） */
   lines: string[];
   /** 高亮其中的一句（换强调色），可留空 */
   accentLine: string;
@@ -35,10 +35,11 @@ export const MaskRevealScene: React.FC<MaskRevealProps> = ({
   const m = useMotion();
   const c = theme.palette;
 
-  const rows = lines.filter((x) => String(x ?? "").trim()).slice(0, 4);
+  const rows = lines.filter((x) => String(x ?? "").trim());
   // 横屏要显著放大：h() 是短边百分比，横屏短边 1080 而画面宽 1920，
   // 同样的字号在 16:9 里只占左侧三成宽，右边一片空（横屏抽帧实测）。
-  const fontSize = h(isPortrait ? 9 : 10.4);
+  // 行数不设上限：超过基准（4 行）按 4/N 缩小字号，多少行都排得进画面。
+  const fontSize = h(isPortrait ? 9 : 10.4) * Math.min(1, 4 / Math.max(1, rows.length));
   const stagger = isPortrait ? 7 : 9;
 
   return (

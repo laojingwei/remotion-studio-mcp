@@ -10,7 +10,7 @@ export type WipeProps = {
   theme: Theme;
   /** 顶部小标签，可留空 */
   kicker: string;
-  /** 文案行，1–3 行 */
+  /** 文案行，行数不限（行多时字号自动缩小） */
   lines: string[];
   /** 要用主题色擦的那一行，可留空 */
   accentLine: string;
@@ -37,8 +37,10 @@ export const WipeScene: React.FC<WipeProps> = ({
   const m = useMotion();
   const c = theme.palette;
 
-  const rows = (lines ?? []).filter((l) => String(l).length > 0).slice(0, 3);
-  const fontSize = isPortrait ? h(5.6) : h(4.8);
+  const rows = (lines ?? []).filter((l) => String(l).length > 0);
+  // 行数不设上限：超过基准（3 行）按 3/N 缩小字号和行距，多少行都排得进画面
+  const fit = Math.min(1, 3 / Math.max(1, rows.length));
+  const fontSize = (isPortrait ? h(5.6) : h(4.8)) * fit;
 
   const kickerIn = m === 0 ? 1 : clamp01(frame / Math.max(1, fps * 0.3));
 
@@ -71,7 +73,7 @@ export const WipeScene: React.FC<WipeProps> = ({
         </Editable>
       ) : null}
 
-      <div style={{ display: "flex", flexDirection: "column", gap: u(2.4), width: "100%" }}>
+      <div style={{ display: "flex", flexDirection: "column", gap: u(2.4) * fit, width: "100%" }}>
         {rows.map((line, i) => {
           const start = Math.round(fps * (0.16 + i * 0.17));
           const dur = Math.round(fps * 0.44);

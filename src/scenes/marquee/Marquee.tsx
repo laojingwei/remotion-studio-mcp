@@ -7,7 +7,7 @@ import { Editable, useBare, useMotion } from "../ui";
 
 export type MarqueeProps = {
   theme: Theme;
-  /** 跑马灯内容，1–3 行 */
+  /** 跑马灯内容，行数不限；行多时字号自动缩小排进画面 */
   rows: string[];
   /** 每秒滚过多少（一个文案宽度为 100%，推荐 10–30） */
   speed: number;
@@ -22,7 +22,8 @@ export type MarqueeProps = {
  *
  * 这类版式在直播/电商里非常常见（信息流、卖点罗列、活动氛围），
  * 作用是**制造"信息很多"的体感**而不是让人逐条读 ——
- * 所以字号必须过线（小了就变成滚动条），行数也限制在 3 行以内。
+ * 所以字号必须过线（小了就变成滚动条）。行数不设上限：
+ * 行多时按 3/N 缩小字号，让所有行始终排得进画面。
  *
  * 无缝循环靠"两份内容并排 + 位移一个副本宽度"实现，不用 JS 测量宽度：
  * 位移用整条轨道的百分比表达，`-50%` 正好等于一份内容的宽度，
@@ -45,13 +46,14 @@ export const MarqueeScene: React.FC<MarqueeProps> = ({
   const bare = useBare();
   const c = theme.palette;
 
-  const list = (rows ?? []).filter((r) => String(r).length > 0).slice(0, 3);
+  const list = (rows ?? []).filter((r) => String(r).length > 0);
   const t = frame / fps;
   const vel = Math.max(1, Math.min(80, Number(speed) || 14));
   // 一份内容滚过去要 vel 秒：位移百分比 = (秒 × vel) 对 100 取模，再换算成整条轨道（2 份）的百分比
   const shift = (((t * vel) % 100) + 100) % 100;
-  // 三行加起来要占住画面大半：太小就成了"滚动条"，失去「信息很多」的体感
-  const fontSize = isPortrait ? h(10.4) : h(8.6);
+  // 基准字号按 3 行设计；超过 3 行就按 3/N 缩小，总高度基本不变，多少行都排得进画面
+  const fit = Math.min(1, 3 / Math.max(1, list.length));
+  const fontSize = (isPortrait ? h(10.4) : h(8.6)) * fit;
 
   return (
     <AbsoluteFill
