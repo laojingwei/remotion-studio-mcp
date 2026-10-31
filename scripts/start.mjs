@@ -20,6 +20,8 @@ function newestMtime(dir) {
   let newest = 0;
   const walk = (d) => {
     for (const entry of fs.readdirSync(d, { withFileTypes: true })) {
+      // 只跳过依赖和隐藏目录：这是"源码有没有更新"的检查，依赖变了不由这里管
+      if (entry.name === "node_modules" || entry.name.startsWith(".")) continue;
       const p = path.join(d, entry.name);
       if (entry.isDirectory()) walk(p);
       else newest = Math.max(newest, fs.statSync(p).mtimeMs);
@@ -29,8 +31,20 @@ function newestMtime(dir) {
   return newest;
 }
 
+/*
+ * 三个目录都必须进检查：
+ *   web/     面板 UI
+ *   shared/  schema / 转场定义等两端共用代码
+ *   src/     场景组件 —— 编辑器预览用 @remotion/player，场景代码**也打进 web bundle**。
+ * 漏了 src/ 的后果：改场景（比如修雨幕方向）后 npm start 认为"没变化"不重建，
+ * 用户看到的永远是旧组件 —— 雨幕方向修复当晚就因为漏了这个目录踩过一次。
+ */
 const distTime = fs.existsSync(DIST) ? fs.statSync(DIST).mtimeMs : 0;
-const sourceTime = Math.max(newestMtime(path.join(ROOT, "web")), newestMtime(path.join(ROOT, "shared")));
+const sourceTime = Math.max(
+  newestMtime(path.join(ROOT, "web")),
+  newestMtime(path.join(ROOT, "shared")),
+  newestMtime(path.join(ROOT, "src")),
+);
 
 if (distTime < sourceTime) {
   console.log("▸ 构建编辑器前端 …");
