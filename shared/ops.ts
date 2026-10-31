@@ -690,9 +690,21 @@ export function applyOps(project: Project, ops: Op[]): OpResult {
           ...(op.track === undefined || op.track <= 0 ? {} : { track: Math.round(op.track) }),
         };
         if (op.afterSceneId) {
+          /*
+           * 锚点不存在不再硬失败：空画布批量新增时，agent 常拿「同批稍后才建」
+           * 的场景 id 当锚点，逐条执行到这里必然找不到 —— 之前整批被拒
+           * （add_scene: 找不到场景: scene_xxx）。锚点只是位置糖，
+           * 追加到末尾 + 回执提示足够，损失的只是位置不是数据。
+           */
           const idx = next.scenes.findIndex((s) => s.id === op.afterSceneId);
-          if (idx === -1) throw new Error(`找不到场景: ${op.afterSceneId}`);
-          next.scenes.splice(idx + 1, 0, scene);
+          if (idx === -1) {
+            next.scenes.push(scene);
+            summary.push(
+              `⚠️ 锚点场景 ${op.afterSceneId} 不存在，「${scene.name}」已追加到末尾`,
+            );
+          } else {
+            next.scenes.splice(idx + 1, 0, scene);
+          }
         } else {
           next.scenes.push(scene);
         }

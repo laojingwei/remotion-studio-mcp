@@ -1839,7 +1839,7 @@ const TOOLS: ToolDef[] = [
     shape: {
       type: z.string(),
       props: z.record(z.any()).optional(),
-      afterSceneId: z.string().optional().describe("插到该场景之后；省略则加到末尾"),
+      afterSceneId: z.string().optional().describe("插到该场景之后；省略则加到末尾。锚点不存在时自动追加到末尾（回执会提示），空画布或同批新建的场景请勿引用尚不存在的 id 当锚点"),
       name: z.string().optional(),
       durationInFrames: z.number().optional(),
       start: z.number().optional().describe("绝对起始帧；省略=接在同轨上一块之后"),

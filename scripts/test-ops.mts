@@ -59,8 +59,21 @@ test("add_scene：afterSceneId 插在指定场景之后", () => {
   assert.equal(project.scenes[1].id, anchor);
 });
 
-test("add_scene：afterSceneId 不存在时抛错", () => {
-  assert.throws(() => one(seed(), { op: "add_scene", type: "quote", afterSceneId: "nope" }), /找不到场景/);
+test("add_scene：锚点不存在不再整批被拒（空画布批量新增会引用同批未建的 id）", () => {
+  const p = seed();
+  const before = p.scenes.length;
+  const { project, summary } = one(p, {
+    op: "add_scene",
+    type: "steps",
+    afterSceneId: "scene_huanfx", // 不存在（空画布时 agent 引用同批稍后才建的 id）
+  });
+  assert.equal(project.scenes.length, before + 1, "场景要真的加进去");
+  const added = project.scenes[project.scenes.length - 1];
+  assert.equal(added.type, "steps", "追加到末尾");
+  assert.ok(
+    summary.some((m) => m.includes("scene_huanfx") && m.includes("末尾")),
+    `回执要提示锚点缺失，实际：${JSON.stringify(summary)}`,
+  );
 });
 
 test("add_scene：未知类型抛错", () => {

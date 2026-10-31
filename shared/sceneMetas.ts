@@ -241,7 +241,7 @@ export const captionMeta: SceneMeta = {
   }),
   defaultProps: {
     text: "这句话是口播字幕，agent 可以直接改",
-    speaker: "主播",
+    speaker: "发言人",
     highlight: "口播",
   },
   duration: { default: 90, min: MIN_SCENE_FRAMES, max: 108000 },
@@ -961,9 +961,9 @@ export const kineticMeta: SceneMeta = {
     sub: z.string().default("").describe("副标题，可留空"),
   }),
   defaultProps: {
-    text: "一万音浪到手只有三百七",
-    highlight: "三百七",
-    sub: "账面流水不等于你的钱",
+    text: "好内容值得被认真对待",
+    highlight: "认真",
+    sub: "别把凑合当成风格",
   },
   duration: { default: 120, min: MIN_SCENE_FRAMES, max: 108000 },
   elements: [{ id: "text", label: "主文案" }, { id: "sub", label: "副标题" }],
@@ -981,7 +981,7 @@ export const maskrevealMeta: SceneMeta = {
   }),
   defaultProps: {
     kicker: "结论",
-    lines: ["平台先切一刀", "公会再分一截", "税最后再扣一层"],
+    lines: ["先讲清楚", "再给证据", "最后给行动理由"],
     accentLine: "税最后再扣一层",
   },
   duration: { default: 120, min: MIN_SCENE_FRAMES, max: 108000 },
@@ -1029,12 +1029,12 @@ export const gradienttextMeta: SceneMeta = {
   category: "动效",
   summary: "标题用主题双色渐变填充并缓慢流动；适合口号、金句、章节标题",
   schema: z.object({
-    text: z.string().default("一万音浪\n到手三百七").describe("主文案，支持 \\n 换行"),
+    text: z.string().default("把复杂留给我们\n把简单留给你").describe("主文案，支持 \\n 换行"),
     sub: z.string().default("").describe("副标题，可留空"),
     direction: z.enum(["横向", "斜向"]).default("横向").describe("渐变方向"),
     flow: z.boolean().default(true).describe("渐变缓慢流动；false = 静态渐变"),
   }),
-  defaultProps: { text: "一万音浪\n到手三百七", sub: "", direction: "横向", flow: true },
+  defaultProps: { text: "把复杂留给我们\n把简单留给你", sub: "", direction: "横向", flow: true },
   duration: { default: 120, min: MIN_SCENE_FRAMES, max: 108000 },
   elements: [{ id: "text", label: "主文案" }, { id: "sub", label: "副标题" }],
 };
@@ -1118,9 +1118,9 @@ export const highlightMeta: SceneMeta = {
     mark: z.enum(["荧光笔", "色块", "下划线"]).default("荧光笔").describe("标记样式：荧光笔最柔和，色块最强调"),
   }),
   defaultProps: {
-    text: "一万音浪听着热闹，到手只剩三百七",
-    highlight: "三百七",
-    sub: "账面流水不等于你的钱",
+    text: "听完这场分享，我只记住了一句话",
+    highlight: "一句话",
+    sub: "别的都可以忘",
     mark: "荧光笔",
   },
   duration: { default: 120, min: MIN_SCENE_FRAMES, max: 108000 },
@@ -1139,7 +1139,7 @@ export const stompMeta: SceneMeta = {
   }),
   defaultProps: {
     text: "这钱不是你的",
-    sub: "平台、公会、税，三层分完才是你的",
+    sub: "一句话说清，比十句话都管用",
     kicker: "先说结论",
   },
   duration: { default: 100, min: MIN_SCENE_FRAMES, max: 108000 },
@@ -1158,7 +1158,7 @@ export const wipeMeta: SceneMeta = {
   }),
   defaultProps: {
     kicker: "为什么会差这么多",
-    lines: ["平台先抽走一半", "公会再分走一截", "剩下的才轮到你"],
+    lines: ["第一，讲清楚", "第二，给证据", "第三，给行动理由"],
     accentLine: "剩下的才轮到你",
   },
   duration: { default: 120, min: MIN_SCENE_FRAMES, max: 108000 },
@@ -1177,7 +1177,7 @@ export const marqueeMeta: SceneMeta = {
     separator: z.string().default(" · ").describe("文案之间的分隔符，可留空"),
   }),
   defaultProps: {
-    rows: ["一万音浪", "到手三百七", "平台先抽一半"],
+    rows: ["今日上新", "全场五折", "限时 24 小时"],
     speed: 14,
     direction: "交替",
     separator: " · ",
@@ -1296,12 +1296,12 @@ export const racebarsMeta: SceneMeta = {
     suffix: z.string().default("").describe("数字后缀，如 %、万"),
   }),
   defaultProps: {
-    heading: "今日带货榜",
+    heading: "本周人气榜",
     items: [
       { label: "小雅严选", value: 128000, display: "¥128,000" },
       { label: "老王说车", value: 96000, display: "¥96,000" },
       { label: "朵朵家", value: 73000, display: "¥73,000" },
-      { label: "阿凯直播", value: 41000, display: "¥41,000" },
+      { label: "阿凯优品", value: 41000, display: "¥41,000" },
     ],
     suffix: "",
   },
@@ -1332,7 +1332,7 @@ export const funnelMeta: SceneMeta = {
     heading: "本场转化",
     stages: [
       { label: "曝光", value: 120000, display: "12.0万" },
-      { label: "进直播间", value: 38000, display: "3.8万" },
+      { label: "进店", value: 38000, display: "3.8万" },
       { label: "点击商品", value: 9600, display: "9,600" },
       { label: "成交", value: 2400, display: "2,400" },
     ],
@@ -1356,13 +1356,13 @@ export const deltaMeta: SceneMeta = {
     note: z.string().default("").describe("底部一句话解释，可留空"),
   }),
   defaultProps: {
-    label: "一万音浪到手",
+    label: "到手价",
     prefix: "¥",
     before: 1000,
     after: 370,
     suffix: "",
     tone: "跌",
-    note: "平台、公会、税，三层分完",
+    note: "叠满所有优惠之后",
   },
   duration: { default: 110, min: MIN_SCENE_FRAMES, max: 108000 },
   elements: [
@@ -1499,7 +1499,7 @@ export const pieMeta: SceneMeta = {
     heading: "成交来源",
     centerLabel: "总 GMV",
     data: [
-      { label: "直播间", value: 52000, display: "¥5.2万" },
+      { label: "店铺", value: 52000, display: "¥5.2万" },
       { label: "短视频", value: 31000, display: "¥3.1万" },
       { label: "搜索", value: 18000, display: "¥1.8万" },
       { label: "其他", value: 9000, display: "¥0.9万" },
@@ -1745,6 +1745,8 @@ export type FieldDesc = {
   default?: unknown;
   options?: string[];
   itemShape?: FieldDesc[];
+  /** 数组元素的形态：字符串/数字数组没有 itemShape，编辑器按这个渲染单输入框 */
+  itemKind?: "string" | "number";
 };
 
 export function describeFields(schema: z.ZodObject<z.ZodRawShape>): FieldDesc[] {
@@ -1771,6 +1773,17 @@ export function describeFields(schema: z.ZodObject<z.ZodRawShape>): FieldDesc[] 
     }
     if (node instanceof z.ZodArray) {
       const inner = node.element as z.ZodTypeAny;
+      const innerUnwrapped =
+        inner instanceof z.ZodDefault ? inner._def.innerType :
+        inner instanceof z.ZodOptional ? inner._def.innerType : inner;
+      // 字符串/数字数组没有 itemShape，必须给 itemKind —— 否则编辑器
+      // 「添加一项」会推进空对象，zod 当场拒（rows.1 应为 string 实际 object）
+      const itemKind: FieldDesc["itemKind"] =
+        innerUnwrapped instanceof z.ZodString || innerUnwrapped instanceof z.ZodEnum
+          ? "string"
+          : innerUnwrapped instanceof z.ZodNumber
+            ? "number"
+            : undefined;
       return {
         key,
         kind: "array",
@@ -1778,6 +1791,7 @@ export function describeFields(schema: z.ZodObject<z.ZodRawShape>): FieldDesc[] 
         required,
         default: def,
         itemShape: inner instanceof z.ZodObject ? describeFields(inner as z.ZodObject<z.ZodRawShape>) : [],
+        itemKind,
       };
     }
     // 对象/记录/联合（如 freeform.background）：不能当文本——按字符串传会直接校验失败

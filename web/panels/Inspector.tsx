@@ -66,7 +66,50 @@ const Field: React.FC<{
   }
 
   if (field.kind === "array") {
-    const list = Array.isArray(value) ? (value as Record<string, unknown>[]) : [];
+    const list = Array.isArray(value) ? (value as unknown[]) : [];
+    /*
+     * 字符串 / 数字数组（跑马灯 rows、老虎机 symbols…）走单输入框：
+     * 通用对象编辑器对它们会渲染零个子字段，「添加一项」推进空对象，
+     * zod 当场拒（rows.1 应为 string 实际 object）—— 内容从此改不了也加不了。
+     */
+    const simpleKind = field.itemKind;
+    if (simpleKind === "string" || simpleKind === "number") {
+      return (
+        <div className="field">
+          <label>{field.label}</label>
+          <div className="array">
+            {list.map((item, i) => (
+              <div className="array-item" key={i}>
+                <div className="array-item-head">
+                  <span>#{i + 1}</span>
+                  <button
+                    className="mini"
+                    onClick={() => onChange(list.filter((_, idx) => idx !== i))}
+                    title="删除这一项"
+                  >
+                    删除
+                  </button>
+                </div>
+                <input
+                  type={simpleKind === "number" ? "number" : "text"}
+                  value={String(item ?? "")}
+                  onChange={(e) =>
+                    onChange(
+                      list.map((it, idx) =>
+                        idx === i ? (simpleKind === "number" ? Number(e.target.value) : e.target.value) : it,
+                      ),
+                    )
+                  }
+                />
+              </div>
+            ))}
+            <button className="mini add" onClick={() => onChange([...list, simpleKind === "number" ? 0 : ""])}>
+              ＋ 添加一项
+            </button>
+          </div>
+        </div>
+      );
+    }
     return (
       <div className="field">
         <label>{field.label}</label>
@@ -87,9 +130,13 @@ const Field: React.FC<{
                 <Field
                   key={sub.key}
                   field={sub}
-                  value={item[sub.key] ?? sub.default ?? ""}
+                  value={(item as Record<string, unknown>)[sub.key] ?? sub.default ?? ""}
                   onChange={(v) =>
-                    onChange(list.map((it, idx) => (idx === i ? { ...it, [sub.key]: v } : it)))
+                    onChange(
+                      list.map((it, idx) =>
+                        idx === i ? { ...(it as Record<string, unknown>), [sub.key]: v } : it,
+                      ),
+                    )
                   }
                 />
               ))}

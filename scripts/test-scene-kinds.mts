@@ -15,6 +15,8 @@ import assert from "node:assert/strict";
 import { SCENE_METAS, MIN_SCENE_FRAMES, normalizeProps } from "../shared/sceneMetas";
 import { SCENE_COMPONENTS } from "../src/scenes/components";
 import { BACKDROP_TYPES, MOTION_SCENE_TYPES, isBackdropType, isMotionScene } from "../shared/sceneKinds";
+import { describeFields, getMeta, SCENE_METAS } from "../shared/sceneMetas";
+import type { z } from "zod";
 
 let passed = 0;
 const failures: string[] = [];
@@ -116,3 +118,24 @@ if (failures.length) {
   console.error(`失败 ${failures.length} 个：${failures.join(" / ")}`);
   process.exit(1);
 }
+
+test("字符串/数字数组字段必须产出 itemKind（否则编辑器添加一项会推进空对象）", () => {
+  for (const meta of SCENE_METAS) {
+    const fields = describeFields(meta.schema as z.ZodObject<z.ZodRawShape>);
+    for (const f of fields) {
+      if (f.kind !== "array") continue;
+      if (f.itemShape && f.itemShape.length) continue; // 对象数组走 itemShape
+      assert.ok(
+        f.itemKind === "string" || f.itemKind === "number",
+        `${meta.type}.${f.key} 是标量数组但没给 itemKind，编辑器会写坏数据`,
+      );
+    }
+  }
+});
+
+test("跑马灯的默认值能被自己的 schema 接住，且编辑器可增删行", () => {
+  const meta = getMeta("marquee")!;
+  const fields = describeFields(meta.schema as z.ZodObject<z.ZodRawShape>);
+  const rows = fields.find((f) => f.key === "rows")!;
+  assert.equal(rows.itemKind, "string");
+});
