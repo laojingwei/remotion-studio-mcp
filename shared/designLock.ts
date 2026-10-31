@@ -14,6 +14,7 @@
  * 这里保持纯函数 + 结构化类型（不 import schema），避免和 shared/schema.ts 绕成循环依赖
  * —— 和 shared/transitions.ts 处理接缝转场时是同一个理由。
  */
+import { isMotionScene } from "./sceneKinds";
 
 /** 7 种主形态。决定"哪些问题要问"和"默认档位"。 */
 export const VIDEO_FORMS = [
@@ -420,22 +421,27 @@ export function lockViolations(lock: DesignLock, scenes: readonly LooseScene[]):
     const textEls = els.filter((e) => e.kind === "text" && String(e.text ?? "").trim());
     const deco = (s.elements ?? []).filter(isDecorative);
 
-    // 装饰层天然可以多（背景是三层也不为过），所以这里只看信息元素
-    if (textEls.length > lock.maxTextElements) {
-      out.push({
-        sceneIndex: i,
-        sceneName: name,
-        kind: "elements",
-        message: `一屏 ${textEls.length} 个文字元素，超过「${lock.density}」密度上限 ${lock.maxTextElements}`,
-      });
-    }
-    if (deco.length > lock.maxDecorative + 2) {
-      out.push({
-        sceneIndex: i,
-        sceneName: name,
-        kind: "elements",
-        message: `装饰层 ${deco.length} 层（上限约 ${lock.maxDecorative + 2}），容易糊`,
-      });
+    // 动效场景（glow/grain/lightleak/kinetic/maskreveal）是效果件，不是版面：
+    // 逐字动画天然几十个 span，按「一屏文字元素 / 标题字号」审计就是每条必违规。
+    // 它们仍然要过下面的转场审计。
+    if (!isMotionScene(String(s.type ?? ""))) {
+      // 装饰层天然可以多（背景是三层也不为过），所以这里只看信息元素
+      if (textEls.length > lock.maxTextElements) {
+        out.push({
+          sceneIndex: i,
+          sceneName: name,
+          kind: "elements",
+          message: `一屏 ${textEls.length} 个文字元素，超过「${lock.density}」密度上限 ${lock.maxTextElements}`,
+        });
+      }
+      if (deco.length > lock.maxDecorative + 2) {
+        out.push({
+          sceneIndex: i,
+          sceneName: name,
+          kind: "elements",
+          message: `装饰层 ${deco.length} 层（上限约 ${lock.maxDecorative + 2}），容易糊`,
+        });
+      }
     }
 
     for (const [dir, t] of [
@@ -462,8 +468,8 @@ export function lockViolations(lock: DesignLock, scenes: readonly LooseScene[]):
       }
     }
 
-    // 文字密集的幕禁 flip/circle/wipe
-    const dense = textEls.reduce((n, e) => n + String(e.text ?? "").length, 0) > 20;
+    // 文字密集的幕禁 flip/circle/wipe（动效场景本身就是文字动画，这条不适用）
+    const dense = !isMotionScene(String(s.type ?? "")) && textEls.reduce((n, e) => n + String(e.text ?? "").length, 0) > 20;
     for (const t of [s.transitionIn, s.transitionOut]) {
       if (dense && t?.type && ["flip", "circle", "wipe"].includes(t.type)) {
         out.push({
@@ -476,17 +482,20 @@ export function lockViolations(lock: DesignLock, scenes: readonly LooseScene[]):
     }
 
     // 标题字号偏离（只查最大的那个文字元素，容差 1.2 个百分点）
-    const biggest = textEls.reduce<LooseElement | null>(
-      (acc, e) => (!acc || Number(e.size ?? 0) > Number(acc.size ?? 0) ? e : acc),
-      null,
-    );
-    if (biggest && Math.abs(Number(biggest.size ?? 0) - lock.titleSizePct) > 1.2) {
-      out.push({
-        sceneIndex: i,
-        sceneName: name,
-        kind: "titleSize",
-        message: `最大字号 ${biggest.size}% 偏离锁定值 ${lock.titleSizePct}%（容差 1.2）`,
-      });
+    // 动效场景的「字」是效果的一部分，字号由动画决定，不跟版面档位比。
+    if (!isMotionScene(String(s.type ?? ""))) {
+      const biggest = textEls.reduce<LooseElement | null>(
+        (acc, e) => (!acc || Number(e.size ?? 0) > Number(acc.size ?? 0) ? e : acc),
+        null,
+      );
+      if (biggest && Math.abs(Number(biggest.size ?? 0) - lock.titleSizePct) > 1.2) {
+        out.push({
+          sceneIndex: i,
+          sceneName: name,
+          kind: "titleSize",
+          message: `最大字号 ${biggest.size}% 偏离锁定值 ${lock.titleSizePct}%（容差 1.2）`,
+        });
+      }
     }
   });
 

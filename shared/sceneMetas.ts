@@ -896,6 +896,214 @@ export const freeformMeta: SceneMeta = {
   elements: [],
 };
 
+/* ────────────────────────── 动效场景（2026-10-31 新增） ──────────────────────────
+ * 这一组的主体是「运动本身」而不是版面：光晕、颗粒、漏光、逐字弹跳、遮罩上翻。
+ * 它们的 type 登记在 shared/sceneKinds.ts 的 MOTION_SCENE_TYPES 里 ——
+ * 设计锁对它们跳过「一屏文字元素 / 标题字号」检查（逐字动画天然几十个 span），
+ * 但转场审计照旧。
+ */
+
+export const glowMeta: SceneMeta = {
+  type: "glow",
+  name: "光晕呼吸",
+  category: "动效",
+  summary: "整屏氛围光斑缓慢漂移，可叠一层极淡网格；适合开场、转场缓冲、情绪段落",
+  schema: z.object({
+    tone: z.enum(["双色", "主色", "次色"]).default("双色").describe("光斑配色：双色最热闹，单色更克制"),
+    intensity: z.number().min(0).max(1).default(0.55).describe("光斑浓度 0–1"),
+    drift: z.boolean().default(true).describe("缓慢漂移；false = 完全静止"),
+    grid: z.boolean().default(true).describe("叠一层极淡网格，给画面一点结构"),
+  }),
+  defaultProps: { tone: "双色", intensity: 0.55, drift: true, grid: true },
+  duration: { default: 120, min: MIN_SCENE_FRAMES, max: 108000 },
+  elements: [],
+};
+
+export const grainMeta: SceneMeta = {
+  type: "grain",
+  name: "胶片颗粒",
+  category: "动效",
+  summary: "做旧质感：逐帧跳动的颗粒 + 暗角；压在画面上能压掉数码味",
+  schema: z.object({
+    intensity: z.number().min(0).max(1).default(0.5).describe("颗粒浓度 0–1"),
+    vignette: z.number().min(0).max(0.9).default(0.55).describe("暗角强度 0–0.9"),
+    flicker: z.boolean().default(true).describe("颗粒逐帧跳动；false = 静态颗粒"),
+  }),
+  defaultProps: { intensity: 0.5, vignette: 0.55, flicker: true },
+  duration: { default: 120, min: MIN_SCENE_FRAMES, max: 108000 },
+  elements: [],
+};
+
+export const lightleakMeta: SceneMeta = {
+  type: "lightleak",
+  name: "漏光扫过",
+  category: "动效",
+  summary: "一束光带周期性划过画面，暖金或青蓝；转场补光、情绪高点都能用",
+  schema: z.object({
+    tone: z.enum(["暖", "冷"]).default("暖").describe("暖（橙金）/ 冷（青蓝）"),
+    periodSec: z.number().min(1.5).max(12).default(4).describe("扫过一次用几秒，推荐 3–6"),
+    intensity: z.number().min(0).max(1).default(0.6).describe("光带强度 0–1"),
+    angle: z.number().min(-60).max(60).default(18).describe("光带倾角，0 = 横向"),
+  }),
+  defaultProps: { tone: "暖", periodSec: 4, intensity: 0.6, angle: 18 },
+  duration: { default: 120, min: MIN_SCENE_FRAMES, max: 108000 },
+  elements: [],
+};
+
+export const kineticMeta: SceneMeta = {
+  type: "kinetic",
+  name: "弹跳字",
+  category: "动效",
+  summary: "逐字弹入并轻微摇摆；自动折行，竖屏长句也放得下",
+  schema: z.object({
+    text: z.string().describe("主文案，逐字入场；建议 6–20 字，超过会自动折行"),
+    highlight: z.string().default("").describe("要高亮的词（换强调色），可留空"),
+    sub: z.string().default("").describe("副标题，可留空"),
+  }),
+  defaultProps: {
+    text: "一万音浪到手只有三百七",
+    highlight: "三百七",
+    sub: "账面流水不等于你的钱",
+  },
+  duration: { default: 120, min: MIN_SCENE_FRAMES, max: 108000 },
+  elements: [{ id: "text", label: "主文案" }, { id: "sub", label: "副标题" }],
+};
+
+export const maskrevealMeta: SceneMeta = {
+  type: "maskreveal",
+  name: "遮罩上翻",
+  category: "动效",
+  summary: "每行文案从裁切框里升起，逐行错峰；适合金句与结论页",
+  schema: z.object({
+    kicker: z.string().default("").describe("顶部小标签，可留空"),
+    lines: z.array(z.string()).min(1).max(4).describe("文案行，1–4 行，一行一句"),
+    accentLine: z.string().default("").describe("要高亮的那一行（换强调色），可留空"),
+  }),
+  defaultProps: {
+    kicker: "结论",
+    lines: ["平台先切一刀", "公会再分一截", "税最后再扣一层"],
+    accentLine: "税最后再扣一层",
+  },
+  duration: { default: 120, min: MIN_SCENE_FRAMES, max: 108000 },
+  elements: [{ id: "kicker", label: "小标签" }, { id: "line{n}", label: "每一行" }],
+};
+
+/* ─────────── 第二批：文字强调（4 个） ─────────── */
+
+export const typewriterMeta: SceneMeta = {
+  type: "typewriter",
+  name: "打字机",
+  category: "动效",
+  summary: "逐字打出 + 光标闪烁；适合要被读完的一句话（结论、条款、步骤）",
+  schema: z.object({
+    text: z.string().default("这句话值得一个字一个字读完").describe("主文案，支持 \\n 换行"),
+    sub: z.string().default("").describe("副标题，打完字才出现，可留空"),
+    speed: z.number().min(1).max(40).default(10).describe("每秒打几个字（中文 8–14 最自然）"),
+    cursor: z.boolean().default(true).describe("显示闪烁光标"),
+  }),
+  defaultProps: { text: "这句话值得一个字一个字读完", sub: "", speed: 10, cursor: true },
+  duration: { default: 120, min: MIN_SCENE_FRAMES, max: 108000 },
+  elements: [{ id: "text", label: "主文案" }, { id: "sub", label: "副标题" }],
+};
+
+export const counterMeta: SceneMeta = {
+  type: "counter",
+  name: "数字滚动",
+  category: "动效",
+  summary: "大数字从 0 弹到目标值 + 一条强调线；适合要让人记住的量（金额、涨幅、数量）",
+  schema: z.object({
+    value: z.number().default(370).describe("目标数字（可小数，如 1.2 表示 1.2 万）"),
+    prefix: z.string().default("¥").describe("前缀，如 ¥ / +，可留空"),
+    suffix: z.string().default("").describe("后缀，如 万 / 元 / %，可留空"),
+    label: z.string().default("到手只剩这些").describe("数字下面的说明，可留空"),
+    decimals: z.number().int().min(0).max(3).default(0).describe("小数位数"),
+  }),
+  defaultProps: { value: 370, prefix: "¥", suffix: "", label: "到手只剩这些", decimals: 0 },
+  duration: { default: 110, min: MIN_SCENE_FRAMES, max: 108000 },
+  elements: [{ id: "value", label: "数字" }, { id: "label", label: "说明" }],
+};
+
+export const gradienttextMeta: SceneMeta = {
+  type: "gradienttext",
+  name: "渐变字",
+  category: "动效",
+  summary: "标题用主题双色渐变填充并缓慢流动；适合口号、金句、章节标题",
+  schema: z.object({
+    text: z.string().default("一万音浪\n到手三百七").describe("主文案，支持 \\n 换行"),
+    sub: z.string().default("").describe("副标题，可留空"),
+    direction: z.enum(["横向", "斜向"]).default("横向").describe("渐变方向"),
+    flow: z.boolean().default(true).describe("渐变缓慢流动；false = 静态渐变"),
+  }),
+  defaultProps: { text: "一万音浪\n到手三百七", sub: "", direction: "横向", flow: true },
+  duration: { default: 120, min: MIN_SCENE_FRAMES, max: 108000 },
+  elements: [{ id: "text", label: "主文案" }, { id: "sub", label: "副标题" }],
+};
+
+export const scrambleMeta: SceneMeta = {
+  type: "scramble",
+  name: "乱码解码",
+  category: "动效",
+  summary: "每个字先显示乱码再逐字解出真字；适合科技感结论、数据揭示",
+  schema: z.object({
+    text: z.string().default("账面流水不等于到手").describe("主文案"),
+    sub: z.string().default("").describe("副标题，可留空"),
+    revealFrames: z.number().int().min(4).max(40).default(14).describe("每个字解码所需帧数（越大越慢）"),
+    stagger: z.number().int().min(1).max(6).default(2).describe("相邻字错开几帧"),
+  }),
+  defaultProps: { text: "账面流水不等于到手", sub: "", revealFrames: 14, stagger: 2 },
+  duration: { default: 120, min: MIN_SCENE_FRAMES, max: 108000 },
+  elements: [{ id: "text", label: "主文案" }, { id: "sub", label: "副标题" }],
+};
+
+/* ─────────── 第二批：背景氛围（3 个） ─────────── */
+
+export const bokehMeta: SceneMeta = {
+  type: "bokeh",
+  name: "散景光斑",
+  category: "氛围",
+  summary: "十几到二十几个失焦柔光圆缓慢漂浮，有前后景深；适合夜景、节日、回忆段落",
+  schema: z.object({
+    count: z.number().int().min(6).max(28).default(14).describe("光斑数量 6–28"),
+    sizePct: z.number().min(4).max(18).default(9).describe("光斑尺寸（短边百分比）"),
+    glow: z.number().min(0).max(1).default(0.5).describe("亮度 0–1"),
+    drift: z.boolean().default(true).describe("缓慢漂浮；false = 静止"),
+  }),
+  defaultProps: { count: 14, sizePct: 9, glow: 0.5, drift: true },
+  duration: { default: 150, min: MIN_SCENE_FRAMES, max: 108000 },
+  elements: [],
+};
+
+export const sparksMeta: SceneMeta = {
+  type: "sparks",
+  name: "上升火花",
+  category: "氛围",
+  summary: "小亮点从底部升起，越往上越淡；适合强势开场、能量段落、转场缓冲",
+  schema: z.object({
+    count: z.number().int().min(20).max(160).default(60).describe("粒子数量 20–160"),
+    speed: z.number().min(0.4).max(2.5).default(1).describe("上升速度倍率"),
+    glow: z.number().min(0).max(1).default(0.55).describe("亮度 0–1"),
+    ground: z.boolean().default(false).describe("只在下半屏飘（像地面扬起的火星）"),
+  }),
+  defaultProps: { count: 60, speed: 1, glow: 0.55, ground: false },
+  duration: { default: 120, min: MIN_SCENE_FRAMES, max: 108000 },
+  elements: [],
+};
+
+export const vhsMeta: SceneMeta = {
+  type: "vhs",
+  name: "磁带故障",
+  category: "氛围",
+  summary: "扫描线 + 红青色差 + 不定期 tracking 错位；适合复古、悬疑、故障感",
+  schema: z.object({
+    text: z.string().default("").describe("主文案，可留空（留空 = 纯氛围层）"),
+    intensity: z.number().min(0).max(1).default(0.5).describe("故障强度 0–1"),
+    lines: z.number().int().min(2).max(10).default(5).describe("扫描线密度（越大越密）"),
+  }),
+  defaultProps: { text: "", intensity: 0.5, lines: 5 },
+  duration: { default: 120, min: MIN_SCENE_FRAMES, max: 108000 },
+  elements: [{ id: "text", label: "主文案" }],
+};
+
 export const SCENE_METAS: SceneMeta[] = [
   freeformMeta,
   titleMeta,
@@ -937,6 +1145,18 @@ export const SCENE_METAS: SceneMeta[] = [
   auroraMeta,
   neonMeta,
   starsMeta,
+  glowMeta,
+  grainMeta,
+  lightleakMeta,
+  kineticMeta,
+  maskrevealMeta,
+  typewriterMeta,
+  counterMeta,
+  gradienttextMeta,
+  scrambleMeta,
+  bokehMeta,
+  sparksMeta,
+  vhsMeta,
 ];
 
 export const getMeta = (type: string): SceneMeta | undefined =>

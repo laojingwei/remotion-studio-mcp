@@ -9,6 +9,7 @@ import { AssetField } from "./AssetField";
 import { ElementInspector } from "./ElementInspector";
 import { EffectInspector } from "./EffectInspector";
 import { SceneBoxSection } from "./SceneBoxSection";
+import { BackdropSection } from "./BackdropSection";
 import { FreeformInspector } from "./FreeformInspector";
 import { TransitionSection } from "./TransitionSection";
 import { RangeInput } from "../RangeInput";
@@ -261,6 +262,8 @@ export const Inspector: React.FC<{ playerRef?: React.RefObject<PlayerRef | null>
             </div>
 
             <SceneBoxSection scene={scene} />
+            {/* 氛围层也是整幕属性：垫在版式下面，不占时长 */}
+            <BackdropSection scene={scene} />
 
             <div className="field">
               <label>

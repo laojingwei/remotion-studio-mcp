@@ -5,6 +5,7 @@ import { fileURLToPath } from "node:url";
 import { bundle } from "@remotion/bundler";
 import { makeCancelSignal, openBrowser, renderMedia, renderStill, selectComposition } from "@remotion/renderer";
 import type { Project } from "../shared/schema";
+import type { VideoConfig } from "remotion";
 import { totalDuration } from "../shared/schema";
 import { PUBLIC_DIR } from "./store";
 import { cleanupOutputs, ensureOutDir, outDirOf, projectOutDir } from "./outputs.service";
@@ -281,7 +282,7 @@ export async function renderStills(
     const compositionId = "Video";
     const inputProps = { ...project, formatKey: fmt.key };
     const puppeteerInstance = await getBrowser();
-    const composition = await selectComposition({ puppeteerInstance, serveUrl, id: compositionId, inputProps, browserExecutable: BROWSER?.path, chromeMode: BROWSER?.mode });
+    const composition = await selectCompositionSafe({ puppeteerInstance, serveUrl, id: compositionId, inputProps, browserExecutable: BROWSER?.path, chromeMode: BROWSER?.mode });
     const f = Math.max(0, Math.min(composition.durationInFrames - 1, Math.round(frame ?? 0)));
     const safeTag = String(tag ?? "").replace(/[^\w-]/g, "").slice(0, 24);
     // 文件名必须带 rev：同名文件会被 overwrite 覆盖，而 agent 习惯按上一版的路径打开
@@ -352,6 +353,38 @@ const tasks = new Map<string, RenderTask>();
 /** 每个任务的中断信号，取消时调 cancel() 让 Remotion 中途退出编码 */
 const cancels = new Map<string, () => void>();
 let chain: Promise<unknown> = Promise.resolve();
+
+
+/**
+ * 渲染器的报错翻译。
+ *
+ * 真实事故：本机另开了一个 `remotion studio`（占着 3000），而 Remotion 的静态服务从
+ * 3000 起找空闲端口，Windows 上两者能"同时"绑上 —— 于是渲染器把**别人的页面**当成
+ * 我们的打包产物，报一句 "this is not a valid Remotion project"，完全看不出是端口冲突。
+ * 这句话必须翻译成能动手的下一步，否则只能在浏览器里一层层挖。
+ */
+function explainRenderError(err: unknown): Error {
+  const msg = err instanceof Error ? err.message : String(err);
+  if (/not a valid Remotion project|getStaticCompositions/i.test(msg)) {
+    return new Error(
+      "渲染器打不开打包产物（页面里没有 Remotion 入口）。最常见原因是 **3000 端口被别的进程占用**：" +
+        "Remotion 的静态服务从 3000 起找空闲端口，撞上别人的页面就会加载到外来的 HTML。\n" +
+        "排查：netstat -ano | findstr :3000 → 关掉那个进程（例如另一个 remotion studio）再渲。\n" +
+        `原始报错：${msg.slice(0, 240)}`,
+    );
+  }
+  return err instanceof Error ? err : new Error(msg);
+}
+
+/** 包一层：所有取 composition 的地方统一走这里，报错才有人话。
+ * 参数用 any：selectComposition 是重载签名，Parameters<> 取出来是 never。 */
+async function selectCompositionSafe(args: any): Promise<VideoConfig> {
+  try {
+    return await selectComposition(args);
+  } catch (err) {
+    throw explainRenderError(err);
+  }
+}
 
 export const getTask = (id: string) => tasks.get(id);
 export const listTasks = () => [...tasks.values()].sort((a, b) => b.createdAt - a.createdAt);
@@ -465,7 +498,7 @@ async function runTask(task: RenderTask, project: Project) {
       const compositionId = "Video";
       const inputProps = { ...project, formatKey: key };
       const puppeteerInstance = await getBrowser();
-      const composition = await selectComposition({
+      const composition = await selectCompositionSafe({
         puppeteerInstance,
         serveUrl,
         id: compositionId,

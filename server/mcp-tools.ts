@@ -10,6 +10,7 @@ import { z } from "zod";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { listSkills, readSkill } from "./skills.service";
 import { recallAll, remember, type MemoryKind } from "./memory.service";
+import { BACKDROP_TYPES } from "../shared/sceneKinds";
 import { BRIEF_STEPS, CONFIRM_GROUPS, CORE_STEPS, briefCoverage, briefProgress, briefToText, confirmBrief, legacyFieldNotice, readBrief, recomputeDesignLock, saveBrief, sceneCountHint, stepMissingFields, type Brief } from "./brief.service";
 import { FORM_SPECS, designLockSummary, lockViolations, normalizeForm } from "../shared/designLock";
 import { auditBriefAgainstProject, auditToText } from "./brief-audit.service";
@@ -1122,6 +1123,7 @@ const TOOLS: ToolDef[] = [
         "11. 铺开 → **build_film 一次建成整片**（幕/字幕/转场/入场动画一起给，只涨 1 个 rev）；要按已存的分镜表建就用 build_storyboard(replace=true)。全片统一的东西用 apply_to_scenes 批量套（字幕样式/贴纸/画中画），别逐幕调",
         "   ↳ 铺完立刻 render_preview_clip（不传参＝自动挑第一个转场交界）：转场叠字、BGM 压人声、字幕来不及读，这一段全能看出来。",
         "12. 精修 → update_scene / set_transform / add_element（自由画布 get_guide(\"freeform\")；质感与签名时刻 get_guide(\"craft\")）；按 subtitleSpec 调字幕",
+        "   ↳ 画面要氛围（光圈/光斑/颗粒/漏光/火花）就 set_scene_backdrop 垫在这一幕底下——**不要为氛围单独插一幕**，那会多出一段没有内容的时长",
         "   ↳ 字幕铁律：**一屏 8–16 字（最多 18）、不带标点、一屏念得完**。set_subtitle / build_storyboard / tts_narration 写入时自动拆段并回显拆分预览；老工程长字幕用 fix_subtitles(dryRun) 重拆。规则见 get_guide(\"subtitle\")",
         "   ⚠ 每改一批，**preview_frames 抽 1–2 幕看**（改完不看就往下做，是返工的最大来源）；脏着不抽帧，render / request_review 会被拒。",
         "   ↳ 参数拿不准（maxWidth / bottom / stroke / anchor）先 probe_param 出 1 张图摸清楚，别拿整片当实验场；字幕距底直接写 bottomPct（按画面高度，抖音竖屏 18–22）",
@@ -2015,6 +2017,106 @@ const TOOLS: ToolDef[] = [
     },
   },
   {
+    name: "set_scene_backdrop",
+    description:
+      "给某一幕垫一层「氛围层」：光晕 / 颗粒 / 漏光 / 散景 / 火花 / 磁带，画在**内容底下**（不是盖在上面，不会压字）。\n" +
+      "和『插一幕氛围版式』的区别：插幕是单独占一段时长、播完就切；backdrop 是挂在现有这一幕下面，文字照样在、时长不变。\n" +
+      "典型用法：标题页想要夜景氛围 → set_scene_backdrop(sceneId, type:'bokeh', opacity:0.8)；纪录片段落要脏一点 → type:'grain', props:{vignette:0.3}。\n" +
+      "层次 place：下（默认，垫在版式下，字不受影响）/ 上（浮在画面上，但在贴纸标签之下）/ 顶（盖住所有内容，字幕除外，适合颗粒·扫描线·故障）。\n" +
+      "要精确插到某个元素上下就传 z（与叠加元素 scene.elements 的 z 混排，100+z）：一张光斑压住某行字、但被某个标签盖住时用它。\n" +
+      "出现区间 from / duration（帧）：不填 = 铺满整幕（默认，和以前一样）。填了就只在幕内某一段出现，**动画从出现那一刻从 0 开始**——第 2 秒才浮出光斑，不会看到漂到一半的中间态。\n" +
+      "柔化 fadeIn / fadeOut：**不填就自动跟随这一幕的出入场转场**（区间贴幕首交给入场转场、贴幕尾交给出场转场，落在幕中间取 max(转场时长,8)），所以区间边界不会硬切。写 0 才是强制硬切；写具体帧数则覆盖自动值。\n" +
+      "快慢与次数：speed 是整层时间倍率（1=原速，2=快一倍，0.5=慢一半，只改速度不改亮度数量）；mode:'once' 只走一轮后定格 —— **只有漏光说得通**（扫一次就停、光带移出画面），光晕/散景是永续漂移、颗粒/磁带逐帧随机，对它们写 once 没有可见效果。\\n" +
+      "限制：只有这 6 个纯氛围类型能用（打字机/数字/渐变字/乱码带正文，垫在下面会出现两套字）。一幕只能一层；传 clear:true 去掉。",
+    shape: {
+      projectId: z.string().optional().describe("要操作的工程 id，不传 = 当前默认工程（list_projects 查）"),
+      sceneId: z.string().describe("给哪一幕加（get_project 里的场景 id）"),
+      type: z
+        .enum(BACKDROP_TYPES)
+        .optional()
+        .describe("氛围类型：glow 光晕 / grain 颗粒 / lightleak 漏光 / bokeh 散景 / sparks 火花 / vhs 磁带"),
+      props: z
+        .record(z.any())
+        .optional()
+        .describe("覆盖该氛围的参数（同 insert_scene 的 props，如 {count:20, glow:0.8}）；不传用默认值"),
+      opacity: z.number().min(0).max(1).optional().describe("不透明度 0–1，默认 0.8；超过 1 就抢字了"),
+      place: z
+        .enum(["下", "上", "顶"])
+        .optional()
+        .describe("层次：下=垫在版式下（默认）/ 上=浮在画面上但在贴纸下 / 顶=盖住所有内容（字幕除外）"),
+      z: z
+        .number()
+        .int()
+        .min(-50)
+        .max(500)
+        .optional()
+        .describe("精细层级（与贴纸/文字的 z 混排，100+z）；给了就不再按 place 落位"),
+      from: z
+        .number()
+        .int()
+        .min(0)
+        .optional()
+        .describe("幕内第几帧开始出现，默认 0（幕首）。要「文字先出现、光斑后浮出」就填这个"),
+      duration: z
+        .number()
+        .int()
+        .min(1)
+        .optional()
+        .describe("持续多少帧，默认到幕尾；from+duration 不能超出幕长（超了报错，不静默截断）"),
+      fadeIn: z
+        .number()
+        .int()
+        .min(0)
+        .max(120)
+        .optional()
+        .describe("淡入帧数。不填 = 自动跟随入场转场（区间落在幕中间时取 max(转场,8)）；写 0 = 硬切"),
+      fadeOut: z
+        .number()
+        .int()
+        .min(0)
+        .max(120)
+        .optional()
+        .describe("淡出帧数。不填 = 自动跟随出场转场；写 0 = 硬切"),
+      speed: z
+        .number()
+        .min(0.2)
+        .max(4)
+        .optional()
+        .describe("整层时间倍率：1=原速 / 2=快一倍 / 0.5=慢一半；不改亮度与数量"),
+      mode: z
+        .enum(["loop", "once"])
+        .optional()
+        .describe("loop=循环（默认）/ once=只走一轮后定格（只有漏光看得出差别：扫一次就停）"),
+      clear: z.boolean().optional().describe("true = 去掉这一幕的氛围层"),
+    },
+    run: async (a) => {
+      const p = await resolveProject(a.projectId);
+      if (!a.clear && !a.type) {
+        throw new Error("要么给 type（加哪种氛围），要么传 clear:true（去掉现有的）");
+      }
+      const backdrop = a.clear
+        ? null
+        : {
+            type: a.type,
+            ...(a.props ? { props: a.props } : {}),
+            ...(a.opacity === undefined ? {} : { opacity: a.opacity }),
+            ...(a.place ? { place: a.place } : {}),
+            ...(a.z === undefined ? {} : { z: a.z }),
+            ...(a.from === undefined ? {} : { from: a.from }),
+            ...(a.duration === undefined ? {} : { duration: a.duration }),
+            ...(a.fadeIn === undefined ? {} : { fadeIn: a.fadeIn }),
+            ...(a.fadeOut === undefined ? {} : { fadeOut: a.fadeOut }),
+            ...(a.speed === undefined ? {} : { speed: a.speed }),
+            ...(a.mode === undefined ? {} : { mode: a.mode }),
+          };
+      const res = await api<any>(`/api/projects/${p.id}/ops`, {
+        method: "POST",
+        body: JSON.stringify({ actor: "agent", ops: [{ op: "set_scene_backdrop", sceneId: a.sceneId, backdrop }] }),
+      });
+      return fmtSummary(res.summary);
+    },
+  },
+  {
     name: "apply_ops",
     description:
       "批量执行多个操作（一次调用完成整幕或整章的搭建，省掉几十次往返）。ops 是数组，每项 {op: 操作名, ...参数}。\n" +
@@ -2022,7 +2124,7 @@ const TOOLS: ToolDef[] = [
       "  ① 单工具形状（扁平，直接照抄 add_element 的字段）：{op:'add_element', sceneId, text:'光晕', x:50, y:50, opacity:0.6}\n" +
       "  ② op 形状（包裹）：{op:'add_element', sceneId, element:{kind:'text', text:'光晕', x:50, y:50}}\n" +
       "  update_element 同理：{op:'update_element', sceneId, elementId, opacity:0.5} 或 {..., patch:{opacity:0.5}}。\n" +
-      "可用操作：add_scene / update_scene / set_scene_timing / set_scene_type / set_transform / add_element / update_element / " +
+      "可用操作：add_scene / update_scene / set_scene_timing / set_scene_type / set_scene_backdrop / set_transform / add_element / update_element / " +
       "remove_element / add_freeform_element / update_freeform_element / remove_freeform_element / reorder_freeform_elements / remove_scene / duplicate_scene / reorder_scenes / compact_main_track / move_scene / set_scene_box / set_theme / set_audio / add_audio_track / " +
       "update_audio_track / remove_audio_track / add_effect / update_effect / remove_effect / set_formats / update_project / restore。\n" +
       "freeform 场景的元素（svg 图形 / fx 氛围层 / 带 anim 关键帧的）走 add_freeform_element：" +

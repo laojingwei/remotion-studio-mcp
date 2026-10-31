@@ -33,6 +33,18 @@ import { AuroraScene } from "./aurora/Aurora";
 import { NeonScene } from "./neon/Neon";
 import { StarsScene } from "./stars/Stars";
 import { FreeformScene } from "./freeform/Freeform";
+import { GlowScene } from "./glow/Glow";
+import { GrainScene } from "./grain/Grain";
+import { LightLeakScene } from "./lightleak/LightLeak";
+import { KineticScene } from "./kinetic/Kinetic";
+import { MaskRevealScene } from "./maskreveal/MaskReveal";
+import { TypewriterScene } from "./typewriter/Typewriter";
+import { CounterScene } from "./counter/Counter";
+import { GradientTextScene } from "./gradienttext/GradientText";
+import { ScrambleScene } from "./scramble/Scramble";
+import { BokehScene } from "./bokeh/Bokeh";
+import { SparksScene } from "./sparks/Sparks";
+import { VhsScene } from "./vhs/Vhs";
 
 /**
  * 场景组件注册表：type → 渲染组件
@@ -79,4 +91,18 @@ export const SCENE_COMPONENTS: Record<string, React.FC<any>> = {
   aurora: AuroraScene,
   neon: NeonScene,
   stars: StarsScene,
+  // 动效场景（2026-10-31）：主体是运动本身，不参与版面密度审计
+  glow: GlowScene,
+  grain: GrainScene,
+  lightleak: LightLeakScene,
+  kinetic: KineticScene,
+  maskreveal: MaskRevealScene,
+  // 第二批（2026-10-31）：文字强调 + 背景氛围
+  typewriter: TypewriterScene,
+  counter: CounterScene,
+  gradienttext: GradientTextScene,
+  scramble: ScrambleScene,
+  bokeh: BokehScene,
+  sparks: SparksScene,
+  vhs: VhsScene,
 };

@@ -16,7 +16,8 @@ import { exitStyle, exitWindow, seamOverlaps, transitionStyle } from "../shared/
 import { effectFrameStyle, type EffectClip } from "../shared/effects";
 import { SCENE_COMPONENTS } from "./scenes/components";
 import { OverlayLayer } from "./scenes/Overlay";
-import { MotionContext, SceneEditContext, sceneBoxRegistry } from "./scenes/ui";
+import { BackdropLayer } from "./scenes/Backdrop";
+import { BareContext, MotionContext, SceneEditContext, sceneBoxRegistry } from "./scenes/ui";
 import { sceneSubtitleLines } from "../shared/subtitle";
 import { curveGainAt, duckGainAt, voiceSpans } from "../shared/audio";
 import { parseColor, withColorAlpha } from "../shared/color";
@@ -311,6 +312,34 @@ export const Video: React.FC<VideoProps> = ({ scenes, theme, audio, audioTracks,
         if (!Comp) return null;
         const span = spans[i];
         const overlap = overlaps[i] ?? 0;
+        const bd = scene.backdrop;
+        const bdPlace = bd?.place ?? "下";
+        /*
+         * 幕自己的出入场窗口，交给氛围层算柔化：
+         *   入场 = transitionIn 时长；没设转场就是 0（硬切）
+         *   出场 = transitionOut 时长；没设时幕仍会靠「下一幕入场的接缝」淡出，
+         *          所以退化成 overlap，否则氛围层会在幕尾自己淡一次、幕再淡一次
+         */
+        const sceneInFrames =
+          scene.transitionIn && scene.transitionIn.type !== "none"
+            ? scene.transitionIn.durationInFrames
+            : 0;
+        const sceneOutFrames =
+          scene.transitionOut && scene.transitionOut.type !== "none"
+            ? scene.transitionOut.durationInFrames
+            : overlap;
+        // 「下」走 DOM 顺序（版式要透明），其余走 z-index（版式照常画底）
+        const bdBelow = !!bd && bd.z === undefined && bdPlace === "下";
+        const bdZ =
+          bd === undefined
+            ? undefined
+            : bd.z !== undefined
+              ? 100 + Math.round(bd.z)
+              : bdPlace === "上"
+                ? 90
+                : bdPlace === "顶"
+                  ? 900
+                  : undefined;
         const body = (
           <SceneWrap
             scene={scene}
@@ -322,11 +351,56 @@ export const Video: React.FC<VideoProps> = ({ scenes, theme, audio, audioTracks,
               <SceneEditContext.Provider
                 value={{ sceneId: scene.id, transforms: scene.transforms }}
               >
-                <Comp {...scene.props} type={scene.type} theme={theme} sceneId={scene.id} />
+                {/*
+                  氛围层的位置由 backdrop.place / backdrop.z 决定（三种落点）：
+                    下（默认）= DOM 在前、版式透明 → 字在后面发光，可读性最好
+                    上          = 版式之后、z-index 90 → 浮在画面上，但在贴纸/标签(100+z)之下
+                    顶          = 版式之后、z-index 900 → 盖住一切内容，但低于字幕(1000)
+                  给了 z 就按 100+z 与叠加元素混排（"压在这一行字上、但在那个标签下"）。
+                  只有「下」需要版式让出背景色，其余情况版式照常画底。
+                */}
+                {bdBelow ? (
+                  <>
+                    {/*
+                      版式要让出背景色（氛围层才透得上来），但这块不能空着：
+                      上一幕在「转场重叠区」里还在渲染（Freeze 定格），从透明的版式底下
+                      会露出来。表现是"本幕前半段突然有上一幕的光点"，抽帧才看得出来。
+                      垫一层跟主题同色的底，既挡住宿主，也不改变氛围层的观感。
+                    */}
+                    <AbsoluteFill style={{ backgroundColor: theme.palette.background }} />
+                    <BackdropLayer
+                      backdrop={scene.backdrop!}
+                      theme={theme}
+                      sceneId={scene.id}
+                      sceneDuration={scene.durationInFrames}
+                      sceneInFrames={sceneInFrames}
+                      sceneOutFrames={sceneOutFrames}
+                    />
+                  </>
+                ) : null}
+                <BareContext.Provider value={bdBelow}>
+                  <Comp {...scene.props} type={scene.type} theme={theme} sceneId={scene.id} />
+                </BareContext.Provider>
+                {scene.backdrop && !bdBelow ? (
+                  <BackdropLayer
+                    backdrop={scene.backdrop}
+                    theme={theme}
+                    sceneId={scene.id}
+                    sceneDuration={scene.durationInFrames}
+                    sceneInFrames={sceneInFrames}
+                    sceneOutFrames={sceneOutFrames}
+                    zIndex={bdZ}
+                  />
+                ) : null}
                 {/* 场景内的自由元素：各自有场景内的 from / duration，跟着这个场景转场进出 */}
                 <OverlayLayer elements={scene.elements} />
                 {/* 字幕只烧主轨：画中画的小窗里再糊一行字，画面就废了 */}
-                {span.track === 0 ? <SubtitleLayer scene={scene} theme={theme} /> : null}
+                {span.track === 0 ? (
+                  // 字幕永远在最上：z 900 的「顶」层也不能压它
+                  <div style={{ position: "absolute", inset: 0, zIndex: 1000, pointerEvents: "none" }}>
+                    <SubtitleLayer scene={scene} theme={theme} />
+                  </div>
+                ) : null}
               </SceneEditContext.Provider>
             </SceneFrame>
           </SceneWrap>

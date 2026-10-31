@@ -7,6 +7,7 @@ import {
   type FreeformProps,
 } from "@shared/freeform";
 import { SceneBoxSection } from "./SceneBoxSection";
+import { BackdropSection } from "./BackdropSection";
 import { TransitionSection } from "./TransitionSection";
 import { useDoc } from "../store";
 
@@ -138,6 +139,7 @@ export const FreeformInspector: React.FC<{ scene: Scene; fps: number }> = ({ sce
       <div className="panel-scroll">
         {/* 画中画是"整幕"的属性，放最上面：自由画布自己的字段很长，藏到下面找不到 */}
         <SceneBoxSection scene={scene} />
+        <BackdropSection scene={scene} />
         {/* 转场同样是"整幕"属性：自由画布面板整栏接管右栏，不在这里给就彻底没有入口 */}
         <TransitionSection scene={scene} />
         <div className="field">

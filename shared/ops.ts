@@ -25,6 +25,7 @@ import { describeSceneBox, normalizeSceneBox, type SceneBox } from "./sceneBox";
 import { droppedProps, getMeta, MIN_SCENE_FRAMES, normalizeProps } from "./sceneMetas";
 import { effectLabel, effectSummaryText } from "./effects";
 import { TRANSITION_TYPES } from "./transitions";
+import { BACKDROP_TYPES, isBackdropType } from "./sceneKinds";
 import {
   animLandingIssues,
   freeElSchema,
@@ -93,6 +94,38 @@ export type Op =
         /** 整表替换场景元素（分割场景时把后半段元素分出去） */
         elements?: OverlayElement[];
       };
+    }
+  /**
+   * 氛围层：垫在版式**底下**的一层动效（光晕/颗粒/漏光/散景/火花/磁带）。
+   *
+   * 只收纯氛围类型 —— 带文字的版式（打字机/数字/渐变字/乱码）垫在内容下面
+   * 会同时出现两套字，那是事故不是氛围。
+   * 传 `backdrop: null` 清掉。`props` 只存用户写的那几项，渲染时再和默认值合并。
+   */
+  | {
+      op: "set_scene_backdrop";
+      sceneId: string;
+      backdrop: {
+        type: string;
+        props?: Record<string, unknown>;
+        opacity?: number;
+        /** 下 = 垫在版式下（默认）/ 上 = 盖在内容上但在贴纸下 / 顶 = 盖在所有内容上（字幕除外） */
+        place?: "下" | "上" | "顶";
+        /** 给了就按 100+z 与叠加元素混排（不传则用 place 的默认位） */
+        z?: number;
+        /** 出现区间：幕内第几帧开始（默认 0 = 幕首） */
+        from?: number;
+        /** 持续多少帧（默认到幕尾；超出会被截断到幕长） */
+        duration?: number;
+        /** 淡入帧数，0 = 硬切 */
+        fadeIn?: number;
+        /** 淡出帧数，0 = 跟着幕尾一起切走 */
+        fadeOut?: number;
+        /** 整层时间倍率，1 = 原速（0.2–4） */
+        speed?: number;
+        /** loop = 循环（默认）；once = 只走一轮后定格（只有漏光看得出差别） */
+        mode?: "loop" | "once";
+      } | null;
     }
   | { op: "set_scene_timing"; sceneId: string; durationInFrames: number }
   /** 设置场景字幕（一行一句，按字数比例分配幕内时长） */
@@ -790,6 +823,120 @@ export function applyOps(project: Project, ops: Op[]): OpResult {
               ? `给「${scene.name}」写了 ${lines.length} 句字幕并更新样式`
               : `给「${scene.name}」写了 ${lines.length} 句字幕`
             : `清空「${scene.name}」的字幕`,
+        );
+        break;
+      }
+
+      case "set_scene_backdrop": {
+        const scene = mustFind(next, op.sceneId);
+        if (!op.backdrop) {
+          delete scene.backdrop;
+          summary.push(`去掉「${scene.name}」的氛围层`);
+          break;
+        }
+        if (!isBackdropType(op.backdrop.type)) {
+          throw new Error(
+            `「${op.backdrop.type}」不能当氛围层。可用的只有：${BACKDROP_TYPES.join(" / ")}；` +
+              `带文字的动效（打字机/数字滚动/渐变字/乱码）垫在内容下面会出现两套字。`,
+          );
+        }
+        // 先拿默认值合一次并校验：参数写错现在就报，别等渲染出来才发现黑屏
+        if (op.backdrop.props) normalizeProps(op.backdrop.type, op.backdrop.props);
+
+        /*
+         * 出现区间：越界当场报错，不静默截断。
+         * 「我设了 5 秒怎么只放了 3 秒」比一句报错难查得多；渲染端仍会截断一次，
+         * 那是给手改 json / 改短幕长之后的兜底，不是给正常写入用的。
+         */
+        const from = Math.max(0, Math.round(op.backdrop.from ?? 0));
+        const span = scene.durationInFrames;
+        if (from >= span) {
+          throw new Error(
+            `「${scene.name}」只有 ${span} 帧，from=${from} 已经超出幕尾；` +
+              `要么调小 from，要么先 set_scene_timing 把这一幕拉长。`,
+          );
+        }
+        const rest = span - from;
+        const duration = Math.round(op.backdrop.duration ?? rest);
+        if (duration < 1) throw new Error(`氛围层持续帧数必须 ≥1（现在是 ${duration}）`);
+        if (from + duration > span) {
+          throw new Error(
+            `氛围层区间 ${from}–${from + duration} 帧超出「${scene.name}」的 ${span} 帧；` +
+              `把 duration 改到 ≤${rest}（或 from 往前挪）。`,
+          );
+        }
+        /*
+         * 柔化：不填 = 交给渲染端自动算（跟随幕的出入场转场），填 0 = 强制硬切。
+         * 这里只在**两个都显式给了**的时候才校验加起来不超总长 —— 自动值由
+         * backdropWindow 统一 clamp，写死一个 0 进来反而会让自动柔化失效。
+         */
+        const fadeIn = op.backdrop.fadeIn === undefined ? undefined : Math.max(0, Math.round(op.backdrop.fadeIn));
+        const fadeOut =
+          op.backdrop.fadeOut === undefined ? undefined : Math.max(0, Math.round(op.backdrop.fadeOut));
+        if (fadeIn !== undefined && fadeOut !== undefined && fadeIn + fadeOut > duration) {
+          throw new Error(
+            `淡入 ${fadeIn} + 淡出 ${fadeOut} 帧超过总长 ${duration} 帧，氛围层会一直半透明；` +
+              `两个加起来要 ≤${duration}，或者都不填让它自动跟随幕的出入场。`,
+          );
+        }
+
+        const meta = getMeta(op.backdrop.type);
+        const speed =
+          typeof op.backdrop.speed === "number"
+            ? Math.max(0.2, Math.min(4, op.backdrop.speed))
+            : 1;
+        const mode = op.backdrop.mode ?? "loop";
+        /*
+         * once 只对漏光说得通：它有一整轮（扫进来 → 扫出去）。
+         * 光晕/散景是永续漂移，颗粒/磁带逐帧随机 —— 写 once 不报错但用户看不出
+         * 差别，反而会以为"设置没生效"，所以这里明确提示一句。
+         */
+        const onceNote =
+          mode === "once" && op.backdrop.type !== "lightleak"
+            ? `（注意：${meta?.name ?? op.backdrop.type} 没有"一轮"的概念，once 对它没有可见效果；只有漏光会扫一次就停）`
+            : "";
+
+        scene.backdrop = {
+          type: op.backdrop.type,
+          ...(op.backdrop.props ? { props: op.backdrop.props } : {}),
+          opacity: typeof op.backdrop.opacity === "number" ? op.backdrop.opacity : 0.8,
+          place: op.backdrop.place ?? "下",
+          ...(op.backdrop.z === undefined ? {} : { z: op.backdrop.z }),
+          speed,
+          mode,
+          ...(from === 0 ? {} : { from }),
+          ...(duration === rest ? {} : { duration }),
+          ...(fadeIn === undefined ? {} : { fadeIn }),
+          ...(fadeOut === undefined ? {} : { fadeOut }),
+        };
+        const where =
+          op.backdrop.z !== undefined
+            ? `层级 z=${op.backdrop.z}（与贴纸/标签混排）`
+            : op.backdrop.place === "上"
+              ? "盖在内容之上、贴纸之下"
+              : op.backdrop.place === "顶"
+                ? "盖在所有内容之上（字幕除外）"
+                : "垫在内容之下";
+        // 用工程 fps 换算秒数，别硬编码 30（25/60fps 工程会差一大截）
+        const fps = (next as { fps?: number }).fps ?? 30;
+        const secs = (n: number) => (n / Math.max(1, fps)).toFixed(1);
+        const soft =
+          fadeIn === undefined && fadeOut === undefined
+            ? "，柔化跟随这一幕的出入场转场"
+            : fadeIn || fadeOut
+              ? `，淡入 ${fadeIn ?? 0} / 淡出 ${fadeOut ?? 0} 帧`
+              : "，硬切";
+        const when =
+          from === 0 && duration === rest
+            ? `铺满整幕${soft}`
+            : `${from === 0 ? "幕首" : `第 ${from} 帧`}起 ${duration} 帧（约 ${secs(duration)}s）${soft}`;
+        const pace =
+          (speed === 1 ? "" : `，${speed} 倍速`) +
+          (mode === "once" ? "，只播一轮" : "") +
+          onceNote;
+        summary.push(
+          `给「${scene.name}」加了氛围层：${meta?.name ?? op.backdrop.type}（${where}，` +
+            `不透明度 ${scene.backdrop.opacity}，${when}${pace}）`,
         );
         break;
       }

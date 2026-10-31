@@ -19,6 +19,32 @@ import type { Theme } from "../../shared/schema";
  *  - 2：入场位移 ×1.7 + 轻微回弹，数字滚动更快，光斑更亮
  */
 export const MotionContext = React.createContext<number>(1);
+/**
+ * 「这一幕要画在氛围层之上」——true 时版式不画自己的底色。
+ *
+ * 由 Video 在有 scene.backdrop 时提供。为什么用 context 而不是给每个版式加 prop：
+ * 37 种版式的 props 都是 zod 校验过的业务字段，为一个纯渲染开关去改 37 个 schema
+ * 不划算；而且这个开关不该被 agent 写进工程数据（它是派生的，不是用户意图）。
+ */
+export const BareContext = React.createContext(false);
+export const useBare = () => React.useContext(BareContext);
+
+/**
+ * 氛围层的两个播放开关（只有 Backdrop 提供，独立版式里恒为默认值）。
+ *
+ * 为什么走 context 而不是改成 props：6 个氛围组件作为**独立版式**时也有自己的
+ * schema（tone/count/periodSec…），把"整层倍速""只播一轮"塞进去会污染版式参数，
+ * 而且 agent 建独立版式时会看到两个毫无意义的字段。
+ *
+ * speed：整层时间倍率（1 = 原速）。只影响时间，不影响亮度/数量。
+ * once：只走一轮就定格。只对漏光这类"有完整周期"的动效有意义 ——
+ *       光晕/散景是永续漂移，颗粒/磁带逐帧随机，它们没有"一轮"可言。
+ */
+export const BackdropFxContext = React.createContext<{ speed: number; once: boolean }>({
+  speed: 1,
+  once: false,
+});
+export const useBackdropFx = () => React.useContext(BackdropFxContext);
 export const useMotion = () => React.useContext(MotionContext);
 
 /** m=0 时的入场：一帧到位，不能有半透明闪烁 */
@@ -104,6 +130,7 @@ export const SceneFrame: React.FC<FrameProps> = ({
 }) => {
   const { safe, u, isPortrait } = useSceneLayout();
   const m = useMotion();
+  const bare = useBare();
   const frame = useCurrentFrame();
   const { fps } = useVideoConfig();
 
@@ -127,7 +154,8 @@ export const SceneFrame: React.FC<FrameProps> = ({
   return (
     <AbsoluteFill
       style={{
-        backgroundColor: theme.palette.background,
+        // 有氛围层垫底时不能画背景色，否则那层永远看不见（这是 backdrop 唯一的前提）
+        backgroundColor: bare ? "transparent" : theme.palette.background,
         paddingTop: u(safe.top),
         paddingBottom: u(safe.bottom),
         paddingLeft: u(safe.x),

@@ -2,6 +2,7 @@ import { z } from "zod";
 import { TRANSITION_TYPES } from "./transitions";
 import { CUSTOM_EASES, EFFECT_CURVES, EFFECT_TYPES, effectParamDesc } from "./effects";
 import { sceneBoxSchema } from "./sceneBox";
+import { BACKDROP_TYPES } from "./sceneKinds";
 
 /* ────────────────────────────── 画幅 ────────────────────────────── */
 
@@ -416,6 +417,90 @@ export const sceneSchema = z.object({
   transforms: z.record(transformSchema).optional(),
   /** 场景之上的自由元素层（贴纸 / 图标 / 标签 / 图片 / 视频），各有场景内起点/时长 */
   elements: z.array(elementSchema).optional(),
+  /**
+   * 氛围层：垫在**版式底下**的一层动效（光晕/颗粒/漏光/散景/火花/磁带）。
+   *
+   * 和 elements 的区别：elements 在版式**之上**（贴纸、标签），backdrop 在**之下**。
+   * 有 backdrop 时版式会自动切"透明背景"，否则这层会被版式自己的底色盖掉。
+   * 只有 BACKDROP_TYPES 里的 6 个纯氛围类型可用（带文字的版式垫在下面会出两套字）。
+   */
+  backdrop: z
+    .object({
+      type: z.string().describe(`动效类型：${BACKDROP_TYPES.join(" / ")}`),
+      props: z.record(z.any()).optional().describe("覆盖该动效的参数，不传用默认值"),
+      opacity: z.number().min(0).max(1).default(0.8).describe("不透明度 0–1，默认 0.8"),
+      /**
+       * 放在哪一层。三档够用，别指望它做通用图层系统：
+       *  下 = 版式之下（默认，字在后面发光，可读性最好）
+       *  上 = 版式之上、贴纸/标签之下（光浮在画面上，但标签还在最前）
+       *  顶 = 全部内容之上、字幕之下（颗粒/扫描线/故障专用，会压一点字）
+       */
+      place: z
+        .enum(["下", "上", "顶"])
+        .default("下")
+        .describe("层次：下=垫在版式下 / 上=盖在内容上但在贴纸下 / 顶=盖在所有内容上（字幕除外）"),
+      /**
+       * 精细层级：给了就按 100+z 与叠加元素（scene.elements，自带 z）混排。
+       * 「让某张光斑压在这一行字上、但在那个标签下面」靠这个，不靠 place。
+       */
+      z: z.number().int().min(-50).max(500).optional().describe("与叠加元素混排时的层级（100+z）；给了就忽略 place 的默认位"),
+
+      /*
+       * 出现区间：氛围层默认铺满整幕（下面四个字段都不填 = 跟改动前逐像素一致）。
+       * 填了 from / duration 就只在幕内某一段出现，且**动画从出现那一刻从 0 开始**
+       * （不是从幕首算），这样「第 2 秒才浮出光斑」不会看到漂到一半的中间态。
+       */
+      from: z.number().int().min(0).optional().describe("幕内第几帧开始出现，默认 0（幕首）"),
+      duration: z
+        .number()
+        .int()
+        .min(1)
+        .optional()
+        .describe("持续多少帧，默认到幕尾；超出幕长会被截断"),
+      /**
+       * 柔化帧数。**不填 = 自动**（跟随幕的出入场转场；区间在幕中间时取 max(转场, 8)），
+       * 显式写 0 = 强制硬切。
+       *
+       * 不能给 default(0)：那样"没填"和"填 0"分不开，自动柔化永远不生效。
+       */
+      fadeIn: z
+        .number()
+        .int()
+        .min(0)
+        .max(120)
+        .optional()
+        .describe("淡入帧数；不填 = 自动跟随入场转场，写 0 = 硬切"),
+      fadeOut: z
+        .number()
+        .int()
+        .min(0)
+        .max(120)
+        .optional()
+        .describe("淡出帧数；不填 = 自动跟随出场转场，写 0 = 硬切"),
+
+      /**
+       * 整层时间倍率。1 = 原速，2 = 快一倍，0.5 = 慢一半。
+       *
+       * 只改"动得多快"，不改亮度、数量、位置。颗粒是逐帧随机，倍速表现为
+       * 噪点变化的频率（1 倍时每 3 帧换一次，2 倍时更快，慢速时更"奶油"）。
+       */
+      speed: z
+        .number()
+        .min(0.2)
+        .max(4)
+        .default(1)
+        .describe("整层时间倍率：1=原速，2=快一倍，0.5=慢一半"),
+      /**
+       * loop = 一直循环（默认）；once = 只走一轮后定格。
+       * 只对**有完整周期**的动效有意义 —— 目前只有漏光（扫一次就停在扫完的状态）。
+       * 光晕/散景是永续漂移、颗粒/磁带逐帧随机，写 once 不会报错但看不出差别。
+       */
+      mode: z
+        .enum(["loop", "once"])
+        .default("loop")
+        .describe("loop=循环播放（默认）/ once=只走一轮后定格（漏光扫一次就停）"),
+    })
+    .optional(),
   props: z.record(z.any()).describe("场景业务数据，由场景 schema 约束"),
   /** 字幕样式（按场景覆盖；不传用默认：底部居中黑底白字） */
   subtitleStyle: subtitleStyleSchema.optional(),
