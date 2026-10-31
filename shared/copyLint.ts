@@ -105,8 +105,25 @@ export function lintCopy(text: string, kind: "screen" | "voice" = "voice"): Copy
   if (!text || !text.trim()) return [];
   const issues = [...lintHollow(text), ...lintNumbers(text)];
   issues.push(...(kind === "screen" ? lintScreen(text) : lintVoice(text)));
+  issues.push(...lintDashRanges(text));
   for (const hit of detectFlavor(text, kind)) issues.push({ level: hit.level, msg: hit.msg });
   return issues;
+}
+
+/**
+ * 区间符号检查：中文排版里 `10–99`（en dash）会被当成断行点，价格直接折成两行。
+ * 这次返工里"价格折行"修了 5 次，根因就是它 —— 换成普通连字符 `-` 就正常。
+ */
+function lintDashRanges(text: string): CopyIssue[] {
+  const out: CopyIssue[] = [];
+  const hits = text.match(/\d+\s*[–—]\s*\d+/g);
+  if (hits?.length) {
+    out.push({
+      level: "warn",
+      msg: `区间用了长横线「${hits[0]}」：中文排版会在这断行（价格会折成两行）→ 改成普通连字符，如 10-99`,
+    });
+  }
+  return out;
 }
 
 /** 批量体检，同类问题只留前 N 条（返回可直接拼进工具输出的行） */

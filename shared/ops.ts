@@ -28,6 +28,7 @@ import { TRANSITION_TYPES } from "./transitions";
 import {
   animLandingIssues,
   freeElSchema,
+  normalizeFreeElement,
   reorderFreeElements,
   transformFreeElement,
   type FreeEl,
@@ -219,6 +220,12 @@ export type OpResult = {
   project: Project;
   createdSceneIds: string[];
   summary: string[];
+  /**
+   * 批内引用解析结果：{ 别名: 真实 id }。
+   * 有了它，一批里可以「加场景 → 往这个场景里加元素 → 给这个元素加动画」，
+   * 不用先加、再 get_project 读 id、再改（220 次写入里至少 100 次是这么来的）。
+   */
+  createdIds: Record<string, string>;
 };
 
 const uid = (prefix: string) =>
@@ -546,7 +553,8 @@ function assertKnownOpFields(ops: Op[]): void {
     if (!name) continue;
     const allow: readonly string[] | undefined = OP_FIELDS[name];
     if (!allow) continue;
-    const unknown = Object.keys(op).filter((k) => !allow.includes(k));
+    // `as` 是批内别名（见 applyOps 的 aliases），所有创建类 op 都能带
+    const unknown = Object.keys(op).filter((k) => k !== "as" && !allow.includes(k));
     if (unknown.length) {
       const head = ops.length > 1 ? `第 ${i + 1}/${ops.length} 个操作（${op.op}）` : `操作（${op.op}）`;
       throw new Error(
@@ -558,16 +566,77 @@ function assertKnownOpFields(ops: Op[]): void {
   }
 }
 
+/**
+ * 批内别名引用：整串 `@名字`，**且只在 id 类字段上生效**。
+ *
+ * 为什么不做"深替换所有字符串"：第一次实现就是那么写的，结果
+ * 一条音频 src（值正好是 `@remotion-studio`）被当成别名解析，整批报错。
+ * 别名是把字符串当指针用，必须严格限定在"本来就是放 id 的地方"。
+ */
+const ALIAS_REF = /^@([A-Za-z0-9_.-]+)$/;
+
+/** 这些字段值是 id（或 id 数组），才允许写 @别名 */
+const ID_FIELDS = new Set(["sceneId", "sceneIds", "elementId", "trackId", "effectId", "target"]);
+
+function resolveOne(value: string, aliases: Map<string, string>): string {
+  const m = ALIAS_REF.exec(value);
+  if (!m) return value;
+  const hit = aliases.get(m[1]);
+  if (!hit) {
+    throw new Error(
+      `引用了未定义的别名 @${m[1]}：同一批里要先有一条创建类 op 用 as:"${m[1]}" 建出它（顺序很重要）`,
+    );
+  }
+  return hit;
+}
+
+/** 只解析 id 字段上的 `@别名`（其它字段原样保留，包括正文和素材路径） */
+function resolveAliasRefs<T>(op: T, aliases: Map<string, string>): T {
+  if (!op || typeof op !== "object") return op;
+  const out: Record<string, unknown> = { ...(op as Record<string, unknown>) };
+  for (const key of Object.keys(out)) {
+    if (!ID_FIELDS.has(key)) continue;
+    const v = out[key];
+    if (typeof v === "string") out[key] = resolveOne(v, aliases);
+    else if (Array.isArray(v)) {
+      out[key] = v.map((x) => (typeof x === "string" ? resolveOne(x, aliases) : x));
+    }
+  }
+  return out as T;
+}
+
+/** 工程里现有的场景 / 元素 id，用来 diff 出"这条 op 新建了什么" */
+function idsOf(p: Project): { scenes: Set<string>; elements: Set<string> } {
+  const scenes = new Set<string>();
+  const elements = new Set<string>();
+  for (const s of p.scenes) {
+    scenes.add(s.id);
+    // 叠加层元素在 scene.elements
+    for (const e of s.elements ?? []) elements.add(e.id);
+    // freeform 场景的元素在 props.elements（两处都要算，否则 as 在 freeform 上永远失败）
+    const fe = (s.props as { elements?: { id?: string }[] } | undefined)?.elements;
+    if (Array.isArray(fe)) {
+      for (const e of fe) if (e && typeof e.id === "string") elements.add(e.id);
+    }
+  }
+  return { scenes, elements };
+}
+
 export function applyOps(project: Project, ops: Op[]): OpResult {
   assertKnownOpFields(ops);
   let next: Project = structuredClone(project);
   const createdSceneIds: string[] = [];
   const summary: string[] = [];
+  const aliases = new Map<string, string>();
+  const createdIds: Record<string, string> = {};
 
   for (let opIndex = 0; opIndex < ops.length; opIndex++) {
-    const op = ops[opIndex];
+    // `as` 不参与落库，只用来把"刚建出来的东西"记到别名表里
+    const { as: aliasName, ...restOp } = ops[opIndex] as Op & { as?: string };
+    const op = resolveAliasRefs(restOp as Op, aliases);
     /** 写入前快照：用来断言「这条 op 真的改了东西」（见循环末尾） */
     let beforeJson = "";
+    const aliasBefore = aliasName ? idsOf(next) : null;
     try {
     beforeJson = JSON.stringify(next);
     switch (op.op) {
@@ -966,8 +1035,11 @@ export function applyOps(project: Project, ops: Op[]): OpResult {
             ? list.findIndex((e) => e["id"] === op.elementId)
             : (op.index ?? -1);
         if (idx < 0 || idx >= list.length) {
+          // 报错带"这一幕有几个元素"：只说「没有元素 13」，调用方分不清 13 是 id 还是下标
           throw new Error(
-            op.elementId ? `freeform 里没有元素 ${op.elementId}` : `freeform 元素下标越界：${op.index}`,
+            op.elementId
+              ? `freeform 里没有元素 ${op.elementId}：「${scene.name}」共 ${list.length} 个元素（可用 index 0–${list.length - 1}）。elementId 按 id 匹配，要按下标改请传 index`
+              : `freeform 元素下标越界：${op.index}（「${scene.name}」共 ${list.length} 个，可用 0–${list.length - 1}）`,
           );
         }
         // patch 先过 strict partial：不认识的字段直接报错（改了个不生效的字段，
@@ -1081,7 +1153,7 @@ export function applyOps(project: Project, ops: Op[]): OpResult {
           throw new Error(`「${scene.name}」的 freeform 元素已到上限 40 个，删掉一些再加`);
         }
         // 过一遍 schema（strict）：未知字段在这里就报错，不静默、不落库
-        const parsed = freeElSchema.strict().safeParse(op.element);
+        const parsed = freeElSchema.strict().safeParse(normalizeFreeElement(op.element));
         if (!parsed.success) {
           const issues = parsed.error.issues as { code?: string; message: string }[];
           const unknownIssue = issues.find((i) => i.code === "unrecognized_keys");
@@ -1121,8 +1193,11 @@ export function applyOps(project: Project, ops: Op[]): OpResult {
             ? list.findIndex((e) => (e as { id?: string }).id === op.elementId)
             : (op.index ?? -1);
         if (idx < 0 || idx >= list.length) {
+          // 报错带"这一幕有几个元素"：只说「没有元素 13」，调用方分不清 13 是 id 还是下标
           throw new Error(
-            op.elementId ? `freeform 里没有元素 ${op.elementId}` : `freeform 元素下标越界：${op.index}`,
+            op.elementId
+              ? `freeform 里没有元素 ${op.elementId}：「${scene.name}」共 ${list.length} 个元素（可用 index 0–${list.length - 1}）。elementId 按 id 匹配，要按下标改请传 index`
+              : `freeform 元素下标越界：${op.index}（「${scene.name}」共 ${list.length} 个，可用 0–${list.length - 1}）`,
           );
         }
         if (list.length <= 1) {
@@ -1568,6 +1643,30 @@ export function applyOps(project: Project, ops: Op[]): OpResult {
         throw new Error(`不支持的操作: ${JSON.stringify(_exhaustive)}`);
       }
     }
+
+    // 把「这条 op 新建了什么」记进别名表：diff 前后 id 集合，
+    // 比在每个 case 里各写一遍 `createdId = ...` 可靠（新增创建类 op 时不会漏）
+    if (aliasName && aliasBefore) {
+      const after = idsOf(next);
+      const newScenes = [...after.scenes].filter((id) => !aliasBefore.scenes.has(id));
+      const newElements = [...after.elements].filter((id) => !aliasBefore.elements.has(id));
+      let target: string | undefined;
+      if (newScenes.length === 1) target = newScenes[0];
+      else if (newScenes.length === 0 && newElements.length === 1) target = newElements[0];
+      if (!target) {
+        throw new Error(
+          `as:"${aliasName}" 没指向任何新建对象：` +
+            (newScenes.length + newElements.length === 0
+              ? `${op.op} 不是创建类操作（as 只能用在 add_scene / add_element / add_freeform_element / duplicate_scene 上）`
+              : `这条 op 一次建了 ${newScenes.length} 个场景 + ${newElements.length} 个元素，别名不知道指哪个——请拆成多条`),
+        );
+      }
+      if (aliases.has(String(aliasName))) {
+        throw new Error(`别名 "${aliasName}" 在同一批里重复定义`);
+      }
+      aliases.set(String(aliasName), target);
+      createdIds[String(aliasName)] = target;
+    }
     } catch (err) {
       // 整批原子：这里必须抛出去，调用方不会落盘（不会出现改了一半的工程）
       throw opFailure(err, ops, opIndex);
@@ -1591,7 +1690,7 @@ export function applyOps(project: Project, ops: Op[]): OpResult {
 
   next.rev = project.rev + 1;
   next.updatedAt = new Date().toISOString();
-  return { project: next, createdSceneIds, summary };
+  return { project: next, createdSceneIds, summary, createdIds };
 }
 
 function mustFind(p: Project, sceneId: string): Scene {

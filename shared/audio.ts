@@ -13,12 +13,17 @@ import { MAX_VOLUME, sceneSpans } from "./schema";
 /* ─────────────────────────── 人声避让（ducking） ─────────────────────────── */
 
 /**
- * 默认值刻意保守：短视频里 BGM 压到 30% 正合适；
+ * 默认深度 0.6。
+ *
+ * 以前是 0.3，看起来"保守"，实际是错的：BGM 音量 43% × 0.3 × 压缩均值 51% ≈ 6.6%，
+ * 而口播片几乎全程有人声 → 避让一直生效 → 用户的原话是「完全听不到 bgm」。
+ * 60% 留得住底噪又不抢人声，是混音里常用的"−8~−10 dB 避让"量级。
+ *
  * attack 比 release 短，才跟得上开口的瞬间。
  */
 export const DEFAULT_DUCKING: DuckingConfig = {
   enabled: true,
-  depth: 0.3,
+  depth: 0.6,
   attackMs: 120,
   releaseMs: 260,
   padMs: 60,

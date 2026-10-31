@@ -140,11 +140,13 @@ const OneElement: React.FC<{ el: OverlayElement }> = ({ el }) => {
         />
       ) : el.kind === "audio" ? (
         // 场景内音频（如 TTS 语音）：不可见，只出声；时间轴/选中框仍可操作
+        // useWebAudioApi 只在配置音量 >1 时开：旁白通常是 1，走原生 HTML5 更稳
+        // （抽帧抢 CPU 时 Web Audio 会缓冲欠载，听起来就是沙哑/断音）
         <Audio
           src={resolveSrc(el.src ?? "")}
           volume={el.muted ? 0 : el.audioVolume ?? 1}
           trimBefore={el.startFrom || undefined}
-          useWebAudioApi
+          useWebAudioApi={(el.audioVolume ?? 1) > 1}
         />
       ) : el.kind === "image" ? (
         <Img

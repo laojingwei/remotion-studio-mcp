@@ -317,6 +317,17 @@ export const elementSchema = z.object({
   muted: z.boolean().default(false).describe("是否静音；视频创建时默认 true，音频默认 false"),
   loop: z.boolean().default(true),
   startFrom: z.number().int().min(0).default(0).describe("从素材第几帧开始播（视频/音频通用：跳过文件开头，如旁白前的空白）"),
+  /**
+   * 这条音频是不是「旁白」。
+   *
+   * 为什么需要有这个标记：场景里的 `kind:"audio"` 既可能是旁白，也可能是音效。
+   * 「配音被用户听过没有」这个闸口只该看旁白 —— 把音效算进去会让指纹在无关改动时失效，
+   * 反过来也会让真正的旁白藏在音效里蒙混过去。
+   *
+   * 注意：这里不设 default，因为 `default(false)` 会在 strict 校验时把每条元素都写死一个字段。
+   * 缺省即视为「不是旁白」。
+   */
+  narration: z.boolean().optional().describe("标记为旁白（配音闸口只统计这些）"),
   /** 场景内音频元素（如 TTS 语音）的音量 */
   audioVolume: z.number().min(0).max(MAX_VOLUME).default(1).describe("音频元素音量，1 = 原音，可到 5"),
   /** 时间轴上的"小眼睛"：隐藏后画面里不显示（可再点开） */
@@ -354,6 +365,16 @@ export const subtitleStyleSchema = z.object({
       "距**画面底边**的距离（短边百分比，默认 6.5）。基准是画面边缘，不含平台 UI：" +
         "竖屏抖音/快手的按钮栏和文案区会压住底部约 16%（按画面高算），" +
         "所以竖屏建议 ≥ 20，横屏 6.5 就够；check_project 会对压进 UI 区的字幕提醒",
+    ),
+  bottomPct: z
+    .number()
+    .min(0)
+    .max(60)
+    .optional()
+    .describe(
+      "更直接的写法：距画面底边**按画面高度百分比**（20 = 距底 20%）。" +
+        "和 bottom 的关系：bottom 是短边百分比，竖屏 9:16 下 20 ≈ bottom 36；" +
+        "想让字幕刚好避开平台底栏就直接用它（抖音竖屏建议 18–22）",
     ),
   bold: z.number().optional().describe("字重 100-900，默认 600（注意：不是布尔）"),
   stroke: z.number().optional().describe("描边宽度（短边百分比）"),

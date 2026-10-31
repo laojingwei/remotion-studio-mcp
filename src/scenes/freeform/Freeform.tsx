@@ -361,6 +361,30 @@ const OneEl = React.memo(function OneEl({ el, index, sceneId, frame, unit, theme
   const a = evalAnim(el, frame);
   const local = frame - (el.from ?? 0);
   const sizePx = (unit * a.size) / 100;
+  // width/height 不给就沿用 size：存量元素（只写了 size）行为完全不变
+  const wPx = el.width !== undefined ? (unit * el.width) / 100 : sizePx;
+  const hPx = el.height !== undefined ? (unit * el.height) / 100 : sizePx;
+
+  /**
+   * 文字渐变：`background-clip:text` 必须作用在**文字节点**上。
+   * 以前 el.style 一律铺在外层 wrapper —— 渐变铺满盒子、文字设成透明，渲染出来就是"一块渐变矩形"。
+   * 现在把渐变色相关的键挪到内层 span，其余样式仍留在 wrapper（位移/滤镜等语义不变）。
+   */
+  const rawStyle = (el.style ?? {}) as Record<string, string | number>;
+  const clipMode = String(rawStyle.WebkitBackgroundClip ?? rawStyle.backgroundClip ?? "");
+  const gradientText = el.type === "text" && clipMode === "text";
+  const TEXT_GRADIENT_KEYS = ["backgroundImage", "background", "WebkitBackgroundClip", "backgroundClip", "WebkitTextFillColor"];
+  const styleForWrapper = (gradientText
+    ? Object.fromEntries(Object.entries(rawStyle).filter(([k]) => !TEXT_GRADIENT_KEYS.includes(k)))
+    : rawStyle) as React.CSSProperties;
+  const gradientTextStyle: React.CSSProperties = gradientText
+    ? ({
+        ...Object.fromEntries(Object.entries(rawStyle).filter(([k]) => TEXT_GRADIENT_KEYS.includes(k))),
+        color: "transparent",
+        WebkitBackgroundClip: "text",
+        backgroundClip: "text",
+      } as React.CSSProperties)
+    : {};
 
   const inner =
     el.type === "text" ? (
@@ -376,6 +400,7 @@ const OneEl = React.memo(function OneEl({ el, index, sceneId, frame, unit, theme
           ...(el.maxWidth ? { maxWidth: (unit * el.maxWidth) / 100 } : {}),
           display: "inline-block",
           whiteSpace: "pre-wrap",
+          ...gradientTextStyle,
         }}
       >
         {el.text ?? ""}
@@ -383,8 +408,8 @@ const OneEl = React.memo(function OneEl({ el, index, sceneId, frame, unit, theme
     ) : el.type === "shape" ? (
       <div
         style={{
-          width: sizePx,
-          height: el.shape === "line" ? Math.max(2, sizePx * 0.03) : sizePx,
+          width: wPx,
+          height: el.shape === "line" ? Math.max(2, hPx * 0.03) : hPx,
           // fill 优先；只给了 bg 也当作形状填充（否则会被主题主色盖住）
           background: el.fill ?? el.bg ?? theme.palette.primary,
           borderRadius:
@@ -399,19 +424,20 @@ const OneEl = React.memo(function OneEl({ el, index, sceneId, frame, unit, theme
         src={resolveSrc(el.src ?? "")}
         // 关掉浏览器原生拖拽：否则按住图片会触发 ghost image，画布拖动直接断掉
         draggable={false}
-        style={{ width: sizePx, display: "block", objectFit: "cover", borderRadius: (sizePx * (el.radius ?? 0)) / 100 }}
+        style={{ width: wPx, ...(el.height !== undefined ? { height: hPx } : {}), display: "block", objectFit: "cover", borderRadius: (sizePx * (el.radius ?? 0)) / 100 }}
       />
     ) : el.type === "video" ? (
       <Video
         src={resolveSrc(el.src ?? "")}
         muted
         loop
-        style={{ width: sizePx, display: "block", objectFit: "cover", borderRadius: (sizePx * (el.radius ?? 0)) / 100 }}
+        style={{ width: wPx, ...(el.height !== undefined ? { height: hPx } : {}), display: "block", objectFit: "cover", borderRadius: (sizePx * (el.radius ?? 0)) / 100 }}
       />
     ) : el.type === "svg" ? (
       <svg
         viewBox={el.viewBox ?? "0 0 24 24"}
-        width={sizePx}
+        width={wPx}
+        height={el.height !== undefined ? hPx : undefined}
         fill={el.fill ?? "none"}
         stroke={el.stroke ?? "none"}
         strokeWidth={el.strokeWidth ?? 2}
@@ -431,7 +457,8 @@ const OneEl = React.memo(function OneEl({ el, index, sceneId, frame, unit, theme
         position: "absolute",
         left: `${a.x}%`,
         top: `${a.y}%`,
-        transform: `translate(-50%, -50%) rotate(${a.rotate}deg) scale(${a.scale})`,
+        // anchor:"left" 时 x 是左边缘（对齐用）；默认 center 保持历史行为
+        transform: `translate(${el.anchor === "left" ? "0" : "-50%"}, -50%) rotate(${a.rotate}deg) scale(${a.scale})`,
         opacity: a.opacity,
         ...(el.bg ? { background: el.bg } : {}),
         ...(el.border
@@ -441,7 +468,7 @@ const OneEl = React.memo(function OneEl({ el, index, sceneId, frame, unit, theme
               borderColor: el.borderColor ?? el.fill ?? "currentColor",
             }
           : {}),
-        ...((el.style ?? {}) as React.CSSProperties),
+        ...styleForWrapper,
       }}
     >
       {inner}

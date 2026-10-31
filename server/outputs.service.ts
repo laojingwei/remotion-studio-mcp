@@ -401,6 +401,25 @@ export function cleanupOutputs(opts: CleanupOptions = {}): CleanupResult {
     const subs = listDir(outDirOf(projectId, "subtitle"));
     result.scanned += videos.length + stills.length + subs.length;
 
+    // 预览片段（6 秒带声 MP4）：小（几十 KB）但会攒，只留最近 10 个。
+    // 不放进 OutputKind 体系是有意的：它不是交付物，不该出现在产物列表里让用户困惑。
+    {
+      const previewDir = path.join(projectOutDir(projectId), "previews");
+      if (fs.existsSync(previewDir)) {
+        const clips = listDir(previewDir).sort((a, b) => b.mtimeMs - a.mtimeMs);
+        for (const f of clips.slice(10)) {
+          if (!dryRun) {
+            try {
+              fs.unlinkSync(path.join(previewDir, f.name));
+            } catch {
+              /* 删不掉不算清理失败 */
+            }
+          }
+          result.freedBytes += f.size;
+        }
+      }
+    }
+
     const doomedVideos = planVideoRemoval(videos, keepVideos);
     const doomedStills = stills.filter((f) => f.mtimeMs < cutoff);
     const doomedSubs = subs.filter((f) => f.mtimeMs < cutoff);

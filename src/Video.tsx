@@ -12,7 +12,7 @@ import {
 import type { AudioClip, Project, Scene, Theme } from "../shared/schema";
 import { sceneSpans } from "../shared/schema";
 import { sceneBoxCss, type SceneBox } from "../shared/sceneBox";
-import { seamOverlaps, transitionStyle } from "../shared/transitions";
+import { exitStyle, exitWindow, seamOverlaps, transitionStyle } from "../shared/transitions";
 import { effectFrameStyle, type EffectClip } from "../shared/effects";
 import { SCENE_COMPONENTS } from "./scenes/components";
 import { OverlayLayer } from "./scenes/Overlay";
@@ -25,26 +25,33 @@ const SceneWrap: React.FC<{
   children: React.ReactNode;
   scene: Scene;
   durationInFrames: number;
-  /** 接缝已经交给下一幕的入场转场时，本幕的出场要关掉（否则叠化会双重变暗） */
-  ignoreOut?: boolean;
-}> = ({ children, scene, durationInFrames, ignoreOut }) => {
+  /**
+   * 接缝重叠帧数（由下一幕入场决定）。本幕的渲染窗口是 `[0, 幕长 + 接缝)`，
+   * 重叠期它是"底图"，必须在窗口结束前真的退出去（复盘 R6：以前是 Freeze 定格，
+   * 文字一直留在画面上）。
+   */
+  seamFade?: number;
+}> = ({ children, scene, durationInFrames, seamFade = 0 }) => {
   const frame = useCurrentFrame();
   const inT = scene.transitionIn;
   const outT = scene.transitionOut;
   const d = inT && inT.type !== "none" ? inT.durationInFrames : 0;
-  const od = !ignoreOut && outT && outT.type !== "none" ? outT.durationInFrames : 0;
-  if (d <= 0 && od <= 0) return <>{children}</>;
+
+  /**
+   * 出场窗口 = 从渲染窗口末尾往回推 max(出场时长, 接缝长度)。
+   *
+   * 这样出场转场**不再被下一幕的入场时长压缩**：
+   * 前幕设 30 帧出场、下幕设 12 帧入场 → 出场从接缝前 18 帧就开始退，
+   * 30 帧完整播完，速度不变。重叠长度本身没变，叠字窗口也不变。
+   */
+  const win = exitWindow({ durationInFrames, seam: Math.max(0, seamFade), transitionOut: outT });
+  if (d <= 0 && win.len <= 0) return <>{children}</>;
 
   // 具体样式在 shared/transitions.ts（纯函数，可单测；新增转场只改那一处）
   const style: Record<string, string | number> = {};
   if (d > 0) Object.assign(style, transitionStyle(inT!.type, frame, d, durationInFrames));
-  if (od > 0) {
-    // 出场 = 反向播放同一套转场：结束前 od 帧内，进度从 1 走到 0
-    const x = frame - (durationInFrames - od);
-    Object.assign(
-      style,
-      transitionStyle(outT!.type, Math.max(0, od - Math.max(0, x)), od, durationInFrames),
-    );
+  if (win.len > 0 && frame >= win.start) {
+    Object.assign(style, exitStyle(outT, frame - win.start, win.len, durationInFrames));
   }
   return <AbsoluteFill style={style}>{children}</AbsoluteFill>;
 };
@@ -143,7 +150,10 @@ const SubtitleLayer: React.FC<{ scene: Scene; theme: Theme }> = ({ scene, theme 
   const defBg = light ? "#FFFFFF" : "#000000";
   const defColor = light ? "#111111" : "#FFFFFF";
   const fontSize = (((st.fontSize ?? 2.6) * unit) / 100);
-  const bottom = (((st.bottom ?? 6.5) * unit) / 100);
+  // bottomPct 是"按画面高度"的真百分比（用户直观），bottom 是短边百分比（历史字段）。
+  // 竖屏 9:16 下两者差 1.78 倍，这就是以前"填 20 却只上去一点点"的原因。
+  const bottom =
+    st.bottomPct !== undefined ? (height * st.bottomPct) / 100 : ((st.bottom ?? 6.5) * unit) / 100;
   const strokeW = (((st.stroke ?? 0) * unit) / 100);
   const bg = withColorAlpha(st.bg ?? defBg, st.bgOpacity ?? (light ? 0.9 : 0.55));
   const padV = unit * 0.014;
@@ -236,9 +246,20 @@ const SoundTrack: React.FC<{ audio: NonNullable<Project["audio"]>; fps: number; 
 
   return (
     <Sequence from={start} durationInFrames={length}>
-      {/* useWebAudioApi：音量 >1 时预览靠 GainNode 放大；不加的话浏览器把 volume 夹到 1，
-          会出现"面板写着 300%、预览没变、只有成片变大" */}
-      <Audio src={resolveAudioSrc(audio.src)} volume={volume} loop={audio.loop} useWebAudioApi />
+      {/*
+        useWebAudioApi 只在**配置音量 > 1** 时开：
+        - 它的唯一用途是让音量能超过 1（HTML5 的 volume 上限是 1）
+        - 代价是音频走 Web Audio 图，调度和主线程共享 —— 抽帧/渲染抢 CPU 时
+          会缓冲欠载，表现就是"沙哑 / 某几帧没声 / 过一会儿又好了"
+        - 判断用 `audio.volume`（配置值，整段恒定）而不是 `volume`（每帧插值）：
+          否则淡入时判断会翻转，组件重新挂载 → 音频直接中断
+      */}
+      <Audio
+        src={resolveAudioSrc(audio.src)}
+        volume={volume}
+        loop={audio.loop}
+        useWebAudioApi={audio.volume > 1}
+      />
     </Sequence>
   );
 };
@@ -252,7 +273,8 @@ const TrackAudio: React.FC<{ clip: AudioClip; fps: number }> = ({ clip, fps }) =
       ? interpolate(frame, [0, fadeIn], [0, clip.volume], { extrapolateRight: "clamp" })
       : clip.volume;
   const volume = base * curveGainAt(clip.gainCurve, frame / fps);
-  return <Audio src={resolveAudioSrc(clip.src)} volume={volume} useWebAudioApi />;
+  // 同上：按配置音量判断，不按插值结果
+  return <Audio src={resolveAudioSrc(clip.src)} volume={volume} useWebAudioApi={clip.volume > 1} />;
 };
 
 export type VideoProps = Project & { formatKey: string };
@@ -293,7 +315,7 @@ export const Video: React.FC<VideoProps> = ({ scenes, theme, audio, audioTracks,
           <SceneWrap
             scene={scene}
             durationInFrames={scene.durationInFrames}
-            ignoreOut={overlap > 0}
+            seamFade={overlap}
           >
             <SceneFrame sceneId={scene.id} box={scene.box}>
               {/* 元素偏移要按场景隔离，转场重叠时两边的 id 才不打架 */}

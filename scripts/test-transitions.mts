@@ -8,6 +8,8 @@
  */
 import assert from "node:assert/strict";
 import {
+  exitStyle,
+  exitWindow,
   seamOverlaps,
   TRANSITION_OPTIONS,
   TRANSITION_TYPES,
@@ -184,6 +186,84 @@ test("seamOverlaps：不能吃掉后一幕的淡出区（否则淡出时露出�
 test("seamOverlaps：三幕链各自按下一幕算", () => {
   const scenes = [{}, { transitionIn: fade(10) }, { transitionIn: fade(20) }];
   assert.deepEqual(seamOverlaps(scenes, [sp(0, 60), sp(60, 60), sp(120, 60)]), [10, 20, 0]);
+});
+
+/* ─────────────────── 接缝退场：前一幕必须真的离开 ─────────────────── */
+
+test("接缝退场：没有出场转场也要淡到 0（否则前幕文字一直留在画面上）", () => {
+  const seam = 12;
+  const first = exitStyle(null, 0, seam);
+  const mid = exitStyle(null, 5, seam);
+  const last = exitStyle(null, seam - 1, seam);
+  assert.ok(Number(first.opacity) > 0.85, `第一帧应几乎不透明，实际 ${first.opacity}`);
+  assert.ok(Number(mid.opacity) < 0.65 && Number(mid.opacity) > 0.3, `中间应半透明，实际 ${mid.opacity}`);
+  assert.equal(Number(last.opacity), 0, `最后一帧必须完全透明，实际 ${last.opacity}`);
+});
+
+test("接缝退场：给了出场转场就按它的性格（保留 blur 的 filter）", () => {
+  const seam = 12;
+  const s = exitStyle({ type: "blur", durationInFrames: 12 }, 2, seam);
+  assert.ok(String(s.filter ?? "").includes("blur"), JSON.stringify(s));
+  assert.ok(Number(s.opacity) < 1, "仍然要往下压");
+});
+
+test("出场窗口末帧必定透明（不管出场设多长）", () => {
+  const win = exitWindow({ durationInFrames: 300, seam: 8, transitionOut: { type: "fade", durationInFrames: 30 } });
+  const last = exitStyle({ type: "fade", durationInFrames: 30 }, win.len - 1, win.len);
+  assert.equal(Number(last.opacity), 0);
+});
+
+test("接缝退场：透明度单调下降（中间不能回弹）", () => {
+  const seam = 15;
+  let prev = 1.1;
+  for (let f = 0; f < seam; f++) {
+    const o = Number(exitStyle({ type: "slide", durationInFrames: 15 }, f, seam).opacity);
+    assert.ok(o <= prev, `第 ${f} 帧 ${o} 比上一帧 ${prev} 还大`);
+    prev = o;
+  }
+  assert.equal(prev, 0);
+});
+
+/* ─────────────── 出场窗口：不再被下一幕的入场时长压缩 ─────────────── */
+
+test("出场比接缝长 → 窗口取出场时长，起点提前到接缝之前（这就是用户看到的问题）", () => {
+  // 前幕 out=slide 30 帧，下幕 in=blur 12 帧 → 接缝只有 12
+  const win = exitWindow({ durationInFrames: 300, seam: 12, transitionOut: { type: "slide", durationInFrames: 30 } });
+  assert.equal(win.len, 30, "窗口应该是出场的 30 帧，而不是接缝的 12 帧");
+  assert.equal(win.start, 300 + 12 - 30, "起点在接缝前 18 帧（300 - 18）");
+  assert.ok(win.start < 300, "必须在幕内就开始退，否则又变成挤进接缝");
+});
+
+test("出场比接缝短 → 窗口取接缝长度，行为和以前一致", () => {
+  const win = exitWindow({ durationInFrames: 300, seam: 30, transitionOut: { type: "slide", durationInFrames: 12 } });
+  assert.equal(win.len, 30, "窗口至少要覆盖接缝，前幕才能真的退出去");
+  assert.equal(win.start, 300, "起点正好在接缝处");
+});
+
+test("没有接缝（下幕硬切）→ 窗口就是出场自己的时长", () => {
+  const win = exitWindow({ durationInFrames: 300, seam: 0, transitionOut: { type: "slide", durationInFrames: 30 } });
+  assert.equal(win.len, 30);
+  assert.equal(win.start, 270);
+});
+
+test("既没接缝也没出场 → 窗口为 0（不做任何样式）", () => {
+  const win = exitWindow({ durationInFrames: 300, seam: 0, transitionOut: null });
+  assert.equal(win.len, 0);
+});
+
+test("出场设得比整幕还长 → 压到整幕，起点不越界", () => {
+  const win = exitWindow({ durationInFrames: 100, seam: 10, transitionOut: { type: "slide", durationInFrames: 500 } });
+  assert.equal(win.start, 0, "起点不能为负");
+  assert.equal(win.len, 110, "窗口 = 幕长 + 接缝");
+});
+
+test("入场是 none 时报文无意义，但出场仍按自己的时长走", () => {
+  const win = exitWindow({
+    durationInFrames: 200,
+    seam: 0,
+    transitionOut: { type: "blur", durationInFrames: 20 },
+  });
+  assert.deepEqual(win, { start: 180, len: 20 });
 });
 
 /* ────────────────────────── 汇总 ────────────────────────── */

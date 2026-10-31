@@ -58,7 +58,8 @@ export function transitionStyle(
     case "none":
       return {};
     case "slide":
-      return { opacity: fadeIn, transform: `translateY(${lerp(6, 0, p)}%)` };
+      // toFixed 而非直接拼：lerp 会吐 0.20000000000000018 这种值，CSS 里又长又难读
+      return { opacity: fadeIn, transform: `translateY(${lerp(6, 0, p).toFixed(2)}%)` };
     case "wipe":
       return { clipPath: `inset(0 0 ${lerp(100, 0, p).toFixed(2)}% 0)` };
     case "zoom":
@@ -82,6 +83,79 @@ export function transitionStyle(
     }
   }
 }
+
+/**
+ * 出场窗口：前一幕从第几帧开始退、退多久。
+ *
+ * ## 为什么要有"窗口"这个概念
+ *
+ * 以前出场被拆成两套逻辑：没接缝时按自己的 `transitionOut` 播；有接缝时
+ * 被 `seamExitStyle` 塞进"接缝长度"里。而接缝长度是**下一幕入场时长**决定的 ——
+ * 于是「前幕设 30 帧出场 + 下幕设 12 帧入场」时，30 帧的出场会被压进 12 帧，
+ * 变成 2.5 倍速，看起来像"出场转场没生效"。
+ *
+ * 现在统一成：前幕的渲染窗口是 `[0, 幕长 + 接缝)`，出场窗口取
+ * **`max(出场时长, 接缝长度)`**，从窗口末尾往回推。
+ *
+ * - 出场 ≤ 接缝 → 起点落在接缝内，行为和以前一样
+ * - 出场 > 接缝 → 起点提前到接缝之前，出场能完整播完（速度不变）
+ *
+ * 重叠长度一点都没变，所以叠字窗口不会变长 —— 这是选这个方案而不是
+ * "接缝取 max(入场, 出场)" 的原因（那会把两幕同屏的时间拉长）。
+ */
+export function exitWindow(opts: {
+  /** 本幕时长（帧） */
+  durationInFrames: number;
+  /** 接缝重叠帧数（由下一幕入场决定，0 = 没有接缝） */
+  seam: number;
+  /** 出场转场；没有就是 null */
+  transitionOut?: { type: TransitionType; durationInFrames: number } | null;
+}): { start: number; len: number } {
+  const seam = Math.max(0, Math.round(opts.seam));
+  const dur = Math.max(0, Math.round(opts.durationInFrames));
+  const outDur =
+    opts.transitionOut && opts.transitionOut.type !== "none"
+      ? Math.max(0, Math.round(opts.transitionOut.durationInFrames))
+      : 0;
+  // 窗口至少覆盖接缝（保证前一幕真的退出去），出场更长时以出场为准（保证它播得完整）
+  const wantLen = Math.max(outDur, seam);
+  const windowEnd = dur + seam;
+  // 出场比整幕还长时只能压到整幕（否则起点为负，第一帧就已经退完了）
+  const start = Math.max(0, windowEnd - wantLen);
+  return { start, len: windowEnd - start };
+}
+
+/**
+ * 出场样式：在"出场窗口"内退场。
+ *
+ * 两个保证：
+ * 1. **opacity 一定走到 0** —— 前一幕必须真的离开（复盘 R6：以前接缝期前幕被 Freeze 定格，
+ *    文字一直留在画面上，拉长转场只是拉长露字窗口）
+ * 2. 有 `transitionOut` 就按它的性格退（保留 slide 的位移、blur 的 filter），
+ *    没有就纯淡出
+ *
+ * @param outT 出场转场（可为 null）
+ * @param framesIntoOut 进入出场窗口后的第几帧（0 起）
+ * @param outWindowLen 出场窗口长度（= exitWindow().len）
+ */
+export function exitStyle(
+  outT: { type: TransitionType; durationInFrames: number } | null | undefined,
+  framesIntoOut: number,
+  outWindowLen: number,
+  sceneDurationInFrames = outWindowLen,
+): TransitionStyle {
+  const len = Math.max(1, outWindowLen);
+  const p = clamp01((Math.max(0, framesIntoOut) + 1) / len);
+  const hasOut = !!outT && outT.type !== "none";
+  // 出场 = 反向播放同一套转场：进度从 1 走到 0
+  const base: TransitionStyle = hasOut
+    ? transitionStyle(outT!.type, Math.round((1 - p) * len), len, sceneDurationInFrames)
+    : {};
+  return { ...base, opacity: p >= 1 ? 0 : 1 - p };
+}
+
+/** @deprecated 用 exitStyle + exitWindow（语义从"接缝内"改成"出场窗口内"） */
+export const seamExitStyle = exitStyle;
 
 /* ─────────────────── 接缝重叠：让相邻两幕真的叠在一起 ─────────────────── */
 

@@ -34,8 +34,11 @@ import { zodToJsonSchema } from "zod-to-json-schema";
 import { TOOLS, CORE_TOOL_NAMES, exposeAllTools, validateToolArgs } from "./mcp-tools";
 import { library } from "./library.service";
 import { readBrief, saveBrief } from "./brief.service";
+import { markNarrationHeard, readTiming, saveTiming } from "./narration-timing.service";
+import { appendDecision, readDecisions, type DecisionKind } from "./decision-log.service";
 import { readStoryboard, saveStoryboard } from "./storyboard.service";
 import {
+  activeRenderTask,
   bundleState,
   cancelTask,
   enqueueVideo,
@@ -43,6 +46,7 @@ import {
   getTask,
   listTasks,
   renderStills,
+  renderPreviewClip,
   resetBundle,
 } from "./render.service";
 import { probeMany } from "./media.service";
@@ -789,6 +793,7 @@ app.post("/api/projects/:id/ops", async (c) => {
     return c.json({
       project: result.project,
       createdSceneIds: result.createdSceneIds,
+      createdIds: result.createdIds,
       summary: result.summary,
     });
   } catch (err) {
@@ -988,6 +993,98 @@ app.get("/api/projects/:id/brief", (c) => {
   }
 });
 
+/**
+ * 旁白时长骨架：TTS 实测出来的每段帧数。
+ * 单独一个文件而不是塞进 brief —— 它是"实测产物"，会随稿子重配而变，
+ * 和"用户拍板的需求"混在一起，改稿就会把需求覆盖掉。
+ */
+app.get("/api/projects/:id/narration-timing", (c) => {
+  try {
+    return c.json({ timing: readTiming(c.req.param("id")) });
+  } catch (err) {
+    return fail(c, err);
+  }
+});
+
+app.put("/api/projects/:id/narration-timing", async (c) => {
+  try {
+    const body = (await c.req.json()) as {
+      fps?: number;
+      totalSec?: number;
+      segments?: { text: string; frames: number; suggested: number; durationSec: number; sceneId?: string }[];
+    };
+    const segments = (body.segments ?? []).map((x, i) => ({ ...x, index: i + 1 }));
+    if (!segments.length) throw new Error("segments 不能为空");
+    const fps = Number(body.fps) > 0 ? Number(body.fps) : 30;
+    const totalSec =
+      Number(body.totalSec) > 0
+        ? Number(body.totalSec)
+        : segments.reduce((n, x) => n + Number(x.suggested || 0), 0) / fps;
+    const timing = saveTiming(c.req.param("id"), { fps, totalSec, segments });
+    return c.json({ timing });
+  } catch (err) {
+    return fail(c, err);
+  }
+});
+
+/**
+ * 记录「用户听过这一版配音」。
+ *
+ * 为什么不是 PUT .../narration-timing 的一个布尔字段：
+ * 布尔记不下"用户到底说了什么"，而事故里翻车的正是**用户的话被理解错**
+ * （「可以，先合成配音试听」被当成「稿子确认完毕，可以往下走」）。
+ * 这里要求带原话，并在 decisions.jsonl 留痕。
+ */
+/**
+ * 决策审计：记录「agent 声称用户在某个闸口点了头」以及用户的原话。
+ * 工具验证不了真伪，但能保证「哪句话被当成了授权」留得下来。
+ */
+app.post("/api/projects/:id/decisions", async (c) => {
+  try {
+    const body = (await c.req.json().catch(() => ({}))) as {
+      kind?: DecisionKind;
+      userQuote?: string;
+      note?: string;
+      meta?: Record<string, unknown>;
+    };
+    if (!body.kind) throw new Error("缺 kind");
+    const rec = appendDecision(c.req.param("id"), {
+      kind: body.kind,
+      userQuote: String(body.userQuote ?? "").trim(),
+      note: body.note,
+      meta: body.meta,
+    });
+    return c.json({ decision: rec });
+  } catch (err) {
+    return fail(c, err);
+  }
+});
+
+app.get("/api/projects/:id/decisions", (c) => {
+  try {
+    return c.json({ decisions: readDecisions(c.req.param("id")) });
+  } catch (err) {
+    return fail(c, err);
+  }
+});
+
+app.post("/api/projects/:id/narration-heard", async (c) => {
+  try {
+    const body = (await c.req.json().catch(() => ({}))) as { userSaid?: string };
+    const said = String(body.userSaid ?? "").trim();
+    if (said.length < 5) {
+      throw new Error(
+        `要带用户原话（至少 5 字），不是「用户同意了」。收到的是「${said}」——` +
+          `把他说过的那句话原样贴进来，事后才查得出他到底同意了什么`,
+      );
+    }
+    const timing = markNarrationHeard(c.req.param("id"), said);
+    return c.json({ timing });
+  } catch (err) {
+    return fail(c, err);
+  }
+});
+
 app.put("/api/projects/:id/brief", async (c) => {
   try {
     const body = (await c.req.json().catch(() => ({}))) as Record<string, unknown>;
@@ -1169,8 +1266,25 @@ app.get("/api/assets/probe", async (c) => {
   }
 });
 
+/**
+ * 渲染互斥检查：视频渲染与抽帧复用同一个浏览器实例，渲染中抽帧会撞 28s delayRender 超时，
+ * 而旧回执里一个字都不提「正在渲染」——调用方只能靠猜（那次 render_cover 就是这么失败的）。
+ */
+function busyRender(c: any) {
+  const t = activeRenderTask();
+  if (!t) return null;
+  const elapsed = Math.round((Date.now() - (t.startedAt ?? t.createdAt)) / 1000);
+  const msg =
+    `正在渲染「${t.projectName ?? t.projectId}」（taskId=${t.id}，${t.status} ${t.progress}%，已跑 ${elapsed}s）。` +
+    `渲染与抽帧共用同一个浏览器实例，渲染期间抽帧会超时（delayRender 28s）。` +
+    `要么等它结束（get_render_status(taskId="${t.id}")），要么先 cancel_render(taskId="${t.id}") 再抽帧。`;
+  return c.json({ error: msg, taskId: t.id, progress: t.progress, status: t.status }, 409);
+}
+
 app.post("/api/projects/:id/stills", async (c) => {
   try {
+    const busy = busyRender(c);
+    if (busy) return busy;
     const body = (await c.req.json().catch(() => ({}))) as {
       frame?: number;
       formats?: string[];
@@ -1179,6 +1293,41 @@ app.post("/api/projects/:id/stills", async (c) => {
     const project = projects.get(c.req.param("id"));
     const stills = await renderStills(project, body.frame, body.formats, body.tag);
     return c.json({ stills });
+  } catch (err) {
+    return fail(c, err);
+  }
+});
+
+/**
+ * 6 秒预览片段：把「看见动态」的成本从整片 12 分钟压到几十秒。
+ * 参数用帧而不是秒——调用方（agent）手上本来就是帧（sceneSpans / 分镜），
+ * 中途换算一次就会错一次。
+ */
+app.post("/api/projects/:id/preview-clip", async (c) => {
+  try {
+    const busy = busyRender(c);
+    if (busy) return busy;
+    const body = (await c.req.json().catch(() => ({}))) as {
+      startFrame?: number;
+      endFrame?: number;
+      format?: string;
+      scale?: number;
+      audio?: boolean;
+      tag?: string;
+    };
+    if (!Number.isFinite(Number(body.startFrame)) || !Number.isFinite(Number(body.endFrame))) {
+      throw new Error("要给 startFrame / endFrame（帧号，不是秒）");
+    }
+    const project = projects.get(c.req.param("id"));
+    const clip = await renderPreviewClip(project, {
+      startFrame: Number(body.startFrame),
+      endFrame: Number(body.endFrame),
+      formatKey: body.format,
+      scale: body.scale,
+      withAudio: body.audio,
+      tag: body.tag,
+    });
+    return c.json({ clip });
   } catch (err) {
     return fail(c, err);
   }

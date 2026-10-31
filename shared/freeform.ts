@@ -36,12 +36,29 @@ export const freeElSchema = z.object({
   lineHeight: z.number().optional(),
   letterSpacing: z.number().optional(),
   textAlign: z.enum(["left", "center", "right"]).optional(),
+  /**
+   * 最大宽度（**短边百分比**：竖屏 1080×1920 下 1 单位 = 10.8px）。
+   * 超过就折行；没给就按单行排。
+   */
   maxWidth: z.number().optional(),
+  /**
+   * x 指的是元素的哪一侧。默认 center（与历史行为一致：x 是中心点）。
+   * 以前只有 center，写 textAlign:"left" 也没用——那只对齐**框内**的行，框本身不动，
+   * 所以"设了左对齐却左边溢出"。
+   */
+  anchor: z.enum(["center", "left"]).optional(),
 
   /* 位置（百分比 / 短边百分比） */
   x: z.number().default(50),
   y: z.number().default(50),
   size: z.number().default(10).describe("短边百分比：文字是字号，形状/图片是宽度"),
+  /**
+   * 宽 / 高（**短边百分比**）。不传就沿用 size（正方形），存量画面一字不变。
+   * 存在的理由：以前形状只有 size，`size:76` 想画一条 76%×20% 的横条会变成 76%×76% 的大方块
+   * —— 那次就是这样把数字盖住的。要给矩形/图片单独定高矮，用它。
+   */
+  width: z.number().optional().describe("宽度（短边百分比），不传 = size"),
+  height: z.number().optional().describe("高度（短边百分比），不传 = size（线：厚度仍是高的 3%）"),
   rotate: z.number().default(0),
   scale: z.number().default(1),
   opacity: z.number().default(1),
@@ -376,4 +393,62 @@ export function reorderFreeElements(
     elements: out.map((it) => it.el),
     moved: out.map((it, pos) => (sel.has(it.i) ? pos : -1)).filter((pos) => pos >= 0),
   };
+}
+
+/**
+ * 生成"逐个淡入上浮"的入场关键帧（stagger）。
+ *
+ * 抽成纯函数是为了能单测：这里最容易出的错是**时间窗越界**——
+ * 第 N 个元素的 at1 超过幕长，动画就永远播不完（画面停在半透明）；
+ * 或者 at0 >= at1，关键帧直接失效。这两种都不会报错，只会"看起来怪"。
+ */
+export function staggerAnim(opts: {
+  /** 元素最终 y（关键帧里是绝对值，所以 from 必须写成 y + 偏移） */
+  y: number;
+  index: number;
+  sceneDur: number;
+  step?: number;
+  inFrames?: number;
+  /** 上浮距离（画面百分比），默认 4 */
+  rise?: number;
+}): NonNullable<FreeEl["anim"]> {
+  const step = Math.max(0, opts.step ?? 3);
+  const inFrames = Math.max(1, opts.inFrames ?? 14);
+  const rise = opts.rise ?? 4;
+  const dur = Math.max(2, Math.floor(opts.sceneDur));
+  const at0 = Math.min(Math.max(0, opts.index) * step, dur - 2);
+  const at1 = Math.min(at0 + inFrames, dur - 1);
+  return [
+    {
+      at: [at0, Math.max(at0 + 1, at1)],
+      from: { opacity: 0, y: opts.y + rise },
+      to: { opacity: 1, y: opts.y },
+      ease: "easeInOut",
+    },
+  ];
+}
+
+/**
+ * `stroke` 归一化。
+ *
+ * 这里的坑：`stroke` 在**叠加层元素**里是布尔（线稿 or 填充），在 **freeform 元素**里是颜色字符串，
+ * `strokeWidth` 才是宽度。于是有人写 `stroke: true` 会得到「Expected string, received boolean」，
+ * 写 `strokeWidth: true` 会得到「Expected number, received boolean」—— 报错文案完全没提示该怎么办。
+ *
+ * 这里做容错：true → 用 fill 当描边色 + 宽度 2；false → 去掉描边；strokeWidth 收到布尔就换算成 2/0。
+ */
+export function normalizeFreeElement(el: Record<string, unknown>): Record<string, unknown> {
+  const out = { ...el };
+  if (typeof out.stroke === "boolean") {
+    if (out.stroke) {
+      out.stroke = typeof out.fill === "string" ? out.fill : "#FFFFFF";
+      if (out.strokeWidth === undefined) out.strokeWidth = 2;
+    } else {
+      delete out.stroke;
+    }
+  }
+  if (typeof out.strokeWidth === "boolean") {
+    out.strokeWidth = out.strokeWidth ? 2 : 0;
+  }
+  return out;
 }

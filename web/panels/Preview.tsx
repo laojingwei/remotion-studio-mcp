@@ -160,6 +160,25 @@ export const Preview: React.FC<Props> = ({ playerRef }) => {
   // 滚轮监听是原生的，读不到最新 state，只能靠 ref
   const zoomRef = useRef(1);
   const panRef = useRef({ x: 0, y: 0 });
+  /**
+   * 共享音频标签池：**设 0 = 不用池，每个 `<Audio>` 按需挂载自己的原生标签**。
+   *
+   * 踩过的两个坑：
+   * 1. 这个 prop 一旦设定不能再改，改了抛 `has changed dynamically` 并崩掉播放器
+   *    —— 所以不能写成 `幕数 * 2` 这种会变的值；
+   * 2. 池子**不是排队机制**：挂载数超过池大小会直接抛
+   *    `Tried to simultaneously mount N+1 tags`。所以调大只是把报错往后推。
+   *
+   * 为什么直接设 0：
+   * - 我们的场景是 `scenes.map()` 并列 `<Sequence>`，**所有**场景里的 `<Audio>` 会同时挂载，
+   *   十几幕就要十几个标签，上百个音频根本不可能给够；
+   * - 0 模式下按需挂载，不受数量限制，内存反而更省（不用预挂 50 个空标签）；
+   * - Remotion 5.0 已把默认值改成 0，官方也认为这个"预挂载绕自动播放限制"的优化弊大于利。
+   *
+   * 代价：失去"预先在用户手势里启动静音标签"的能力。我们是用户点播放（有手势），
+   * 桌面浏览器不受影响；只有 iOS Safari 的延迟音频可能被拦。
+   */
+  const sharedAudioTags = 0;
   const boxesRef = useRef<Box[]>([]);
 
   zoomRef.current = zoom;
@@ -1164,6 +1183,7 @@ export const Preview: React.FC<Props> = ({ playerRef }) => {
             clickToPlay={false}
             spaceKeyToPlayOrPause={false}
             doubleClickToFullscreen={false}
+            numberOfSharedAudioTags={sharedAudioTags}
             acknowledgeRemotionLicense
           />
 

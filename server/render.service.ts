@@ -7,7 +7,7 @@ import { makeCancelSignal, openBrowser, renderMedia, renderStill, selectComposit
 import type { Project } from "../shared/schema";
 import { totalDuration } from "../shared/schema";
 import { PUBLIC_DIR } from "./store";
-import { cleanupOutputs, ensureOutDir, outDirOf } from "./outputs.service";
+import { cleanupOutputs, ensureOutDir, outDirOf, projectOutDir } from "./outputs.service";
 
 let serveUrlPromise: Promise<string> | null = null;
 
@@ -327,6 +327,8 @@ export type RenderTask = {
   createdAt: number;
   /** 最后一次状态变化时间（结束时间可能就是它），给编辑器算「已经跑了多久」 */
   updatedAt?: number;
+  /** 第一次进入 rendering 的时间：算实测速率与剩余时间，别再用「8.8 帧/秒」那种假常数 */
+  startedAt?: number;
 };
 
 export type RenderQuality = "low" | "standard" | "high";
@@ -353,6 +355,13 @@ let chain: Promise<unknown> = Promise.resolve();
 
 export const getTask = (id: string) => tasks.get(id);
 export const listTasks = () => [...tasks.values()].sort((a, b) => b.createdAt - a.createdAt);
+
+/** 正在跑（含排队/打包）的任务：渲染与静帧共用同一个浏览器实例，撞上就是 28s delayRender 超时 */
+export function activeRenderTask(): RenderTask | undefined {
+  return listTasks().find(
+    (t) => t.status === "queued" || t.status === "bundling" || t.status === "rendering",
+  );
+}
 
 /** 只留最近 30 条已结束的任务：编辑器会定时拉全表，长会话里不能无限长 */
 function pruneTasks() {
@@ -446,6 +455,7 @@ async function runTask(task: RenderTask, project: Project) {
       if (isCancelled(task)) return;
 
       task.status = "rendering";
+      if (!task.startedAt) task.startedAt = Date.now();
       // 多画幅是逐个渲的，进度会从 0 重来：带上「当前画幅」编辑器才不会以为卡死/重启
       task.currentFormat = key;
       task.progress = 0;
@@ -524,4 +534,110 @@ async function runTask(task: RenderTask, project: Project) {
   } finally {
     cancels.delete(task.id);
   }
+}
+
+
+/* ─────────────────── 动态预览片段：6 秒带声低码率 ─────────────────── */
+
+/**
+ * 为什么需要它：
+ * 现在的验证手段只有两极 —— 一张静帧（看不出转场/节奏）和整片（98 秒要渲 12 分钟）。
+ * 复盘里 6 轮返工有 5 轮是"必须看动 / 听声才能判断"的项（转场 4 轮、BGM 5 次、字幕 5 次、动画 1 轮），
+ * 全都只能在最贵的阶段才发现。这个函数就是把"看见动态"的成本从 12 分钟压到几十秒。
+ *
+ * 输出到 out/projects/<id>/previews/，不参与成片清理（清理由 cleanupOutputs 单独收）。
+ */
+export type PreviewClipResult = {
+  format: string;
+  url: string;
+  localPath: string;
+  startFrame: number;
+  endFrame: number;
+  sections: number;
+  scale: number;
+  withAudio: boolean;
+  bundleMs: number;
+  renderMs: number;
+};
+
+export async function renderPreviewClip(
+  project: Project,
+  opts: {
+    startFrame: number;
+    endFrame: number;
+    formatKey?: string;
+    /** 0.3–0.6 够看动态；默认 0.5（1080×1920 → 540×960） */
+    scale?: number;
+    /** 默认带音轨（BGM / 旁白的问题只能听出来） */
+    withAudio?: boolean;
+    tag?: string;
+  },
+): Promise<PreviewClipResult> {
+  const fmt =
+    project.formats.find((f) => f.key === opts.formatKey) ?? project.formats[0];
+  if (!fmt) throw new Error("工程没有画幅，无法生成预览片段");
+
+  const dir = path.join(projectOutDir(project.id), "previews");
+  fs.mkdirSync(dir, { recursive: true });
+
+  const t0 = Date.now();
+  const serveUrl = await getServeUrl();
+  const bundleMs = Date.now() - t0;
+
+  const inputProps = { ...project, formatKey: fmt.key };
+  const puppeteerInstance = await getBrowser();
+  const composition = await selectComposition({
+    puppeteerInstance,
+    serveUrl,
+    id: "Video",
+    inputProps,
+    browserExecutable: BROWSER?.path,
+    chromeMode: BROWSER?.mode,
+  });
+
+  const total = Math.max(2, composition.durationInFrames);
+  const start = Math.max(0, Math.min(total - 2, Math.round(opts.startFrame)));
+  const end = Math.max(start + 1, Math.min(total - 1, Math.round(opts.endFrame)));
+  const scale = Math.min(0.6, Math.max(0.3, opts.scale ?? 0.5));
+  const withAudio = opts.withAudio !== false;
+
+  const now = new Date();
+  const pad = (n: number) => String(n).padStart(2, "0");
+  const stamp = `${pad(now.getHours())}${pad(now.getMinutes())}${pad(now.getSeconds())}`;
+  const safeTag = String(opts.tag ?? "").replace(/[^\w-]/g, "").slice(0, 20);
+  const file =
+    `clip_${fmt.key}_${start}-${end}_r${project.rev}_${stamp}` +
+    `${safeTag ? `-${safeTag}` : ""}.mp4`;
+  const output = path.join(dir, file);
+
+  const t1 = Date.now();
+  await renderMedia({
+    puppeteerInstance,
+    browserExecutable: BROWSER?.path,
+    chromeMode: BROWSER?.mode,
+    serveUrl,
+    composition,
+    inputProps,
+    codec: "h264",
+    // 预览不看画质，看"动起来对不对"：crf 30 + 半分辨率，几十秒出片
+    crf: 30,
+    scale,
+    muted: !withAudio,
+    frameRange: [start, end],
+    outputLocation: output,
+    concurrency: 1,
+  });
+
+  return {
+    format: fmt.key,
+    url: `/out/projects/${project.id}/previews/${file}`,
+    localPath: output,
+    startFrame: start,
+    endFrame: end,
+    sections: end - start + 1,
+    scale,
+    withAudio,
+    bundleMs,
+    renderMs: Date.now() - t1,
+  };
 }
