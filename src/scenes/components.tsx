@@ -45,6 +45,14 @@ import { ScrambleScene } from "./scramble/Scramble";
 import { BokehScene } from "./bokeh/Bokeh";
 import { SparksScene } from "./sparks/Sparks";
 import { VhsScene } from "./vhs/Vhs";
+import { HighlightScene } from "./highlight/Highlight";
+import { StompScene } from "./stomp/Stomp";
+import { WipeScene } from "./wipe/Wipe";
+import { MarqueeScene } from "./marquee/Marquee";
+import { SpotlightScene } from "./spotlight/Spotlight";
+import { GridflowScene } from "./gridflow/Gridflow";
+import { RainScene } from "./rain/Rain";
+import { LiquidScene } from "./liquid/Liquid";
 
 /**
  * 场景组件注册表：type → 渲染组件
@@ -105,4 +113,13 @@ export const SCENE_COMPONENTS: Record<string, React.FC<any>> = {
   bokeh: BokehScene,
   sparks: SparksScene,
   vhs: VhsScene,
+  // 第三批（2026-10-31）：文字强调 + 背景氛围
+  highlight: HighlightScene,
+  stomp: StompScene,
+  wipe: WipeScene,
+  marquee: MarqueeScene,
+  spotlight: SpotlightScene,
+  gridflow: GridflowScene,
+  rain: RainScene,
+  liquid: LiquidScene,
 };

@@ -27,6 +27,16 @@ export const MOTION_SCENE_TYPES = new Set([
   "bokeh",
   "sparks",
   "vhs",
+  // 第三批：文字强调（都是"一句/一行在动"，字号由版式自己按字长算）
+  "highlight",
+  "stomp",
+  "wipe",
+  "marquee",
+  // 第三批：背景氛围
+  "spotlight",
+  "gridflow",
+  "rain",
+  "liquid",
 ]);
 
 export const isMotionScene = (type?: string): boolean =>
@@ -35,17 +45,42 @@ export const isMotionScene = (type?: string): boolean =>
 /**
  * 可以当「氛围层」叠在版式底下的动效类型（Scene.backdrop.type 只能填这些）。
  *
- * 只有纯氛围的 6 个在名单里。另外 4 个（打字机 / 数字滚动 / 渐变字 / 乱码）
- * 本身带正文，垫在别的版式下面会同时出现两套字 —— 那不是"氛围"，是事故。
+ * 只有纯氛围的类型在名单里。带正文的那几个（打字机 / 数字滚动 / 渐变字 / 乱码 /
+ * 荧光扫亮 / 冲击字 / 色带擦除 / 跑马灯）本身有字，垫在别的版式下面会同时出现两套字
+ * —— 那不是"氛围"，是事故。
  *
  * 为什么单独一张表而不是复用 MOTION_SCENE_TYPES：
  * MOTION 是"不参与版面审计"的性质，BACKDROP 是"能不能当背景"的能力，
- * 两者刚好在这 6 个上重合，但语义不同，将来会分叉（比如加一个纯几何图形版式，
- * 它可能是氛围但仍是版式，要做审计）。
+ * 两者只是部分重合，语义不同，会一直分叉（荧光扫亮是 MOTION 但不是 BACKDROP）。
  */
-export const BACKDROP_TYPES = ["glow", "grain", "lightleak", "bokeh", "sparks", "vhs"] as const;
+export const BACKDROP_TYPES = [
+  // 第一批 / 第二批
+  "glow",
+  "grain",
+  "lightleak",
+  "bokeh",
+  "sparks",
+  "vhs",
+  // 第三批：没有正文，纯氛围
+  "spotlight",
+  "gridflow",
+  "rain",
+  "liquid",
+] as const;
 
 export type BackdropType = (typeof BACKDROP_TYPES)[number];
+
+/**
+ * 有「完整一轮」概念的氛围类型 —— 只有它们支持 mode="once"（走完一轮就停）。
+ *
+ * 漏光是"扫过一条带子"；光晕/散景/流体是永续漂移，颗粒/磁带逐帧随机，
+ * 网格是一直往前流的，它们都没有"一轮"可言，给了 once 也只是原地定住，
+ * 用户会以为设置没生效。所以面板上只对这张表里的类型显示"播放次数"。
+ */
+export const PERIODIC_BACKDROP_TYPES = new Set(["lightleak"]);
+
+export const isPeriodicBackdrop = (type?: string): boolean =>
+  !!type && PERIODIC_BACKDROP_TYPES.has(type);
 
 export const isBackdropType = (type?: string): boolean =>
   !!type && (BACKDROP_TYPES as readonly string[]).includes(type);

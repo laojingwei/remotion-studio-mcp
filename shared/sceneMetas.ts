@@ -1104,6 +1104,154 @@ export const vhsMeta: SceneMeta = {
   elements: [{ id: "text", label: "主文案" }],
 };
 
+/* ─────────── 第三批：文字强调（4 个） ─────────── */
+
+export const highlightMeta: SceneMeta = {
+  type: "highlight",
+  name: "荧光扫亮",
+  category: "动效",
+  summary: "一句话里，某个词被一支笔从左扫亮；字不动、笔在动，适合抬起长句里的关键词",
+  schema: z.object({
+    text: z.string().describe("主文案，一句完整的话"),
+    highlight: z.string().default("").describe("要扫亮的词，必须是 text 里的一段；留空 = 普通排版"),
+    sub: z.string().default("").describe("副标题，扫完才出现，可留空"),
+    mark: z.enum(["荧光笔", "色块", "下划线"]).default("荧光笔").describe("标记样式：荧光笔最柔和，色块最强调"),
+  }),
+  defaultProps: {
+    text: "一万音浪听着热闹，到手只剩三百七",
+    highlight: "三百七",
+    sub: "账面流水不等于你的钱",
+    mark: "荧光笔",
+  },
+  duration: { default: 120, min: MIN_SCENE_FRAMES, max: 108000 },
+  elements: [{ id: "text", label: "主文案" }, { id: "sub", label: "副标题" }],
+};
+
+export const stompMeta: SceneMeta = {
+  type: "stomp",
+  name: "冲击字",
+  category: "动效",
+  summary: "整块大字从近处砸下来，落地震一下、炸开一道横线；适合必须被记住的那一句",
+  schema: z.object({
+    text: z.string().describe("主文案，一行放得下最好；超过 8 字会自动缩小"),
+    sub: z.string().default("").describe("副标题，砸完之后出现，可留空"),
+    kicker: z.string().default("").describe("顶部小标签，可留空"),
+  }),
+  defaultProps: {
+    text: "这钱不是你的",
+    sub: "平台、公会、税，三层分完才是你的",
+    kicker: "先说结论",
+  },
+  duration: { default: 100, min: MIN_SCENE_FRAMES, max: 108000 },
+  elements: [{ id: "kicker", label: "小标签" }, { id: "text", label: "主文案" }, { id: "sub", label: "副标题" }],
+};
+
+export const wipeMeta: SceneMeta = {
+  type: "wipe",
+  name: "色带擦除",
+  category: "动效",
+  summary: "色带横向推开露出文案，逐行错峰；比遮罩上翻更有速度感，适合清单与步骤",
+  schema: z.object({
+    kicker: z.string().default("").describe("顶部小标签，可留空"),
+    lines: z.array(z.string()).min(1).max(3).describe("文案行，1–3 行，一行一句"),
+    accentLine: z.string().default("").describe("要用主题色擦的那一行，可留空"),
+  }),
+  defaultProps: {
+    kicker: "为什么会差这么多",
+    lines: ["平台先抽走一半", "公会再分走一截", "剩下的才轮到你"],
+    accentLine: "剩下的才轮到你",
+  },
+  duration: { default: 120, min: MIN_SCENE_FRAMES, max: 108000 },
+  elements: [{ id: "kicker", label: "小标签" }, { id: "line{n}", label: "每一行" }],
+};
+
+export const marqueeMeta: SceneMeta = {
+  type: "marquee",
+  name: "跑马灯",
+  category: "动效",
+  summary: "几行大字不停往一侧滚，行与行方向可相反；用来制造「信息很多」的体感",
+  schema: z.object({
+    rows: z.array(z.string()).min(1).max(3).describe("跑马灯内容，1–3 行"),
+    speed: z.number().min(1).max(80).default(14).describe("每秒滚过一个文案宽度（10–30 最舒服）"),
+    direction: z.enum(["左", "右", "交替"]).default("交替").describe("滚动方向；交替 = 相邻行反向"),
+    separator: z.string().default(" · ").describe("文案之间的分隔符，可留空"),
+  }),
+  defaultProps: {
+    rows: ["一万音浪", "到手三百七", "平台先抽一半"],
+    speed: 14,
+    direction: "交替",
+    separator: " · ",
+  },
+  duration: { default: 150, min: MIN_SCENE_FRAMES, max: 108000 },
+  elements: [{ id: "row{n}", label: "每一行" }],
+};
+
+/* ─────────── 第三批：背景氛围（4 个） ─────────── */
+
+export const spotlightMeta: SceneMeta = {
+  type: "spotlight",
+  name: "聚光扫射",
+  category: "氛围",
+  summary: "光柱从顶上打下、缓慢左右摆，地面留一圈光斑；给画面一个舞台",
+  schema: z.object({
+    tone: z.enum(["暖", "冷"]).default("暖").describe("光色：暖（金）/ 冷（冰蓝）"),
+    sway: z.number().min(0).max(1).default(0.7).describe("摆动幅度 0–1，0 = 定住"),
+    intensity: z.number().min(0).max(1).default(0.6).describe("亮度 0–1"),
+    beams: z.number().int().min(1).max(3).default(2).describe("光柱数量 1–3"),
+  }),
+  defaultProps: { tone: "暖", sway: 0.7, intensity: 0.6, beams: 2 },
+  duration: { default: 150, min: MIN_SCENE_FRAMES, max: 108000 },
+  elements: [],
+};
+
+export const gridflowMeta: SceneMeta = {
+  type: "gridflow",
+  name: "赛博网格",
+  category: "氛围",
+  summary: "透视网格向脚下流动，地平线一圈发光；科技感开场、数据段落的底子",
+  schema: z.object({
+    horizon: z.number().min(12).max(55).default(42).describe("地平线高度（画面高度百分比）"),
+    cells: z.number().int().min(6).max(22).default(12).describe("每侧竖线数量 6–22"),
+    glow: z.number().min(0).max(1).default(0.6).describe("亮度 0–1"),
+    flow: z.number().min(0.3).max(3).default(1).describe("流动速度倍率"),
+  }),
+  defaultProps: { horizon: 42, cells: 12, glow: 0.6, flow: 1 },
+  duration: { default: 150, min: MIN_SCENE_FRAMES, max: 108000 },
+  elements: [],
+};
+
+export const rainMeta: SceneMeta = {
+  type: "rain",
+  name: "雨幕",
+  category: "氛围",
+  summary: "斜雨丝持续下落 + 底部水汽；压情绪的段落用，比如困境、亏损、等待",
+  schema: z.object({
+    count: z.number().int().min(40).max(220).default(90).describe("雨丝数量 40–220"),
+    angle: z.number().min(-30).max(30).default(14).describe("倾斜角（度），正数往右下"),
+    speed: z.number().min(0.4).max(2.5).default(1).describe("下落速度倍率"),
+    fog: z.number().min(0).max(1).default(0.5).describe("底部水汽浓度 0–1"),
+  }),
+  defaultProps: { count: 90, angle: 14, speed: 1, fog: 0.5 },
+  duration: { default: 150, min: MIN_SCENE_FRAMES, max: 108000 },
+  elements: [],
+};
+
+export const liquidMeta: SceneMeta = {
+  type: "liquid",
+  name: "流体色块",
+  category: "氛围",
+  summary: "几团色块缓慢变形、互相挤压；要「高级质感」时用它，别用光晕",
+  schema: z.object({
+    blobs: z.number().int().min(3).max(7).default(4).describe("色块数量 3–7"),
+    tone: z.enum(["双色", "主色", "次色"]).default("双色").describe("配色：双色最热闹，单色更克制"),
+    soft: z.number().min(0).max(1).default(0.6).describe("边缘柔和度 0–1"),
+    speed: z.number().min(0.3).max(2.5).default(1).describe("流动速度倍率"),
+  }),
+  defaultProps: { blobs: 4, tone: "双色", soft: 0.6, speed: 1 },
+  duration: { default: 150, min: MIN_SCENE_FRAMES, max: 108000 },
+  elements: [],
+};
+
 export const SCENE_METAS: SceneMeta[] = [
   freeformMeta,
   titleMeta,
@@ -1157,6 +1305,14 @@ export const SCENE_METAS: SceneMeta[] = [
   bokehMeta,
   sparksMeta,
   vhsMeta,
+  highlightMeta,
+  stompMeta,
+  wipeMeta,
+  marqueeMeta,
+  spotlightMeta,
+  gridflowMeta,
+  rainMeta,
+  liquidMeta,
 ];
 
 export const getMeta = (type: string): SceneMeta | undefined =>

@@ -1,6 +1,6 @@
 import React from "react";
 import type { Scene } from "@shared/schema";
-import { BACKDROP_TYPES } from "@shared/sceneKinds";
+import { BACKDROP_TYPES, isPeriodicBackdrop } from "@shared/sceneKinds";
 import { getMeta } from "@shared/sceneMetas";
 import { useDoc } from "../store";
 import { RangeInput } from "../RangeInput";
@@ -11,8 +11,9 @@ import { RangeInput } from "../RangeInput";
  * 它画在**版式底下**，所以文字不会被压、可读性不变；有氛围层时会自动
  * 让出背景色（否则这一层永远看不见）。
  *
- * 只列 BACKDROP_TYPES 里的 6 个：带正文的动效（打字机/数字/渐变字/乱码）
- * 垫在内容下面会出现两套字，不是氛围是事故。
+ * 只列 BACKDROP_TYPES：带正文的动效（打字机/数字/渐变字/乱码/荧光/冲击字/擦除/跑马灯）
+ * 垫在内容下面会出现两套字，不是氛围是事故。新增纯氛围版式时只需把它登记进那张表，
+ * 这里会自动出现，不用改面板。
  *
  * 「出现区间」默认关闭 = 铺满整幕，与这个功能上线前的画面一致；
  * 打开后才写 from / duration / fadeIn / fadeOut。
@@ -32,8 +33,12 @@ export const BackdropSection: React.FC<{ scene: Scene }> = ({ scene }) => {
   const autoSoften = bd?.fadeIn === undefined && bd?.fadeOut === undefined;
   const speed = bd?.speed ?? 1;
   const mode = bd?.mode ?? "loop";
-  /** 只有漏光有"一轮"的概念；其余类型 once 看不出差别，界面上直接不给选 */
-  const canOnce = current === "lightleak";
+  /**
+   * 只有"有完整周期"的类型才给「播放次数」。其余（光晕/散景/流体/网格）是永续漂移、
+   * 颗粒/磁带是逐帧随机，once 看不出差别 —— 给了选择反而让人以为设置没生效，
+   * 所以界面上直接不显示。判定放在 shared/sceneKinds，ops 层用的是同一张表。
+   */
+  const canOnce = isPeriodicBackdrop(current);
   const smooth = Math.max(bd?.fadeIn ?? 0, bd?.fadeOut ?? 0);
   // 只要有一项偏离默认（幕首起、铺到幕尾），就算"设了区间"
   const partial = from > 0 || dur < span - from;
@@ -278,7 +283,8 @@ export const BackdropSection: React.FC<{ scene: Scene }> = ({ scene }) => {
         </>
       ) : (
         <p className="ff-hint">
-          光晕 / 颗粒 / 漏光 / 散景 / 火花 / 磁带。画在文字**后面**，不会压字；
+          光晕 / 颗粒 / 漏光 / 散景 / 火花 / 磁带 / 聚光 / 网格 / 雨幕 / 流体。
+          画在文字**后面**，不会压字；
           和「插一幕氛围版式」不同，它不占时长，这一幕的文字照样在。
         </p>
       )}

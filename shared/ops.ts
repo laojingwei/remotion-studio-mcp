@@ -25,7 +25,7 @@ import { describeSceneBox, normalizeSceneBox, type SceneBox } from "./sceneBox";
 import { droppedProps, getMeta, MIN_SCENE_FRAMES, normalizeProps } from "./sceneMetas";
 import { effectLabel, effectSummaryText } from "./effects";
 import { TRANSITION_TYPES } from "./transitions";
-import { BACKDROP_TYPES, isBackdropType } from "./sceneKinds";
+import { BACKDROP_TYPES, isBackdropType, isPeriodicBackdrop } from "./sceneKinds";
 import {
   animLandingIssues,
   freeElSchema,
@@ -887,12 +887,13 @@ export function applyOps(project: Project, ops: Op[]): OpResult {
             : 1;
         const mode = op.backdrop.mode ?? "loop";
         /*
-         * once 只对漏光说得通：它有一整轮（扫进来 → 扫出去）。
-         * 光晕/散景是永续漂移，颗粒/磁带逐帧随机 —— 写 once 不报错但用户看不出
+         * once 只对「有完整一轮」的类型说得通：漏光会扫进来再扫出去。
+         * 光晕/散景/流体/网格是永续漂移，颗粒/磁带逐帧随机 —— 写 once 不报错但用户看不出
          * 差别，反而会以为"设置没生效"，所以这里明确提示一句。
+         * 判定用 shared/sceneKinds 的 isPeriodicBackdrop，与属性面板同一张表。
          */
         const onceNote =
-          mode === "once" && op.backdrop.type !== "lightleak"
+          mode === "once" && !isPeriodicBackdrop(op.backdrop.type)
             ? `（注意：${meta?.name ?? op.backdrop.type} 没有"一轮"的概念，once 对它没有可见效果；只有漏光会扫一次就停）`
             : "";
 
