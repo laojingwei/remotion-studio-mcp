@@ -69,7 +69,8 @@ export function readProject(id: string): Project {
  * 目前三类：
  *  - `scene.subtitleStyle.bold` 是布尔（曾把"字重"当布尔写）→ true:700 / false:400
  *  - `scene.transforms` 里有 `"undefined"` 键（旧版 set_transform 参数名写错的产物）→ 删掉
- *  - `transitionIn/Out.type` 是不存在的转场（旧 crt-vhs 预设写过 "glitch"）→ 改成 blur，
+ *  - `transitionIn/Out.type` 是不存在的转场 → 优先大小写归一（"GLITCH" → "glitch"，
+ *    2026-11 转场扩容后 glitch 本身合法了），真不存在的映射观感或退回 blur，
  *    否则这个工程每次打开都报「数据不合法」，直接打不开
  */
 export function repairKnownDirtyValues(project: Record<string, unknown>): boolean {
@@ -91,10 +92,18 @@ export function repairKnownDirtyValues(project: Record<string, unknown>): boolea
       const tr = sc[key] as Record<string, unknown> | undefined;
       if (!tr || typeof tr !== "object") continue;
       const type = String(tr.type ?? "");
+      // 先试大小写归一：glitch 在 2026-11 转场扩容后成了合法类型，历史数据里
+      // 写成 "GLITCH"/"Glitch" 的应该保留原意，而不是被当成脏值重置成 blur
+      const lower = type.toLowerCase();
       if (TRANSITION_TYPES.includes(type as (typeof TRANSITION_TYPES)[number])) continue;
-      // 有对应观感的就映射过去，没有就退回 blur（"故障/毛刺"类在合法集合里最接近它）
-      const map: Record<string, string> = { glitch: "blur", noise: "blur", flash: "wipe", fadein: "fade" };
-      tr.type = map[type.toLowerCase()] ?? "blur";
+      if (TRANSITION_TYPES.includes(lower as (typeof TRANSITION_TYPES)[number])) {
+        tr.type = lower;
+        changed = true;
+        continue;
+      }
+      // 真不存在的才映射：有对应观感的过去，没有就退回 blur（合法集合里最接近"故障/毛刺"）
+      const map: Record<string, string> = { noise: "blur", fadein: "fade" };
+      tr.type = map[lower] ?? "blur";
       if (typeof tr.durationInFrames !== "number" || tr.durationInFrames < 0) tr.durationInFrames = 8;
       changed = true;
     }

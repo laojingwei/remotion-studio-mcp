@@ -52,15 +52,16 @@ try {
     assert.equal(repairKnownDirtyValues(raw), false);
   });
 
-  /* 不存在的转场类型会让工程**打不开**（schema 拒绝整份数据）：旧 crt-vhs 预设写过 "glitch" */
-  test("transitionIn.type: glitch → blur（否则工程每次打开都报数据不合法）", () => {
-    const raw = { scenes: [{ transitionIn: { type: "glitch", durationInFrames: 8 } }] };
+  /* 不存在的转场类型会让工程**打不开**（schema 拒绝整份数据）。
+   * 注意：glitch 在 2026-11 转场扩容后是合法类型，这里改用一直不存在的 "noise"。 */
+  test("transitionIn.type: noise → blur（否则工程每次打开都报数据不合法）", () => {
+    const raw = { scenes: [{ transitionIn: { type: "noise", durationInFrames: 8 } }] };
     assert.equal(repairKnownDirtyValues(raw), true);
     assert.equal((raw.scenes[0].transitionIn as Record<string, unknown>).type, "blur");
     assert.equal((raw.scenes[0].transitionIn as Record<string, unknown>).durationInFrames, 8);
   });
 
-  test("合法转场不动；transitionOut 同样修", () => {
+  test("合法转场不动；大小写脏值归一（GLITCH → glitch，保留原意不重置）", () => {
     const raw = {
       scenes: [
         { transitionIn: { type: "fade", durationInFrames: 12 } },
@@ -69,8 +70,20 @@ try {
     };
     assert.equal(repairKnownDirtyValues(raw), true);
     assert.equal((raw.scenes[0].transitionIn as Record<string, unknown>).type, "fade");
+    // GLITCH 不是精确合法值，但小写后是 —— 归一而不是重置成 blur
+    assert.equal((raw.scenes[1].transitionOut as Record<string, unknown>).type, "glitch");
+  });
+
+  test("真不存在的类型 → 观感映射或退回 blur；没时长补 8", () => {
+    const raw = {
+      scenes: [
+        { transitionOut: { type: "FADEIN" } }, // 归一成合法的 fadein？不 —— fadein 不在集合里，走映射表
+        { transitionOut: { type: "shutter" } }, // 永远不存在，退 blur
+      ],
+    };
+    assert.equal(repairKnownDirtyValues(raw), true);
+    assert.equal((raw.scenes[0].transitionOut as Record<string, unknown>).type, "fade");
     assert.equal((raw.scenes[1].transitionOut as Record<string, unknown>).type, "blur");
-    // 没有时长时补一个，别留 undefined 让渲染算出 NaN
     assert.equal((raw.scenes[1].transitionOut as Record<string, unknown>).durationInFrames, 8);
   });
 

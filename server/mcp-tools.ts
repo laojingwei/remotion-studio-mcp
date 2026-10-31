@@ -2369,7 +2369,7 @@ const TOOLS: ToolDef[] = [
   {
     name: "set_transition",
     description:
-      "设置场景的入场或出场转场。direction 默认 in；type 可选 none / fade / slide / wipe / zoom / blur / flip / circle；duration 建议 8-20 帧。",
+      "设置场景的入场或出场转场。direction 默认 in；type 可选 none / fade / slide / wipe / zoom / blur / flip / circle / blinds / flash / glitch / diagonal；duration 建议 8-20 帧。",
     shape: {
       sceneId: z.string(),
       type: z.enum(TRANSITION_TYPES),

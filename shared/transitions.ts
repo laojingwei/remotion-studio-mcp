@@ -18,6 +18,11 @@ export const TRANSITION_TYPES = [
   "blur",
   "flip",
   "circle",
+  // 2026-11-01 第五批扩容
+  "blinds",
+  "flash",
+  "glitch",
+  "diagonal",
 ] as const;
 
 export type TransitionType = (typeof TRANSITION_TYPES)[number];
@@ -31,6 +36,10 @@ export const TRANSITION_OPTIONS: { key: TransitionType; label: string; hint: str
   { key: "blur", label: "虚化", hint: "模糊聚焦" },
   { key: "flip", label: "翻页", hint: "绕竖轴翻开" },
   { key: "circle", label: "圆形展开", hint: "从中心扩散" },
+  { key: "blinds", label: "百叶窗", hint: "横条纹逐条展开" },
+  { key: "flash", label: "闪白", hint: "白光里炸出来" },
+  { key: "glitch", label: "故障", hint: "抖动撕裂后稳住" },
+  { key: "diagonal", label: "斜切", hint: "斜线揭开" },
 ];
 
 export type TransitionStyle = Record<string, string | number>;
@@ -74,6 +83,67 @@ export function transitionStyle(
       };
     case "circle":
       return { clipPath: `circle(${lerp(0, 75, p).toFixed(2)}% at 50% 50%)` };
+    case "blinds": {
+      /*
+       * 百叶窗：用 repeating-linear-gradient 当 mask。
+       *
+       * 之所以不用 clipPath：CSS 的 clip-path 一次只能一个 polygon，
+       * 而「多条互相独立的横条」需要 6 个矩形 —— polygon 拼不出多个不连通区域
+       * （拼出来会因 nonzero 填充规则互相吞掉）。mask 的 repeating 渐变天然就是
+       * 「每周期重复一次」，条纹数 = 100% / 周期。
+       *
+       * open 是每周期内黑条占的比例：0 = 全透明（看不见），1 = 全黑（完全露出）。
+       */
+      const stripes = 6;
+      const period = 100 / stripes;
+      const open = (p * period).toFixed(3);
+      const mask = `repeating-linear-gradient(180deg, #000 0 ${open}%, transparent ${open}% ${period.toFixed(3)}%)`;
+      return { maskImage: mask, WebkitMaskImage: mask };
+    }
+    case "flash":
+      /*
+       * 闪白：第 0 帧就完全可见（不写 opacity），画面过曝成白，随后亮度落回 1。
+       * 用 brightness 而不是叠白色遮罩 —— 这个函数只能返回样式对象，加不了额外图层；
+       * 深底上 brightness(3.5) 视觉上就是"从白光里显影"。出场反向播时变成闪黑前白一下，也对味。
+       */
+      return { filter: `brightness(${lerp(3.6, 1, p).toFixed(3)})` };
+    case "glitch": {
+      /*
+       * 故障：抖动幅度随进度衰减，最后稳住。
+       *
+       * 三条硬约束：
+       * 1. **确定性** —— 逐帧渲染每帧独立进 Chrome，随机数必须从 frame 算出来，
+       *    不能 Math.random()（否则每次渲染画面不一样）；
+       * 2. 抖动用 transform + skew，不用 clipPath —— 出场时 exitStyle 会反向调本函数，
+       *    clipPath 类转场两层相加会互相覆盖（wipe 同款问题），transform 是叠加安全的；
+       * 3. 亮度闪烁比透明度闪烁安全 —— opacity 会被出场逻辑整体接管，filter 不会。
+       */
+      const settle = 1 - p;
+      const hash = (n: number) => {
+        const x = Math.sin(frame * 12.9898 + n * 78.233) * 43758.5453;
+        return x - Math.floor(x); // [0,1)，frame 相同则结果相同
+      };
+      const dx = (hash(1) * 4 - 2) * settle; // ±2% 横跳
+      const sk = (hash(2) * 6 - 3) * settle; // ±3° 斜切
+      const flick = hash(3) > 0.72 - p * 0.5 ? 1 : 0.62; // 越接近结束闪得越少
+      return {
+        opacity: flick,
+        transform: `translateX(${dx.toFixed(2)}%) skewX(${sk.toFixed(2)}deg)`,
+        filter: `saturate(${(1 + settle * 1.4).toFixed(2)})`,
+      };
+    }
+    case "diagonal":
+      /*
+       * 斜切：左上 → 右下揭开，前缘是一条 18° 左右的斜线。
+       * 比起 wipe（水平直线）多一层"运动方向"的暗示；多边形在最右多探出 18%
+       * 是为了让斜边完全出画后整幕才算揭完。
+       */
+      {
+        const r = lerp(0, 118, p);
+        return {
+          clipPath: `polygon(0 0, ${r.toFixed(2)}% 0, ${(r - 18).toFixed(2)}% 100%, 0 100%)`,
+        };
+      }
     case "fade":
     default: {
       // 结尾 6 帧轻微压暗，给切走一点呼吸感（只有淡入这样做，其余转场不抢戏）

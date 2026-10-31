@@ -124,6 +124,54 @@ test("circle：半径从 0 扩到 75%", () => {
   assert.equal(num(transitionStyle("circle", 12, 12), "clipPath"), 75);
 });
 
+test("blinds：mask 黑条占比从 0 涨满整个周期（条纹数固定 6）", () => {
+  const openOf = (frame: number) => {
+    const s = transitionStyle("blinds", frame, 12);
+    const m = String(s.maskImage).match(/#000 0 ([\d.]+)%/);
+    assert.ok(m, `mask 格式不对: ${String(s.maskImage)}`);
+    return Number(m![1]);
+  };
+  const period = 100 / 6;
+  assert.equal(openOf(0), 0, "第 0 帧条纹全闭");
+  assert.ok(near(openOf(6), period / 2), "中点展开一半");
+  assert.ok(near(openOf(12), period), "转场结束条纹全开");
+  // mask 必须同时带标准与 WebKit 前缀（headless Chrome 两个都认，但卸载时只删一个会漏）
+  const s = transitionStyle("blinds", 6, 12);
+  assert.ok(s.WebkitMaskImage, "缺 WebkitMaskImage");
+});
+
+test("flash：第 0 帧就可见（无 opacity 字段），亮度从 3.6 落回 1", () => {
+  const s0 = transitionStyle("flash", 0, 12);
+  assert.ok(!("opacity" in s0), "闪白是硬切显影，不能从透明淡入");
+  assert.equal(num(s0, "filter"), 3.6);
+  assert.equal(num(transitionStyle("flash", 12, 12), "filter"), 1);
+});
+
+test("glitch：确定性（同 frame 同结果），幅度随进度衰减到 0", () => {
+  const dxOf = (frame: number) => {
+    const m = String(transitionStyle("glitch", frame, 12).transform).match(
+      /translateX\((-?[\d.]+)%\)/,
+    );
+    return Number(m![1]);
+  };
+  assert.equal(dxOf(5), dxOf(5), "同一帧两次计算必须一致（逐帧渲染各帧独立）");
+  assert.equal(dxOf(12), 0, "转场结束时必须稳住");
+  assert.ok(Math.abs(dxOf(2)) <= 2 + 0.01, "初始横跳不超过 2%");
+});
+
+test("diagonal：斜边从左上推进到完全出画", () => {
+  const rOf = (frame: number) => {
+    const m = String(transitionStyle("diagonal", frame, 12).clipPath).match(
+      /polygon\(0 0, ([\d.]+)% 0/,
+    );
+    assert.ok(m, `clipPath 格式不对`);
+    return Number(m![1]);
+  };
+  assert.equal(rOf(0), 0);
+  assert.ok(rOf(6) > 40 && rOf(6) < 70, "中点推进一半");
+  assert.equal(rOf(12), 118, "结束时前缘完全出画");
+});
+
 test("超过转场时长后保持结束状态（clamp）", () => {
   assert.equal(num(transitionStyle("fade", 99, 12, 90), "opacity"), 0.85);
   assert.equal(num(transitionStyle("zoom", 99, 12), "transform"), 1);

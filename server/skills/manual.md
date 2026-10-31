@@ -63,7 +63,7 @@
 | 元素 | 场景内图片/文本/形状/视频/音频元素，rich 外观全套（圆角/边框/阴影/滤镜/混合/裁切/字体/行高/字距/对齐/斜体/下划线） | `list_element_library` `add_element` `update_element` |
 | 动效 | 元素级关键帧动画（`anim[].from/to` 绝对值）、全片动效强度三档（0 关 / 1 标准 / 2 更强） | `update_element(anim)` `set_theme(motion)` |
 | 特效 | **11 种全屏区间特效**（闪白/扫光/震动/冲击/旋转/故障/模糊/暗角/去色/呼吸/频闪）+ custom，**支持循环**（单次时长 + 到几秒停） | `list_effect_types` `add_effect` `update_effect(loop)` |
-| 转场 | 幕间转场（fade/slide 等 8 种，时长可调；**所有版式通用，自由画布也是场景**）；带字幕的幕转场 ≤ 6 帧 | `set_transition` |
+| 转场 | 幕间转场（fade/slide 等 12 种，时长可调；**所有版式通用，自由画布也是场景**）；带字幕的幕转场 ≤ 6 帧 | `set_transition` |
 | 多轨 | 任意条轨道、画中画小窗（缩放/位置/圆角）、同轨自动防重叠 | `move_scene` `set_scene_box` |
 | 音频 | TTS 配音（单段/多段**自动对齐幕长并写字幕**）、BGM 全局轨、场景内音频裁时间窗、音量调节 | `tts_narration` `add_audio_track` `set_audio` |
 | 字幕 | 硬字幕烧录（**一屏 8–16 字、不带标点**，写入自动拆段）+ SRT/VTT 导出，两者同一套时间 | `set_subtitle` `fix_subtitles` `set_subtitle_style` `export_subtitles` |
@@ -186,7 +186,7 @@
 | 自由画布上加了元素变成两行字 | `add_element` 放的是**叠加层**，不进画布数组。画布内元素用 `add_freeform_element` |
 | 拖主轨后邻居叠住 | 主轨 = 顺序即时间；`reorder_scenes(reflow:true)` 一次搞定（老写法 `reorder_scenes` + `compact_main_track` 也还认） |
 | 编辑器里还留着旧的画幅 | `set_formats` **默认是覆盖**（只传要的那几个）；以前是合并语义，于是「只要竖屏」的片子顶栏还挂着横屏。只改尺寸才传 `merge:true` |
-| 转场写了没生效 / 工程打不开 | 转场 `type` 只认 none/fade/slide/wipe/zoom/blur/flip/circle；写 `glitch` 这类会**落盘成脏值**（旧版 crt-vhs 预设踩过，工程当场读不出来）。现在 op 层直接拒绝，读到旧脏值会自动改成 `blur` 并写回 |
+| 转场写了没生效 / 工程打不开 | 转场 `type` 只认 none/fade/slide/wipe/zoom/blur/flip/circle/blinds/flash/glitch/diagonal（12 种）；写别的会被 op 层当场拒绝。旧工程里的历史脏值读到会自动改成 `blur` 并写回 |
 | 元素画不出来 | `z` 必须 ≥ 0，负 z 画到背景下面 |
 | 成片没声音 | 视频元素 `muted` 默认 true；音频元素默认 false。不传就按这个来 |
 | 缩幕长弹回去 | 场景时长下限由版式决定（30–60 帧起），夹回是设计行为 |

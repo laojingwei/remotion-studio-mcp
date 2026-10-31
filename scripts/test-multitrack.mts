@@ -413,7 +413,8 @@ test("update_scene 拒绝不存在的转场类型（以前会写进文件 → �
       one(p, {
         op: "update_scene",
         sceneId: p.scenes[0].id,
-        patch: { transitionIn: { type: "glitch", durationInFrames: 8 } as never },
+        // glitch 在 2026-11 扩容后是合法类型了，这里换一个永远不该存在的
+        patch: { transitionIn: { type: "shutter", durationInFrames: 8 } as never },
       }),
     /不合法/,
   );
