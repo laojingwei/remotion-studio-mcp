@@ -48,7 +48,9 @@ const sourceTime = Math.max(
 
 if (distTime < sourceTime) {
   console.log("▸ 构建编辑器前端 …");
-  const r = spawnSync("npx", ["vite", "build"], { cwd: ROOT, shell: true, stdio: "inherit" });
+  // DEP0190：args 数组和 shell:true 一起用会按空格拼接、不转义，Node 22+ 弃用。
+  // 命令是写死的（没有任何用户输入拼进来），并成一条字符串传最干净。
+  const r = spawnSync("npx vite build", { cwd: ROOT, shell: true, stdio: "inherit" });
   if (r.status !== 0) {
     console.error("✗ 构建失败，请检查上面的报错");
     process.exit(1);
@@ -66,8 +68,14 @@ async function alive() {
 }
 
 function openBrowser() {
-  const cmd = process.platform === "win32" ? "start" : process.platform === "darwin" ? "open" : "xdg-open";
-  spawn(cmd, [URL], { shell: process.platform === "win32", detached: true, stdio: "ignore" }).unref();
+  // 不走 shell:true（DEP0190 同款问题）。Windows 下 start 是 shell 内建命令，
+  // 借 cmd /c 调；第一个空参数是 start 的语法要求（否则带 & 的 URL 会被当标题）
+  if (process.platform === "win32") {
+    spawn("cmd", ["/c", "start", "", URL], { detached: true, stdio: "ignore" }).unref();
+  } else {
+    const cmd = process.platform === "darwin" ? "open" : "xdg-open";
+    spawn(cmd, [URL], { detached: true, stdio: "ignore" }).unref();
+  }
 }
 
 if (await alive()) {
@@ -88,7 +96,7 @@ console.log(`▸ 启动服务 ${URL}`);
  * 症状极易误判成"前端卡死"，实际是服务端被拦在删除上。
  * 这是本地单用户工具，删除行为都是我们自己可控的工程/快照，直接禁用。
  */
-const server = spawn("npx", ["tsx", "server/index.ts"], {
+const server = spawn("npx tsx server/index.ts", {
   cwd: ROOT,
   shell: true,
   stdio: "inherit",
