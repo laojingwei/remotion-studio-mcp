@@ -206,26 +206,25 @@ export const ElementInspector: React.FC<{ sceneId: string; el: OverlayElement }>
 
         <div className="field">
           <label>入场特效</label>
-          <div className="seg seg-scroll">
+          {/* 12 种转场放不下按钮条（一半藏在横向滚动区外），用下拉框；hint 写进选项文字 */}
+          <select
+            value={draft.enter?.type ?? "none"}
+            onChange={(e) => {
+              const t = TRANSITION_OPTIONS.find((o) => o.key === e.target.value)!;
+              commit({
+                enter: {
+                  type: t.key,
+                  durationInFrames: t.key === "none" ? 0 : draft.enter?.durationInFrames || 12,
+                },
+              });
+            }}
+          >
             {TRANSITION_OPTIONS.map((t) => (
-              <button
-                key={t.key}
-                className={`seg-item ${(draft.enter?.type ?? "none") === t.key ? "is-on" : ""}`}
-                title={t.hint}
-                onClick={() =>
-                  commit({
-                    enter: {
-                      type: t.key,
-                      durationInFrames:
-                        t.key === "none" ? 0 : draft.enter?.durationInFrames || 12,
-                    },
-                  })
-                }
-              >
-                {t.label}
-              </button>
+              <option key={t.key} value={t.key} title={t.hint}>
+                {t.label} · {t.hint}
+              </option>
             ))}
-          </div>
+          </select>
         </div>
 
         {draft.enter && draft.enter.type !== "none" ? (
@@ -253,26 +252,24 @@ export const ElementInspector: React.FC<{ sceneId: string; el: OverlayElement }>
 
         <div className="field">
           <label>出场特效</label>
-          <div className="seg seg-scroll">
+          <select
+            value={draft.exit?.type ?? "none"}
+            onChange={(e) => {
+              const t = TRANSITION_OPTIONS.find((o) => o.key === e.target.value)!;
+              commit({
+                exit: {
+                  type: t.key,
+                  durationInFrames: t.key === "none" ? 0 : draft.exit?.durationInFrames || 12,
+                },
+              });
+            }}
+          >
             {TRANSITION_OPTIONS.map((t) => (
-              <button
-                key={t.key}
-                className={`seg-item ${(draft.exit?.type ?? "none") === t.key ? "is-on" : ""}`}
-                title={t.hint}
-                onClick={() =>
-                  commit({
-                    exit: {
-                      type: t.key,
-                      durationInFrames:
-                        t.key === "none" ? 0 : draft.exit?.durationInFrames || 12,
-                    },
-                  })
-                }
-              >
-                {t.label}
-              </button>
+              <option key={t.key} value={t.key} title={t.hint}>
+                {t.label} · {t.hint}
+              </option>
             ))}
-          </div>
+          </select>
         </div>
 
         {draft.exit && draft.exit.type !== "none" ? (

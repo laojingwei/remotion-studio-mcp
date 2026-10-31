@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useRef } from "react";
+import React, { useMemo } from "react";
 import { TRANSITION_OPTIONS, seamOverlaps } from "@shared/transitions";
 import { sceneSpans, type Scene } from "@shared/schema";
 import { useDoc } from "../store";
@@ -41,59 +41,41 @@ export const TransitionSection: React.FC<{ scene: Scene }> = ({ scene }) => {
     };
   }, [project, scene.id]);
 
-  /** 8 种转场在窄面板里放不下，横向滚动而不是溢出 */
-  const segScrollRef = useRef<HTMLDivElement>(null);
-
-  useEffect(() => {
-    const el = segScrollRef.current;
-    if (!el) return;
-    const onWheel = (e: WheelEvent) => {
-      // 横向手势（触控板左右滑）交给浏览器处理
-      if (Math.abs(e.deltaY) <= Math.abs(e.deltaX)) return;
-      const max = el.scrollWidth - el.clientWidth;
-      if (max <= 0) return;
-      // 已经滚到两端就放行，让页面正常滚动（否则会"卡住"页面）
-      const atStart = el.scrollLeft <= 0 && e.deltaY < 0;
-      const atEnd = el.scrollLeft >= max - 1 && e.deltaY > 0;
-      if (atStart || atEnd) return;
-      // React 的 onWheel 是 passive 的，必须用原生监听才能 preventDefault
-      e.preventDefault();
-      el.scrollLeft += e.deltaY;
-    };
-    el.addEventListener("wheel", onWheel, { passive: false });
-    return () => el.removeEventListener("wheel", onWheel);
-  }, [scene.id]);
-
   return (
     <>
       <div className="field">
         <label title="接缝重叠长度就由这个时长决定：重叠期间上一幕会主动退场（不再定格），两幕短暂同屏。第一幕没有上一幕，是从背景色浮现">
           入场转场
         </label>
-        <div className="seg seg-scroll" ref={segScrollRef}>
+        {/*
+          12 种转场用下拉框：按钮条在 8 种时就已经要靠横向滚动才能看到全部，
+          扩到 12 种之后一半选项藏在滚动区外，等于不存在。hint 顺势写进选项文字，
+          比原来只在 hover 时出现的 title 提示更容易被看到。
+        */}
+        <select
+          value={transitionIn.type}
+          onChange={(e) => {
+            const t = TRANSITION_OPTIONS.find((o) => o.key === e.target.value)!;
+            void apply([
+              {
+                op: "update_scene",
+                sceneId: scene.id,
+                patch: {
+                  transitionIn:
+                    t.key === "none"
+                      ? null
+                      : { type: t.key, durationInFrames: transitionIn.durationInFrames || 12 },
+                },
+              },
+            ]);
+          }}
+        >
           {TRANSITION_OPTIONS.map((t) => (
-            <button
-              key={t.key}
-              className={`seg-item ${transitionIn.type === t.key ? "is-on" : ""}`}
-              onClick={() =>
-                void apply([
-                  {
-                    op: "update_scene",
-                    sceneId: scene.id,
-                    patch: {
-                      transitionIn:
-                        t.key === "none"
-                          ? null
-                          : { type: t.key, durationInFrames: transitionIn.durationInFrames || 12 },
-                    },
-                  },
-                ])
-              }
-            >
-              {t.label}
-            </button>
+            <option key={t.key} value={t.key} title={t.hint}>
+              {t.label} · {t.hint}
+            </option>
           ))}
-        </div>
+        </select>
       </div>
 
       {transitionIn.type !== "none" ? (
@@ -151,33 +133,33 @@ export const TransitionSection: React.FC<{ scene: Scene }> = ({ scene }) => {
         <label title="从本幕末尾往回退，任何情况下都会生效（不再受下一幕入场影响）。比接缝长时会提前开始退，速度不变；比接缝短时退完即保持透明">
           出场转场
         </label>
-        <div className="seg seg-scroll">
+        <select
+          value={transitionOut.type}
+          onChange={(e) => {
+            const t = TRANSITION_OPTIONS.find((o) => o.key === e.target.value)!;
+            void apply([
+              {
+                op: "update_scene",
+                sceneId: scene.id,
+                patch: {
+                  transitionOut:
+                    t.key === "none"
+                      ? null
+                      : {
+                          type: t.key,
+                          durationInFrames: transitionOut.durationInFrames || 12,
+                        },
+                },
+              },
+            ]);
+          }}
+        >
           {TRANSITION_OPTIONS.map((t) => (
-            <button
-              key={t.key}
-              className={`seg-item ${transitionOut.type === t.key ? "is-on" : ""}`}
-              onClick={() =>
-                void apply([
-                  {
-                    op: "update_scene",
-                    sceneId: scene.id,
-                    patch: {
-                      transitionOut:
-                        t.key === "none"
-                          ? null
-                          : {
-                              type: t.key,
-                              durationInFrames: transitionOut.durationInFrames || 12,
-                            },
-                    },
-                  },
-                ])
-              }
-            >
-              {t.label}
-            </button>
+            <option key={t.key} value={t.key} title={t.hint}>
+              {t.label} · {t.hint}
+            </option>
           ))}
-        </div>
+        </select>
       </div>
 
       {transitionOut.type !== "none" ? (
