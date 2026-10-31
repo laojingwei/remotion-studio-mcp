@@ -1426,6 +1426,44 @@ try {
   console.error("[bundle] 清理旧打包目录失败（不影响服务）：", err);
 }
 
+/*
+ * dist/web 过期提醒。
+ *
+ * 编辑器预览用的是 @remotion/player —— 雨幕/转场这些场景组件**也打进 web 前端
+ * bundle**。改了 src/ 或 web/ 的代码之后，如果只重启服务，serveStatic 读的还是
+ * 旧 dist，用户会看到"改了没生效"（雨幕方向修复当晚就踩了一次：修复在 build
+ * 之后提交，重启后预览仍旧朝向）。
+ *
+ * 只提醒不代劳：自动 build 会拖慢启动，而且 dev 模式（vite dev server）根本
+ * 不走 dist，警告是误报 —— 所以只看"dist 存在且比源码旧"这一种情况。
+ */
+const warnStaleWebBuild = () => {
+  const distHtml = path.join(process.cwd(), "dist", "web", "index.html");
+  if (!fs.existsSync(distHtml)) return; // 从没构建过 = 一直是 dev 模式，不用管
+  let newest = fs.statSync(distHtml).mtimeMs;
+  const walk = (dir: string) => {
+    for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
+      if (e.name === "node_modules" || e.name.startsWith(".")) continue;
+      const p = path.join(dir, e.name);
+      if (e.isDirectory()) walk(p);
+      else if (/\.(tsx?|css)$/.test(e.name)) newest = Math.max(newest, fs.statSync(p).mtimeMs);
+    }
+  };
+  walk(path.join(process.cwd(), "web"));
+  walk(path.join(process.cwd(), "src"));
+  walk(path.join(process.cwd(), "shared"));
+  if (newest > fs.statSync(distHtml).mtimeMs + 1000) {
+    console.warn(
+      "  ⚠ web/src 代码比 dist/web 新：编辑器预览还在用旧组件。跑一次 npm run build 再强刷浏览器（Ctrl+Shift+R）",
+    );
+  }
+};
+try {
+  warnStaleWebBuild();
+} catch {
+  /* 提醒失败不影响启动 */
+}
+
 serve({ fetch: app.fetch, port: PORT }, (info) => {
   // 对外展示用 localhost（更好读）；内部探活仍走 127.0.0.1
   console.log(`\n  ▸ 服务已启动      http://localhost:${info.port}`);
