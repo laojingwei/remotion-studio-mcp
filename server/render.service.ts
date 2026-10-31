@@ -8,9 +8,31 @@ import type { Project } from "../shared/schema";
 import type { VideoConfig } from "remotion";
 import { totalDuration } from "../shared/schema";
 import { PUBLIC_DIR } from "./store";
+import { bundleOutDir, cleanupLegacyBundles } from "./bundle-cache";
 import { cleanupOutputs, ensureOutDir, outDirOf, projectOutDir } from "./outputs.service";
 
 let serveUrlPromise: Promise<string> | null = null;
+
+/*
+ * 正在跑的渲染计数。
+ *
+ * bundle 固定输出到项目内的 .remotion-bundle 之后，「源码变更 → 重建」意味着
+ * 要整目录删掉重打。如果有渲染正在用旧目录，删了它当场 404 —— 所以重建前
+ * 先看这个计数：有活跃渲染就跳过删除、就地覆盖（旧散件留在里面，下次没人
+ * 用了再清）。以前每份产物在 Temp 里各有一个随机目录，不存在这个问题；
+ * 固定目录换来的是不再攒 9.7GB 垃圾，代价就是这里要多想一步。
+ */
+let activeRenders = 0;
+
+/** 计数器只能配对使用：三个渲染入口（still / video task / preview clip）各自包一层 */
+const withActiveRender = async <T,>(fn: () => Promise<T>): Promise<T> => {
+  activeRenders++;
+  try {
+    return await fn();
+  } finally {
+    activeRenders = Math.max(0, activeRenders - 1);
+  }
+};
 
 /**
  * 选择渲染用的浏览器内核：
@@ -77,8 +99,24 @@ let lastSignature: number | null = null;
 /** public/ 上次同步时的指纹（见 syncPublicToBundle） */
 let lastPublicSig: string | null = null;
 
+/**
+ * 旧版 Temp 目录清理只需要做一次（进程生命周期内）。
+ * 服务启动时也会调一次（index.ts），这里是兜底：CLI 直接渲染、不经过服务时也能清。
+ */
+let legacyCleaned = false;
+const cleanLegacyOnce = () => {
+  if (legacyCleaned) return;
+  legacyCleaned = true;
+  try {
+    cleanupLegacyBundles(undefined, (msg) => console.log(`[render] ${msg}`));
+  } catch (err) {
+    console.error("[render] 清理旧打包目录失败（不影响渲染）：", err);
+  }
+};
+
 /** 打包一次并缓存，后续所有渲染复用；源码变更时自动失效重打包 */
 export async function getServeUrl(): Promise<string> {
+  cleanLegacyOnce();
   const sig = sourceSignature();
   if (serveUrlPromise && lastSignature !== null && sig !== lastSignature) {
     console.log("[render] 检测到场景源码变更，重新打包…");
@@ -86,9 +124,19 @@ export async function getServeUrl(): Promise<string> {
   }
   if (!serveUrlPromise) {
     lastSignature = sig;
+    const outDir = bundleOutDir(PROJECT_ROOT);
+    // 没有渲染在用旧产物才整目录删掉重打；有就就地覆盖，旧散件下次再清
+    if (activeRenders === 0) {
+      try {
+        fs.rmSync(outDir, { recursive: true, force: true, maxRetries: 2, retryDelay: 200 });
+      } catch {
+        /* 删不掉就让 webpack 覆盖，不至于失败 */
+      }
+    }
     serveUrlPromise = bundle({
       entryPoint: path.join(PROJECT_ROOT, "src", "index.ts"),
       publicDir: PUBLIC_DIR,
+      outDir,
       onProgress: (p: number) => {
         bundleProgress = p;
       },
@@ -269,6 +317,15 @@ export async function renderStills(
   formats?: string[],
   /** 文件名后缀（只留字母数字与 -_）：同一帧要多张不同内容的图时必须给，
    *  否则文件名一样会互相覆盖——probe_style 的三个风格样张就踩过这个坑 */
+  tag?: string,
+): Promise<StillResult[]> {
+  return withActiveRender(async () => stillsInner(project, frame, formats, tag));
+}
+
+async function stillsInner(
+  project: Project,
+  frame?: number,
+  formats?: string[],
   tag?: string,
 ): Promise<StillResult[]> {
   const stillDir = ensureStillDir(project.id);
@@ -472,6 +529,10 @@ export function enqueueVideo(
 const isCancelled = (t: RenderTask) => t.status === "cancelled";
 
 async function runTask(task: RenderTask, project: Project) {
+  return withActiveRender(() => runTaskInner(task, project));
+}
+
+async function runTaskInner(task: RenderTask, project: Project) {
   const { cancelSignal, cancel } = makeCancelSignal();
   cancels.set(task.id, cancel);
 
@@ -602,6 +663,20 @@ export async function renderPreviewClip(
     /** 0.3–0.6 够看动态；默认 0.5（1080×1920 → 540×960） */
     scale?: number;
     /** 默认带音轨（BGM / 旁白的问题只能听出来） */
+    withAudio?: boolean;
+    tag?: string;
+  },
+): Promise<PreviewClipResult> {
+  return withActiveRender(() => renderPreviewClipInner(project, opts));
+}
+
+async function renderPreviewClipInner(
+  project: Project,
+  opts: {
+    startFrame: number;
+    endFrame: number;
+    formatKey?: string;
+    scale?: number;
     withAudio?: boolean;
     tag?: string;
   },

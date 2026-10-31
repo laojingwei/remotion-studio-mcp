@@ -1,5 +1,6 @@
 import { serve } from "@hono/node-server";
 import { serveStatic } from "@hono/node-server/serve-static";
+import { cleanupLegacyBundles } from "./bundle-cache";
 import { serveFiles } from "./static.service";
 import { Hono } from "hono";
 import { streamSSE } from "hono/streaming";
@@ -1413,6 +1414,16 @@ if (WEB_READY) {
       hint: "前端尚未构建：执行 npm run build 后本地址即可直接打开编辑器；开发时用 npm run dev（vite，5173）",
     }),
   );
+}
+
+// 服务一起来就清一次 Temp 里的旧版打包目录（remotion-webpack-bundle-*）。
+// bundle 现在固定打到项目内的 .remotion-bundle，这些随机目录不会再产生新的一份，
+// 留着只有占盘一个作用。放到这里而不是 render.service 的模块顶层：
+// 模块顶层在 import 时就执行，测试导入它会连带触发清理，副作用太隐蔽。
+try {
+  cleanupLegacyBundles(undefined, (msg) => console.log(`  ▸ ${msg}`));
+} catch (err) {
+  console.error("[bundle] 清理旧打包目录失败（不影响服务）：", err);
 }
 
 serve({ fetch: app.fetch, port: PORT }, (info) => {
