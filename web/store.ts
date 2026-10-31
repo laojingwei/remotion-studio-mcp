@@ -274,7 +274,13 @@ export const useDoc = create<State>((set, get) => ({
     try {
       set({ templates: await fetchTemplates() });
     } catch {
-      /* 模板读不到不阻塞，只是菜单里少一节 */
+      /* 服务暂时没响应：隔 2 秒补一次；仍失败就提示，别让菜单永远停在「模板加载中」 */
+      await new Promise((r) => setTimeout(r, 2000));
+      try {
+        set({ templates: await fetchTemplates() });
+      } catch {
+        get().notify("模板列表加载失败，重新点开「切换项目」可重试");
+      }
     }
   },
 

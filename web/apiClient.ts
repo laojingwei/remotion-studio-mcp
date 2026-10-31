@@ -8,6 +8,34 @@ export type OpResponse = {
   summary: string[];
 };
 
+/**
+ * 统一超时 + GET 自动重试。
+ *
+ * 浏览器对同一 host 的 HTTP/1.1 连接上限只有 6 条，且整个浏览器（所有标签页）共享。
+ * SSE、视频/音频元素、预览素材都是长连接：旧标签页开得多时连接池会被占满，此时
+ * 新的 fetch 不报错也不超时，**无限排队** —— 界面上就是「模板加载中」永远不结束、
+ * 点哪儿都没反应、刷新也要抢连接。所以所有请求必须带超时：最多 15 秒就当失败处理，
+ * GET 隔 800ms 自动重试一次，服务端一恢复页面就自愈，不用用户反复刷新。
+ */
+async function jfetch(
+  url: string,
+  init: RequestInit = {},
+  { timeout = 15000, retries = 0 } = {},
+): Promise<Response> {
+  const isGet = !init.method || init.method === "GET";
+  const maxTries = isGet ? 1 + retries : 1;
+  let lastErr: unknown;
+  for (let attempt = 0; attempt < maxTries; attempt++) {
+    if (attempt > 0) await new Promise((r) => setTimeout(r, 800));
+    try {
+      return await fetch(url, { ...init, signal: AbortSignal.timeout(timeout) });
+    } catch (err) {
+      lastErr = err;
+    }
+  }
+  throw lastErr;
+}
+
 export type ProjectSummary = {
   id: string;
   name: string;
@@ -20,7 +48,7 @@ export type ProjectSummary = {
 };
 
 export async function fetchProjects(): Promise<ProjectSummary[]> {
-  const res = await fetch("/api/projects");
+  const res = await jfetch("/api/projects", {}, { retries: 2 });
   const data = await res.json();
   return data.projects ?? [];
 }
@@ -28,7 +56,7 @@ export async function fetchProjects(): Promise<ProjectSummary[]> {
 /** 上次打开 / 被 agent 编辑过的工程 id；没有或接口失败都返回 null */
 export async function fetchLastProject(): Promise<string | null> {
   try {
-    const res = await fetch("/api/last-project");
+    const res = await jfetch("/api/last-project", {}, { retries: 2 });
     if (!res.ok) return null;
     const data = await res.json();
     return typeof data.id === "string" && data.id ? data.id : null;
@@ -38,7 +66,7 @@ export async function fetchLastProject(): Promise<string | null> {
 }
 
 export async function fetchProject(id: string): Promise<Project> {
-  const res = await fetch(`/api/projects/${id}`);
+  const res = await jfetch(`/api/projects/${id}`, {}, { retries: 2 });
   const data = await res.json();
   if (!res.ok) throw new Error(data.error ?? "读取工程失败");
   return data.project;
@@ -67,7 +95,7 @@ export async function postOps(
 }
 
 export async function fetchSceneTypes() {
-  const res = await fetch("/api/scene-types");
+  const res = await jfetch("/api/scene-types", {}, { retries: 2 });
   return (await res.json()).types as {
     type: string;
     name: string;
@@ -146,22 +174,30 @@ export async function deleteProject(id: string): Promise<void> {
 }
 
 export async function duplicateProject(id: string, name?: string): Promise<Project> {
-  const res = await fetch(`/api/projects/${id}/duplicate`, {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({ name }),
-  });
+  const res = await jfetch(
+    `/api/projects/${id}/duplicate`,
+    {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ name }),
+    },
+    { timeout: 30000 },
+  );
   const data = await res.json();
   if (!res.ok) throw new Error(data.error ?? "复制失败");
   return data.project;
 }
 
 export async function createProject(name: string): Promise<{ id: string }> {
-  const res = await fetch("/api/projects", {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({ name }),
-  });
+  const res = await jfetch(
+    "/api/projects",
+    {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ name }),
+    },
+    { timeout: 30000 },
+  );
   const data = await res.json();
   if (!res.ok) throw new Error(data.error ?? "新建失败");
   return data.project;
@@ -499,7 +535,7 @@ export type TemplateInfo = {
 };
 
 export async function fetchTemplates(): Promise<TemplateInfo[]> {
-  const res = await fetch("/api/templates");
+  const res = await jfetch("/api/templates", {}, { retries: 2 });
   const data = await res.json();
   if (!res.ok) throw new Error(data.error ?? "读取模板失败");
   return data.templates ?? [];
@@ -512,11 +548,15 @@ export async function createProjectFromTemplate(
 ): Promise<Project> {
   const body =
     tpl.kind === "custom" ? { templateId: tpl.key, name } : { templateKey: tpl.key, name };
-  const res = await fetch("/api/projects/from-template", {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify(body),
-  });
+  const res = await jfetch(
+    "/api/projects/from-template",
+    {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(body),
+    },
+    { timeout: 30000 },
+  );
   const data = await res.json();
   if (!res.ok) throw new Error(data.error ?? "套用模板失败");
   return data.project;
