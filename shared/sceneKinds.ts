@@ -42,6 +42,10 @@ export const MOTION_SCENE_TYPES = new Set([
   "snow",
   "fireworks",
   "smoke",
+  // 第六批
+  "wave",
+  "slot",
+  "matrix",
 ]);
 
 export const isMotionScene = (type?: string): boolean =>
@@ -76,6 +80,8 @@ export const BACKDROP_TYPES = [
   "snow",
   "fireworks",
   "smoke",
+  // 第六批：只有 matrix（wave/slot 带正文，垫在别的版式下会出现两套字）
+  "matrix",
 ] as const;
 
 export type BackdropType = (typeof BACKDROP_TYPES)[number];

@@ -60,6 +60,25 @@ test("BACKDROP 名单是 MOTION 的子集（氛围层也是动效）", () => {
   }
 });
 
+test("BACKDROP 名单不得包含带正文的版式（垫在别的版式下会出现两套字）", () => {
+  // 这些版式的画面主体是文案本身 —— 曾因批量替换把 wave/slot 误加进白名单
+  const WITH_COPY = new Set([
+    "typewriter",
+    "counter",
+    "gradienttext",
+    "scramble",
+    "highlight",
+    "stomp",
+    "wipe",
+    "marquee",
+    "wave",
+    "slot",
+  ]);
+  for (const t of BACKDROP_TYPES) {
+    assert.ok(!WITH_COPY.has(t), `BACKDROP 里的 ${t} 带正文，当氛围层会同时出现两套字`);
+  }
+});
+
 test("名单里没有重复项", () => {
   assert.equal(new Set(BACKDROP_TYPES).size, BACKDROP_TYPES.length);
   assert.equal(MOTION_SCENE_TYPES.size, [...MOTION_SCENE_TYPES].length);

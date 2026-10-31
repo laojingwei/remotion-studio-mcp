@@ -37,3 +37,6 @@ memory/
 
 # Remotion 打包产物（bundle() 固定输出到这里，可整目录删掉重建）
 /.remotion-bundle
+
+# 临时提交信息文件
+.git-msg.tmp

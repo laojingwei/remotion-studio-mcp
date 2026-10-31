@@ -1509,6 +1509,140 @@ export const pieMeta: SceneMeta = {
   elements: [{ id: "heading", label: "标题" }, { id: "legend{n}", label: "图例行" }],
 };
 
+/* ─────────── 第六批：文字/抽奖/氛围 + 布局（6 个） ─────────── */
+
+export const waveMeta: SceneMeta = {
+  type: "wave",
+  name: "波浪字",
+  category: "动效",
+  summary: "一行大字逐字起伏呼吸，持续律动不是入场动画；口号悬停、音乐节奏段",
+  schema: z.object({
+    title: z.string().min(1).max(24).describe("一行字，建议 4–12 字"),
+    amplitude: z.number().min(0).max(60).default(30).describe("起伏幅度（字号的百分比 0–60）"),
+    waves: z.number().min(0.2).max(2).default(0.8).describe("每秒波峰数 0.2–2"),
+  }),
+  defaultProps: { title: "下一件就是宝贝", amplitude: 30, waves: 0.8 },
+  duration: { default: 120, min: MIN_SCENE_FRAMES, max: 108000 },
+  elements: [{ id: "title", label: "标题" }],
+};
+
+export const slotMeta: SceneMeta = {
+  type: "slot",
+  name: "老虎机",
+  category: "动效",
+  summary: "三列符号滚轮依次减速停稳，停一列亮一列；直播抽奖、开奖揭晓",
+  schema: z.object({
+    heading: z.string().default("").describe("顶部标题，可留空"),
+    symbols: z.array(z.string().min(1).max(4)).min(2).max(8).describe("符号池 2–8 个（emoji 或单字）"),
+    result: z.string().default("").describe("中奖符号（必须在符号池里；留空取第一个）"),
+    note: z.string().default("").describe("底部说明，可留空"),
+  }),
+  defaultProps: {
+    heading: "整点抽奖",
+    symbols: ["🎁", "💎", "🔥", "⭐"],
+    result: "💎",
+    note: "三列依次停稳，停一列亮一列",
+  },
+  duration: { default: 110, min: MIN_SCENE_FRAMES, max: 108000 },
+  elements: [{ id: "heading", label: "标题" }, { id: "note", label: "说明" }],
+};
+
+export const matrixMeta: SceneMeta = {
+  type: "matrix",
+  name: "字符雨",
+  category: "氛围",
+  summary: "竖列字符持续下落 + 亮头渐隐尾；黑客、终端、数据流（深色主题最出彩）",
+  schema: z.object({
+    cols: z.number().int().min(10).max(36).default(22).describe("列数 10–36"),
+    speed: z.number().min(0.4).max(2.5).default(1).describe("下落速度倍率"),
+    glow: z.number().min(0).max(1).default(0.7).describe("亮头强度 0–1"),
+  }),
+  defaultProps: { cols: 22, speed: 1, glow: 0.7 },
+  duration: { default: 150, min: MIN_SCENE_FRAMES, max: 108000 },
+  elements: [],
+};
+
+export const diagonalsplitMeta: SceneMeta = {
+  type: "diagonalsplit",
+  name: "斜切分屏",
+  category: "通用",
+  summary: "一条斜线把画面分成两半各讲各的；对比、交锋、转折（直切分栏 split 的斜线版）",
+  schema: z.object({
+    titleA: z.string().default("").describe("第一块标题"),
+    textA: z.string().default("").describe("第一块正文"),
+    titleB: z.string().default("").describe("第二块标题"),
+    textB: z.string().default("").describe("第二块正文"),
+    imageSrcA: z.string().default("").describe("第一块配图地址，可留空（留空用渐变占位）"),
+    imageSrcB: z.string().default("").describe("第二块配图地址，可留空"),
+    slant: z.number().min(0).max(25).default(10).describe("斜切错位量（短边百分比 0–25，0=直切）"),
+  }),
+  defaultProps: {
+    titleA: "讲规则前",
+    textA: "口头讲三遍，观众记不住",
+    titleB: "讲规则后",
+    textB: "写上屏，边看边听",
+    imageSrcA: "",
+    imageSrcB: "",
+    slant: 10,
+  },
+  duration: { default: 110, min: MIN_SCENE_FRAMES, max: 108000 },
+  elements: [
+    { id: "atitle", label: "第一块标题" },
+    { id: "atext", label: "第一块正文" },
+    { id: "btitle", label: "第二块标题" },
+    { id: "btext", label: "第二块正文" },
+  ],
+};
+
+export const frameinframeMeta: SceneMeta = {
+  type: "frameinframe",
+  name: "画中画框",
+  category: "通用",
+  summary: "截图套浏览器/手机壳浮在渐变底上；讲产品、演示操作（没图也有假网页骨架）",
+  schema: z.object({
+    src: z.string().default("").describe("截图地址，可留空（留空显示假网页骨架）"),
+    frame: z.enum(["浏览器", "手机"]).default("浏览器").describe("画框类型"),
+    barText: z.string().default("").describe("地址栏 / 状态栏文字，可留空"),
+    caption: z.string().default("").describe("框下方说明，可留空"),
+  }),
+  defaultProps: {
+    src: "",
+    frame: "浏览器",
+    barText: "https://live.example.com",
+    caption: "真实的操作界面，不是概念图",
+  },
+  duration: { default: 110, min: MIN_SCENE_FRAMES, max: 108000 },
+  elements: [{ id: "caption", label: "说明" }],
+};
+
+export const layeredMeta: SceneMeta = {
+  type: "layered",
+  name: "层叠卡片",
+  category: "通用",
+  summary: "几张卡片错位叠放，最前一张讲重点；焦点式（并列平铺用卡片网格 cards）",
+  schema: z.object({
+    items: z
+      .array(
+        z.object({
+          title: z.string().describe("卡片标题"),
+          text: z.string().default("").describe("卡片正文"),
+        }),
+      )
+      .min(1)
+      .max(4)
+      .describe("1–4 张，最后一张在最前面（重点写最后）"),
+  }),
+  defaultProps: {
+    items: [
+      { title: "上架前", text: "标题带卖点，封面九宫格" },
+      { title: "开播前", text: "3 秒抛钩子，福利前置" },
+      { title: "现在", text: "话术跟着节奏走，别念稿" },
+    ],
+  },
+  duration: { default: 110, min: MIN_SCENE_FRAMES, max: 108000 },
+  elements: [{ id: "card{n}-title", label: "卡片标题" }, { id: "card{n}-text", label: "卡片正文" }],
+};
+
 export const SCENE_METAS: SceneMeta[] = [
   freeformMeta,
   titleMeta,
@@ -1580,6 +1714,12 @@ export const SCENE_METAS: SceneMeta[] = [
   smokeMeta,
   linechartMeta,
   pieMeta,
+  waveMeta,
+  slotMeta,
+  matrixMeta,
+  diagonalsplitMeta,
+  frameinframeMeta,
+  layeredMeta,
 ];
 
 export const getMeta = (type: string): SceneMeta | undefined =>

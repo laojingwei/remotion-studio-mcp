@@ -63,6 +63,12 @@ import { FireworksScene } from "./fireworks/Fireworks";
 import { SmokeScene } from "./smoke/Smoke";
 import { LineChartScene } from "./linechart/LineChart";
 import { PieScene } from "./pie/Pie";
+import { WaveScene } from "./wave/Wave";
+import { SlotScene } from "./slot/Slot";
+import { MatrixScene } from "./matrix/Matrix";
+import { DiagonalSplitScene } from "./diagonalsplit/DiagonalSplit";
+import { FrameInFrameScene } from "./frameinframe/FrameInFrame";
+import { LayeredScene } from "./layered/Layered";
 
 /**
  * 场景组件注册表：type → 渲染组件
@@ -144,4 +150,11 @@ export const SCENE_COMPONENTS: Record<string, React.FC<any>> = {
   smoke: SmokeScene,
   linechart: LineChartScene,
   pie: PieScene,
+  // 第六批（2026-11-01）：文字/抽奖/氛围 + 布局
+  wave: WaveScene,
+  slot: SlotScene,
+  matrix: MatrixScene,
+  diagonalsplit: DiagonalSplitScene,
+  frameinframe: FrameInFrameScene,
+  layered: LayeredScene,
 };
