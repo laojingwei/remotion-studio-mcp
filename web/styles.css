@@ -2,12 +2,12 @@
   --bg: #08080b;
   --panel: #0e0e13;
   --panel-2: #14141b;
-  --line: rgba(255, 255, 255, 0.07);
-  --line-strong: rgba(255, 255, 255, 0.14);
+  --line: rgba(255, 255, 255, 0.2);
+  --line-strong: rgba(255, 255, 255, 0.4);
   --text: #e9e7e3;
   --muted: #8b8794;
   --accent: #c6f24e;
-  --accent-dim: rgba(198, 242, 78, 0.14);
+  --accent-dim: rgba(198, 242, 78, 0.4);
   --danger: #ff6b6b;
   --radius: 10px;
   /* 舞台「透明区域」棋盘格的两阶颜色（改这两项就能换风格） */
@@ -3965,6 +3965,7 @@ button.mini.add {
   height: 8px;
   cursor: ns-resize;
   z-index: 20;
+  background-color: #28282e;
 }
 
 .timeline-resize::after {
@@ -4049,6 +4050,7 @@ button.mini.add {
   margin: 2px 0 0;
   cursor: ns-resize;
   z-index: 10;
+  background-color: #28282e;
 }
 
 .tl-splitter::after {
@@ -4099,9 +4101,9 @@ button.mini.add {
   content: "";
   position: absolute;
   top: 0;
-  left: -3px;
-  width: 7px;
-  height: 7px;
+  left: -7px;
+  width: 15px;
+  height: 9px;
   background: var(--accent);
   border-radius: 1px;
 }
