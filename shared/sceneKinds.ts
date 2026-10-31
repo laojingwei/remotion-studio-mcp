@@ -37,6 +37,11 @@ export const MOTION_SCENE_TYPES = new Set([
   "gridflow",
   "rain",
   "liquid",
+  // 第五批：粒子氛围
+  "confetti",
+  "snow",
+  "fireworks",
+  "smoke",
 ]);
 
 export const isMotionScene = (type?: string): boolean =>
@@ -66,6 +71,11 @@ export const BACKDROP_TYPES = [
   "gridflow",
   "rain",
   "liquid",
+  // 第五批：粒子氛围
+  "confetti",
+  "snow",
+  "fireworks",
+  "smoke",
 ] as const;
 
 export type BackdropType = (typeof BACKDROP_TYPES)[number];
@@ -77,7 +87,7 @@ export type BackdropType = (typeof BACKDROP_TYPES)[number];
  * 网格是一直往前流的，它们都没有"一轮"可言，给了 once 也只是原地定住，
  * 用户会以为设置没生效。所以面板上只对这张表里的类型显示"播放次数"。
  */
-export const PERIODIC_BACKDROP_TYPES = new Set(["lightleak"]);
+export const PERIODIC_BACKDROP_TYPES = new Set(["lightleak", "fireworks"]);
 
 export const isPeriodicBackdrop = (type?: string): boolean =>
   !!type && PERIODIC_BACKDROP_TYPES.has(type);

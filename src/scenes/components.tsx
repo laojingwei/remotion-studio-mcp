@@ -57,6 +57,12 @@ import { GaugeScene } from "./gauge/Gauge";
 import { RaceBarsScene } from "./racebars/RaceBars";
 import { FunnelScene } from "./funnel/Funnel";
 import { DeltaScene } from "./delta/Delta";
+import { ConfettiScene } from "./confetti/Confetti";
+import { SnowScene } from "./snow/Snow";
+import { FireworksScene } from "./fireworks/Fireworks";
+import { SmokeScene } from "./smoke/Smoke";
+import { LineChartScene } from "./linechart/LineChart";
+import { PieScene } from "./pie/Pie";
 
 /**
  * 场景组件注册表：type → 渲染组件
@@ -131,4 +137,11 @@ export const SCENE_COMPONENTS: Record<string, React.FC<any>> = {
   racebars: RaceBarsScene,
   funnel: FunnelScene,
   delta: DeltaScene,
+  // 第五批（2026-10-31）：粒子氛围 + 数据图表
+  confetti: ConfettiScene,
+  snow: SnowScene,
+  fireworks: FireworksScene,
+  smoke: SmokeScene,
+  linechart: LineChartScene,
+  pie: PieScene,
 };

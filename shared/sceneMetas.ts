@@ -1373,6 +1373,142 @@ export const deltaMeta: SceneMeta = {
   ],
 };
 
+/* ─────────── 第五批：粒子氛围（4 个）+ 数据图表（2 个） ─────────── */
+
+export const confettiMeta: SceneMeta = {
+  type: "confetti",
+  name: "五彩纸屑",
+  category: "氛围",
+  summary: "小纸片翻着跟头往下落，主题四色轮转；庆祝、开奖、成交播报",
+  schema: z.object({
+    count: z.number().int().min(30).max(160).default(90).describe("纸屑数量 30–160"),
+    speed: z.number().min(0.4).max(2).default(1).describe("下落速度倍率"),
+    sway: z.number().min(0).max(1).default(0.6).describe("左右飘摆幅度 0–1"),
+  }),
+  defaultProps: { count: 90, speed: 1, sway: 0.6 },
+  duration: { default: 150, min: MIN_SCENE_FRAMES, max: 108000 },
+  elements: [],
+};
+
+export const snowMeta: SceneMeta = {
+  type: "snow",
+  name: "下雪",
+  category: "氛围",
+  summary: "柔边雪花慢落，大的在前小的在后；季节、节日、安静段落",
+  schema: z.object({
+    count: z.number().int().min(40).max(200).default(120).describe("雪花数量 40–200"),
+    speed: z.number().min(0.4).max(2).default(1).describe("下落速度倍率"),
+    drift: z.number().min(0).max(1).default(0.6).describe("左右飘摆幅度 0–1"),
+  }),
+  defaultProps: { count: 120, speed: 1, drift: 0.6 },
+  duration: { default: 150, min: MIN_SCENE_FRAMES, max: 108000 },
+  elements: [],
+};
+
+export const fireworksMeta: SceneMeta = {
+  type: "fireworks",
+  name: "烟花",
+  category: "氛围",
+  summary: "一组一组地放，炸开、下坠、熄灭；跨年、庆典、战报高光",
+  schema: z.object({
+    periodSec: z.number().min(2).max(12).default(5).describe("一轮多长（秒），一轮 = 一组齐放"),
+    bursts: z.number().int().min(1).max(3).default(2).describe("一轮齐放几发 1–3"),
+    intensity: z.number().min(0).max(1).default(0.7).describe("亮度 0–1"),
+  }),
+  defaultProps: { periodSec: 5, bursts: 2, intensity: 0.7 },
+  duration: { default: 150, min: MIN_SCENE_FRAMES, max: 108000 },
+  elements: [],
+};
+
+export const smokeMeta: SceneMeta = {
+  type: "smoke",
+  name: "烟雾",
+  category: "氛围",
+  summary: "几大团柔雾从底部升起、膨胀、散开；悬疑、压情绪、转场缓冲",
+  schema: z.object({
+    blobs: z.number().int().min(3).max(8).default(5).describe("团数 3–8"),
+    rise: z.number().min(0.3).max(2).default(0.8).describe("上升速度倍率"),
+    intensity: z.number().min(0).max(1).default(0.5).describe("浓度 0–1"),
+    tone: z.enum(["灰", "主色"]).default("灰").describe("烟色：灰（跟墨色）/ 主色（环境光染色）"),
+  }),
+  defaultProps: { blobs: 5, rise: 0.8, intensity: 0.5, tone: "灰" },
+  duration: { default: 150, min: MIN_SCENE_FRAMES, max: 108000 },
+  elements: [],
+};
+
+export const linechartMeta: SceneMeta = {
+  type: "linechart",
+  name: "折线图",
+  category: "数据",
+  summary: "线从左往右画出来，数据点跟着线头亮起；趋势、涨跌走势",
+  schema: z.object({
+    heading: z.string().default("").describe("顶部标题，可留空"),
+    unit: z.string().default("").describe("数值单位（如 万、%），标在数据点上"),
+    data: z
+      .array(
+        z.object({
+          label: z.string().describe("x 轴标签，如 周一 / 1月"),
+          value: z.number().describe("数值"),
+          display: z.string().default("").describe("显示文本，可留空（留空显示数值）"),
+        }),
+      )
+      .min(3)
+      .max(8)
+      .describe("3–8 个点，按 x 轴顺序传"),
+    smooth: z.boolean().default(true).describe("平滑曲线；false = 直线折线"),
+    area: z.boolean().default(true).describe("线下方铺渐变"),
+  }),
+  defaultProps: {
+    heading: "近一周场观",
+    unit: "",
+    data: [
+      { label: "周一", value: 12000, display: "1.2万" },
+      { label: "周二", value: 15500, display: "1.6万" },
+      { label: "周三", value: 13200, display: "1.3万" },
+      { label: "周四", value: 21000, display: "2.1万" },
+      { label: "周五", value: 26400, display: "2.6万" },
+    ],
+    smooth: true,
+    area: true,
+  },
+  duration: { default: 130, min: MIN_SCENE_FRAMES, max: 108000 },
+  elements: [{ id: "heading", label: "标题" }],
+};
+
+export const pieMeta: SceneMeta = {
+  type: "pie",
+  name: "占比饼图",
+  category: "数据",
+  summary: "环形多切片逐块扫出，配图例与百分比；构成、来源分布（单值进度用环形数据 ring）",
+  schema: z.object({
+    heading: z.string().default("").describe("顶部标题，可留空"),
+    data: z
+      .array(
+        z.object({
+          label: z.string().describe("切片名"),
+          value: z.number().describe("数值（决定扇区大小）"),
+          display: z.string().default("").describe("显示文本，可留空（留空显示数值）"),
+        }),
+      )
+      .min(2)
+      .max(6)
+      .describe("2–6 块"),
+    centerLabel: z.string().default("").describe("圆心文字（如 总 GMV），可留空"),
+  }),
+  defaultProps: {
+    heading: "成交来源",
+    centerLabel: "总 GMV",
+    data: [
+      { label: "直播间", value: 52000, display: "¥5.2万" },
+      { label: "短视频", value: 31000, display: "¥3.1万" },
+      { label: "搜索", value: 18000, display: "¥1.8万" },
+      { label: "其他", value: 9000, display: "¥0.9万" },
+    ],
+  },
+  duration: { default: 130, min: MIN_SCENE_FRAMES, max: 108000 },
+  elements: [{ id: "heading", label: "标题" }, { id: "legend{n}", label: "图例行" }],
+};
+
 export const SCENE_METAS: SceneMeta[] = [
   freeformMeta,
   titleMeta,
@@ -1438,6 +1574,12 @@ export const SCENE_METAS: SceneMeta[] = [
   racebarsMeta,
   funnelMeta,
   deltaMeta,
+  confettiMeta,
+  snowMeta,
+  fireworksMeta,
+  smokeMeta,
+  linechartMeta,
+  pieMeta,
 ];
 
 export const getMeta = (type: string): SceneMeta | undefined =>
