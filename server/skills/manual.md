@@ -59,7 +59,7 @@
 | 能力域 | 能做到 | 入口 |
 |---|---|---|
 | 工程 | 多工程并存（**可列/可切换**，当前工程标 ★ 并落盘，重启接上次）、模板沉淀/套用、历史快照（50 份，可回滚任意版本）、zip 导入导出 | `list_projects` `switch_project` `create_project` `save_template` `delete_template` `get_history` `restore_rev` `export/import_project` |
-| 场景 | **60 种内置版式**（封面/文字/列表/数据/对比/流程/对话/收尾）+ **freeform 自由画布**（自排 svg/div，上限 40 个元素） | `list_scene_types` `add_scene` `update_freeform_element` |
+| 场景 | **64 种内置版式**（封面/文字/列表/数据/对比/流程/对话/收尾）+ **freeform 自由画布**（自排 svg/div，上限 40 个元素） | `list_scene_types` `add_scene` `update_freeform_element` |
 | 元素 | 场景内图片/文本/形状/视频/音频元素，rich 外观全套（圆角/边框/阴影/滤镜/混合/裁切/字体/行高/字距/对齐/斜体/下划线） | `list_element_library` `add_element` `update_element` |
 | 动效 | 元素级关键帧动画（`anim[].from/to` 绝对值）、全片动效强度三档（0 关 / 1 标准 / 2 更强） | `update_element(anim)` `set_theme(motion)` |
 | 特效 | **11 种全屏区间特效**（闪白/扫光/震动/冲击/旋转/故障/模糊/暗角/去色/呼吸/频闪）+ custom，**支持循环**（单次时长 + 到几秒停） | `list_effect_types` `add_effect` `update_effect(loop)` |
@@ -231,7 +231,7 @@
 | `sound` | 声音设计：BGM 选曲、戏剧曲线、混音、静音自检 |
 | `long-form` | 超 12 幕/2 分钟：分章规划与验收 |
 | `narration` | 口播写法、TTS 合成对齐、字幕 |
-| `scene-recipes` | 60 种版式逐个速查（items 数量、文案长度） |
+| `scene-recipes` | 64 种版式逐个速查（items 数量、文案长度） |
 | `freeform` | 自由画布全部写法与坑 |
 | `qa` | 分阶段自检清单、常见问题速查表 |
 | `delivery` | 画幅、字幕样式、渲染、交付物清单 |

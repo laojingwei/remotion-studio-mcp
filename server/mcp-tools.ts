@@ -6528,7 +6528,7 @@ const TOOLS: ToolDef[] = [
       layoutMode: z
         .string()
         .optional()
-        .describe("版式体系：内置场景（60 种现成版式）/ 自由画布 freeform / 混合"),
+        .describe("版式体系：内置场景（64 种现成版式）/ 自由画布 freeform / 混合"),
       avoid: z.array(z.string()).optional().describe("禁止出现的词/竞品/品牌规范"),
       assetsNote: z.string().optional().describe("可用素材情况"),
       voice: z.string().optional().describe("配音：音色/语言/语速/是否要字幕"),

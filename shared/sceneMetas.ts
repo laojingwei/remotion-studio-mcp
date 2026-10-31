@@ -1252,6 +1252,127 @@ export const liquidMeta: SceneMeta = {
   elements: [],
 };
 
+/* ─────────── 第四批：数据（4 个） ─────────── */
+
+export const gaugeMeta: SceneMeta = {
+  type: "gauge",
+  name: "仪表盘",
+  category: "数据",
+  summary: "270° 圆弧从 0 扫到目标值，中间大数字跟着滚；适合完成度、达成率、占比",
+  schema: z.object({
+    heading: z.string().default("").describe("顶部标题，可留空"),
+    value: z.number().min(0).max(100).default(78).describe("数值 0–100"),
+    unit: z.string().default("%").describe("数值后的单位"),
+    label: z.string().default("").describe("仪表下方的说明，可留空"),
+  }),
+  defaultProps: {
+    heading: "任务完成度",
+    value: 78,
+    unit: "%",
+    label: "距离本月目标还差 22 个百分点",
+  },
+  duration: { default: 110, min: MIN_SCENE_FRAMES, max: 108000 },
+  elements: [{ id: "heading", label: "标题" }, { id: "label", label: "说明" }],
+};
+
+export const racebarsMeta: SceneMeta = {
+  type: "racebars",
+  name: "竞速条形",
+  category: "数据",
+  summary: "横条按值从大到小自动排序，第一名最长最亮；适合榜单、排行、多账号对比",
+  schema: z.object({
+    heading: z.string().default("").describe("顶部标题，可留空"),
+    items: z
+      .array(
+        z.object({
+          label: z.string().describe("条目名"),
+          value: z.number().describe("数值（决定条的长度与名次）"),
+          display: z.string().default("").describe("显示文本，可留空（留空显示数值）"),
+        }),
+      )
+      .min(2)
+      .max(5)
+      .describe("2–5 条，顺序随便传，会自动按值排序"),
+    suffix: z.string().default("").describe("数字后缀，如 %、万"),
+  }),
+  defaultProps: {
+    heading: "今日带货榜",
+    items: [
+      { label: "小雅严选", value: 128000, display: "¥128,000" },
+      { label: "老王说车", value: 96000, display: "¥96,000" },
+      { label: "朵朵家", value: 73000, display: "¥73,000" },
+      { label: "阿凯直播", value: 41000, display: "¥41,000" },
+    ],
+    suffix: "",
+  },
+  duration: { default: 130, min: MIN_SCENE_FRAMES, max: 108000 },
+  elements: [{ id: "heading", label: "标题" }, { id: "row{n}", label: "每一行" }],
+};
+
+export const funnelMeta: SceneMeta = {
+  type: "funnel",
+  name: "转化漏斗",
+  category: "数据",
+  summary: "几层横条逐层收窄，层间标转化率；曝光→进播→下单这类流程用它",
+  schema: z.object({
+    heading: z.string().default("").describe("顶部标题，可留空"),
+    stages: z
+      .array(
+        z.object({
+          label: z.string().describe("流程节点名"),
+          value: z.number().describe("数值（决定层的宽度）"),
+          display: z.string().default("").describe("显示文本，可留空（留空显示数值）"),
+        }),
+      )
+      .min(3)
+      .max(5)
+      .describe("3–5 层，按流程顺序传（第一层最大），不排序"),
+  }),
+  defaultProps: {
+    heading: "本场转化",
+    stages: [
+      { label: "曝光", value: 120000, display: "12.0万" },
+      { label: "进直播间", value: 38000, display: "3.8万" },
+      { label: "点击商品", value: 9600, display: "9,600" },
+      { label: "成交", value: 2400, display: "2,400" },
+    ],
+  },
+  duration: { default: 130, min: MIN_SCENE_FRAMES, max: 108000 },
+  elements: [{ id: "heading", label: "标题" }, { id: "stage{n}", label: "每一层" }],
+};
+
+export const deltaMeta: SceneMeta = {
+  type: "delta",
+  name: "涨跌对比",
+  category: "数据",
+  summary: "一个数字从 before 到 after，箭头 + 涨跌幅；适合活动前后、规则前后对比",
+  schema: z.object({
+    label: z.string().default("").describe("顶部小标签，说明这两个数是什么"),
+    prefix: z.string().default("").describe("数字前缀，如 ¥"),
+    before: z.number().default(1000).describe("之前的值"),
+    after: z.number().default(370).describe("之后的值"),
+    suffix: z.string().default("").describe("数字后缀，如 万"),
+    tone: z.enum(["涨", "跌"]).default("跌").describe("箭头方向"),
+    note: z.string().default("").describe("底部一句话解释，可留空"),
+  }),
+  defaultProps: {
+    label: "一万音浪到手",
+    prefix: "¥",
+    before: 1000,
+    after: 370,
+    suffix: "",
+    tone: "跌",
+    note: "平台、公会、税，三层分完",
+  },
+  duration: { default: 110, min: MIN_SCENE_FRAMES, max: 108000 },
+  elements: [
+    { id: "label", label: "小标签" },
+    { id: "before", label: "之前的值" },
+    { id: "after", label: "之后的值" },
+    { id: "note", label: "说明" },
+  ],
+};
+
 export const SCENE_METAS: SceneMeta[] = [
   freeformMeta,
   titleMeta,
@@ -1313,6 +1434,10 @@ export const SCENE_METAS: SceneMeta[] = [
   gridflowMeta,
   rainMeta,
   liquidMeta,
+  gaugeMeta,
+  racebarsMeta,
+  funnelMeta,
+  deltaMeta,
 ];
 
 export const getMeta = (type: string): SceneMeta | undefined =>

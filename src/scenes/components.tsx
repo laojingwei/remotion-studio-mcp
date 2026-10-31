@@ -53,6 +53,10 @@ import { SpotlightScene } from "./spotlight/Spotlight";
 import { GridflowScene } from "./gridflow/Gridflow";
 import { RainScene } from "./rain/Rain";
 import { LiquidScene } from "./liquid/Liquid";
+import { GaugeScene } from "./gauge/Gauge";
+import { RaceBarsScene } from "./racebars/RaceBars";
+import { FunnelScene } from "./funnel/Funnel";
+import { DeltaScene } from "./delta/Delta";
 
 /**
  * 场景组件注册表：type → 渲染组件
@@ -122,4 +126,9 @@ export const SCENE_COMPONENTS: Record<string, React.FC<any>> = {
   gridflow: GridflowScene,
   rain: RainScene,
   liquid: LiquidScene,
+  // 第四批（2026-10-31）：数据
+  gauge: GaugeScene,
+  racebars: RaceBarsScene,
+  funnel: FunnelScene,
+  delta: DeltaScene,
 };
