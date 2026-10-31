@@ -80,6 +80,11 @@ export const RainScene: React.FC<RainProps> = ({
            * 结果容器旋转后的下边缘横穿画面，雨丝在那条线上突然消失，
            * 抽帧出来是一条横贯全屏的缝（像是画面接错了）。
            * 现在：雨丝各自倾斜，位置沿纵向走、横向按 tanθ 漂移，与真实下落方向一致。
+           *
+           * rotate 必须取 **-tilt**：CSS 正角是顺时针，+tilt 会把丝的上端转到右边，
+           * 看起来雨往左下落；而下面的 drift 是往右漂（angle>0 = 往右下，schema 约定）。
+           * 两个符号一打架，丝的指向和运动方向就相反 —— 用户一眼就看出来了。
+           * -tilt 让丝成为 "\" 形（上端偏左、下端偏右），指向右下，与漂移同向。
            */
           const drift = (y / 100) * height * Math.tan((tilt * Math.PI) / 180);
           return (
@@ -91,7 +96,7 @@ export const RainScene: React.FC<RainProps> = ({
                 top: `${y}%`,
                 width: Math.max(1, u(0.1)),
                 height: len,
-                transform: `rotate(${tilt}deg)`,
+                transform: `rotate(${-tilt}deg)`,
                 borderRadius: 99,
                 // 头细尾淡：雨丝不是一根等粗的线
                 background: `linear-gradient(180deg, transparent, ${withColorAlpha(c.text, alpha)} 62%, ${dropColor})`,
