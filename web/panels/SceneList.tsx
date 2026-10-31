@@ -91,9 +91,19 @@ export const SceneList: React.FC = () => {
   const add = async (type: string) => {
     setHover(null);
     setPickerOpen(false);
-    await apply([
-      { op: "add_scene", type, afterSceneId: selectedId ?? project.scenes[project.scenes.length - 1]?.id },
-    ]);
+    /*
+     * 锚点必须先验明正身：selectedId 可能是陈旧的（场景刚被删、或切工程前的
+     * 选中残留），空画布时 `scenes[len-1]?.id` 也是 undefined —— 把不存在的
+     * id 发给服务端，之前会整批被拒（找不到场景）。服务端现在虽已降级为
+     * 追加末尾，但 UI 侧不该发明知无效的锚点。
+     */
+    const exists = (id: string | undefined) => !!id && project.scenes.some((x) => x.id === id);
+    const candidates: (string | undefined)[] = [
+      selectedId ?? undefined,
+      project.scenes[project.scenes.length - 1]?.id,
+    ];
+    const anchor = candidates.find(exists);
+    await apply([{ op: "add_scene", type, ...(anchor ? { afterSceneId: anchor } : {}) }]);
   };
 
   const remove = async (sceneId: string) => {
