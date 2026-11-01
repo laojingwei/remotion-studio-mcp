@@ -394,7 +394,7 @@ export const TtsDialog: React.FC<{ open: boolean; onClose: () => void }> = ({
                     className="tts-input"
                     value={config.endpoint}
                     onChange={(e) => setConfig({ ...config, endpoint: e.target.value })}
-                    placeholder="http://127.0.0.1:9880/v1/audio/speech"
+                    placeholder="http://127.0.0.1:8091/v1/audio/speech"
                   />
                 </div>
                 <div className="row-inline">

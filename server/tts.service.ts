@@ -30,7 +30,7 @@ export type TtsConfig = {
 };
 
 const DEFAULTS: TtsConfig = {
-  endpoint: "http://127.0.0.1:9880/v1/audio/speech",
+  endpoint: "http://127.0.0.1:8091/v1/audio/speech",
   apiKey: "",
   model: "",
   voice: "default",
