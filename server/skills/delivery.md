@@ -18,7 +18,7 @@
 - 正式渲染前可先 `render_video(dryRun=true)` 预检：场景是否为空、素材文件是否都在（几秒返回）
 前检查（模型自己判断）
 
-- `preview_frame` 抽 2–3 帧：文字溢出、重叠、被裁；也可以 `preview_frame(sceneId, offset)` 按场景抽，不用自己算全局帧
+- `preview_frames(frames:[...])` 抽 2–3 帧：文字溢出、重叠、被裁；也可以传 `sceneId+offset` 按场景抽，不用自己算全局帧
 - `get_project` 确认场景数/顺序没有重复副本
 - 素材是否存在（`get_asset_info` 能验证音频时长，也顺带确认文件在）
 

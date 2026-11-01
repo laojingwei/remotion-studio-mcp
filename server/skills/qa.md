@@ -90,7 +90,7 @@
   只要一版就 `set_formats(只传目标画幅)`（默认覆盖）
 - 音频不超场景：`render_video(dryRun=true)` 会报「后面会被截断/静音」
 - **运动自检**：抽帧只能验"形"不能验"运动"——连续变化的段落（转场、Drop、签名时刻）
-  按相邻帧多抽几帧（`preview_frame` 逐帧偏移）看对象位置/大小是否真的在发展，
+  按相邻帧多抽几帧（`preview_frames` 逐帧偏移）看对象位置/大小是否真的在发展，
   还是只是静态卡换页（AI 默认味的头号标志，见 `get_guide("craft")` §3 伪运动）
 - **声音自检**：按 `get_guide("sound")` §6 逐条过（成片有音轨且非静音、BGM 音量压到人声 20–40%、改过文案已重量）
 - 转场不突兀：相邻场景 fade/slide 时长一致
@@ -123,7 +123,7 @@
 |---|---|---|
 | 文字溢出/被裁 | preview_frames | 缩短文案、换 `list`/`bullets`、减 items |
 | 字幕又长又带标点 | `check_project` 的字幕段 | `fix_subtitles(dryRun=true)` 看预演 → `fix_subtitles` 落盘；稿子太书面就回去改稿 |
-| 字幕来不及读（一闪而过） | `check_project` 的字/秒 | 加幕长（`set_scene_timing`）或减字，别缩字号 |
+| 字幕来不及读（一闪而过） | `check_project` 的字/秒 | 加幕长（`update_scene` 的 durationInFrames）或减字，别缩字号 |
 | 元素中途消失 | 元素 `durationInFrames` vs 场景时长 | **场景拉长后元素不会自动跟**（落盘的是具体帧数）。`update_element` 把 `durationInFrames` 改到新幕长，或传 `-1` |
 | 音频被截断/静音 | dryRun 告警 | 场景时长 = 音频时长 + 0.7s 呼吸位 |
 | 字幕挡住主体 | preview_frames | 调 `bottom` / 字号 / `bgOpacity`，或换位置 |

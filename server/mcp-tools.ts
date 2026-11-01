@@ -1080,6 +1080,8 @@ type ToolDef = {
   description: string;
   shape: Record<string, z.ZodTypeAny>;
   run: (args: Record<string, any>) => Promise<string>;
+  /** 已并入别的工具：仍注册可调（老调用不断），但搜索/目录不再列出，run 内透明转发并提示新名字 */
+  retiredTo?: string;
 };
 
 const text = (s: string) => s;
@@ -1141,7 +1143,7 @@ const TOOLS: ToolDef[] = [
         "8. 风格落地 → 定好 slug 后按需微调：get_style 读规则 → set_theme / apply_style；用 mood 反查一遍（要「高级」就别上弹跳动效）",
         "9. 分镜【闸口⑥】 → get_guide(\"formats\") 定结构 → 2–3 个拉开差距的提案给用户选 → save_storyboard（每幕 text 直接取自稿件分段）",
         "   ↳ 只写计划，不建场景。长片分多次提交用 append=true（50 幕一次传会超长被截断）。",
-        "10. 风格帧【闸口⑦】 → build_storyboard(shot=1) 只建第 1 幕 → preview_frame 抽 1–3 帧 + **render_preview_clip 出一段 6 秒带声片段**给用户过目",
+        "10. 风格帧【闸口⑦】 → build_storyboard(shot=1) 只建第 1 幕 → preview_frames 抽 1–3 帧 + **render_preview_clip 出一段 6 秒带声片段**给用户过目",
         "   ↳ 静帧只能看配色；转场、节奏、字幕可读性、BGM 大小必须看动/听声——用 render_preview_clip，几十秒出片，别等整片。",
         "   ⚠ **判断动画好不好看必须看动**：连出 6 张静帧等于没验——静帧里看不出动画问题，用户一句「动画太少」就是整轮返工。",
         "   ↳ 调性不对就回第 9 步改分镜（改文案/版式很便宜，改完重建 1 幕），别硬着头皮往下铺。",
@@ -1300,7 +1302,7 @@ const TOOLS: ToolDef[] = [
             `样张必须是「这个风格真实的样子」。没有预设时抽出来的其实是当前主题，` +
             `用户会当成这个风格就是长这样——比不出样张更误导。${String.fromCharCode(10)}` +
             `两条路：① 换一个已带预设的风格（list_styles 里没标「仅规则」的都是，共 ${ready.length} 个）；` +
-            `② 先用 get_style 读规则 → set_theme 手动改到位 → preview_frame 抽这一帧自己看（不走样张对比）`,
+            `② 先用 get_style 读规则 → set_theme 手动改到位 → preview_frames 抽这一帧自己看（不走样张对比）`,
         );
       }
       const nl = String.fromCharCode(10);
@@ -1471,8 +1473,9 @@ const TOOLS: ToolDef[] = [
   {
     name: "apply_to_scenes",
     description:
-      "把同一个操作批量套到多幕：指定 tool（如 set_subtitle_style / add_element / set_scene_box / set_transition / set_scene_timing / set_scene_type）+ args（不含 sceneId）+ sceneIds 或 applyToAll=true。\n" +
-      "用来替代「50 幕 × 5 轮 = 250 次调用」：字幕样式、贴纸、画中画、转场这类全片统一的改动，先在一幕上试好，再用它一次性推全片。",
+      "把同一个操作批量套到多幕：指定 tool（如 set_subtitle_style / add_element / set_scene_box / update_scene / set_scene_type）+ args（不含 sceneId）+ sceneIds 或 applyToAll=true。\n" +
+      "用来替代「50 幕 × 5 轮 = 250 次调用」：字幕样式、贴纸、画中画、转场这类全片统一的改动，先在一幕上试好，再用它一次性推全片。\n" +
+      "注意：全片统一转场**直接用 set_transitions**（它自己就能批量，不经过本工具）；失败语义是**逐幕执行、部分成功**（失败的场景在回执里列出，其余已生效），要「一错全不落库」的原子批量用 apply_ops。",
     shape: {
       projectId: z.string().optional().describe("要操作的工程 id，不传 = 当前默认工程（list_projects 查）"),
       tool: z.string().describe("要批量执行的工具名（必须接受 sceneId 参数）"),
@@ -1582,7 +1585,7 @@ const TOOLS: ToolDef[] = [
           );
         }
         throw new Error(
-          `「${a.slug}」还没有结构化预设（server/styles/presets.json 里缺这一条）：用 get_style 读规则后手动 set_theme + set_transition。`,
+          `「${a.slug}」还没有结构化预设（server/styles/presets.json 里缺这一条）：用 get_style 读规则后手动 set_theme + set_transitions。`,
         );
       }
       const p = await resolveProject(a.projectId);
@@ -1610,7 +1613,7 @@ const TOOLS: ToolDef[] = [
         method: "POST",
         body: JSON.stringify({ actor: "agent", ops }),
       });
-      return `已套用风格（${res.summary.length} 处改动）${String.fromCharCode(10)}${styleSummary(a.slug)}${String.fromCharCode(10)}注意：转场只应用到**现有**场景，之后新建的场景默认转场是 fade 12 帧——要一致就给新场景补 set_transition 或重跑 apply_style。${String.fromCharCode(10)}下一步：save_storyboard 写分镜（见 get_guide(\"director\",\"分镜\")）`;
+      return `已套用风格（${res.summary.length} 处改动）${String.fromCharCode(10)}${styleSummary(a.slug)}${String.fromCharCode(10)}注意：转场只应用到**现有**场景，之后新建的场景默认转场是 fade 12 帧——要一致就给新场景补 set_transitions 或重跑 apply_style。${String.fromCharCode(10)}下一步：save_storyboard 写分镜（见 get_guide(\"director\",\"分镜\")）`;
     },
   },
   {
@@ -1945,7 +1948,7 @@ const TOOLS: ToolDef[] = [
   {
     name: "set_scene_type",
     description:
-      "换场景版式（不改场景 id、不删场景，旁白元素也不会丢）。props 按同名 key 迁移：新版式认识的字段保留，不认识的丢弃，新版式缺少的必填字段用默认值补上——丢弃和补上的字段都会在返回里列明。换版式后建议 preview_frame 抽一帧看排版。",
+      "换场景版式（不改场景 id、不删场景，旁白元素也不会丢）。props 按同名 key 迁移：新版式认识的字段保留，不认识的丢弃，新版式缺少的必填字段用默认值补上——丢弃和补上的字段都会在返回里列明。换版式后建议 preview_frames 抽一帧看排版。",
     shape: {
       sceneId: z.string(),
       type: z.string().describe("目标版式，见 list_scene_types"),
@@ -1981,18 +1984,14 @@ const TOOLS: ToolDef[] = [
   },
   {
     name: "set_scene_timing",
-    description: "单独调整某个场景的停留时长（帧）。秒数 = 帧 / 工程 fps（默认 30fps，即 30 帧 ≈ 1 秒）。",
+    description:
+      "（已并入 update_scene：改时长就是 update_scene 的 durationInFrames 字段）单独调整某个场景的停留时长（帧）。秒数 = 帧 / 工程 fps（默认 30fps，即 30 帧 ≈ 1 秒）。",
+    retiredTo: "update_scene",
     shape: { sceneId: z.string(), durationInFrames: z.number(), projectId: z.string().optional() },
     run: async (a) => {
-      const p = await resolveProject(a.projectId);
-      const res = await api<any>(`/api/projects/${p.id}/ops`, {
-        method: "POST",
-        body: JSON.stringify({
-          actor: "agent",
-          ops: [{ op: "set_scene_timing", sceneId: a.sceneId, durationInFrames: a.durationInFrames }],
-        }),
-      });
-      return fmtSummary(res.summary);
+      const target = TOOLS.find((t) => t.name === "update_scene")!;
+      const out = await target.run({ sceneId: a.sceneId, durationInFrames: a.durationInFrames, projectId: a.projectId });
+      return `（提示：「set_scene_timing」已并入 update_scene——改时长用它的 durationInFrames 字段，本次已按新工具执行，以后请直接用 update_scene）\n${out}`;
     },
   },
   {
@@ -2176,7 +2175,7 @@ const TOOLS: ToolDef[] = [
       "注意叠加层（add_element）不支持 anim 和 fx，塞了会被丢弃并在 summary 里警告。\n" +
       "批量转场用 set_transitions（复数，给全部或指定场景套同一套）：{op:'set_transitions', type:'fade', durationInFrames:12, direction:'in'}，" +
       "direction 可选 in/out/both，sceneIds 不传=全部场景。\n" +
-      "重要：整批是**原子**的——任何一个操作失败，整批都不生效（不会出现改了一半的工程）。" +
+      "重要：整批是**原子**的——任何一个操作失败，整批都不生效（不会出现改了一半的工程）。要「逐幕容错、失败的跳过其余照常」用 apply_to_scenes。" +
       "失败会明确报「第 N 个操作（op 名）失败：缺哪个字段 / 哪个值越界」。\n" +
       "**批内可以直接引用刚建出来的东西**：创建类 op 带 as:「s1」，后面的 op 用「@s1」指它 —— " +
       "一批就能「建幕 → 往里加元素 → 给元素加动画」，不用先加、再 get_project 读 id、再改。" +
@@ -2413,7 +2412,8 @@ const TOOLS: ToolDef[] = [
   {
     name: "set_transition",
     description:
-      "设置场景的入场或出场转场。direction 默认 in；type 可选 none / fade / slide / wipe / zoom / blur / flip / circle / blinds / flash / glitch / diagonal；duration 不传默认 12 帧，建议 8–20 帧。",
+      "（已并入 set_transitions：单幕/批量/逐幕统一用它）设置场景的入场或出场转场。direction 默认 in；type 可选 none / fade / slide / wipe / zoom / blur / flip / circle / blinds / flash / glitch / diagonal；duration 不传默认 12 帧，建议 8–20 帧。",
+    retiredTo: "set_transitions",
     shape: {
       sceneId: z.string(),
       type: z.enum(TRANSITION_TYPES),
@@ -2422,18 +2422,9 @@ const TOOLS: ToolDef[] = [
       projectId: z.string().optional().describe("要操作的工程 id，不传 = 当前默认工程（list_projects 查）"),
     },
     run: async (a) => {
-      const p = await resolveProject(a.projectId);
-      const t =
-        a.type === "none" ? null : { type: a.type, durationInFrames: a.durationInFrames ?? TRANSITION_DEFAULT_FRAMES };
-      const patch = a.direction === "out" ? { transitionOut: t } : { transitionIn: t };
-      const res = await api<any>(`/api/projects/${p.id}/ops`, {
-        method: "POST",
-        body: JSON.stringify({
-          actor: "agent",
-          ops: [{ op: "update_scene", sceneId: a.sceneId, patch }],
-        }),
-      });
-      return fmtSummary(res.summary);
+      const target = TOOLS.find((t) => t.name === "set_transitions")!;
+      const out = await target.run({ ...a, sceneIds: [a.sceneId] });
+      return `（提示：「set_transition」已并入 set_transitions——单幕/批量/逐幕都是它，本次已按新工具执行，以后请直接用 set_transitions）\n${out}`;
     },
   },
   {
@@ -2907,7 +2898,7 @@ const TOOLS: ToolDef[] = [
         );
       } else {
         lines.push(
-          "下一步：把转场/特效对齐到拍点，例如 set_transition(durationInFrames 落在拍点附近)、" +
+          "下一步：把转场/特效对齐到拍点，例如 set_transitions(durationInFrames 落在拍点附近)、" +
             "或 add_effect(from=拍点帧)。要固定这套网格就再调一次 save=true。",
         );
       }
@@ -4146,7 +4137,7 @@ const TOOLS: ToolDef[] = [
       return (
         `「${scene.name}」字幕已写入：${norm.lines.length} 屏（每屏 ≤ ${max} 字，${norm.before} 字→${norm.after} 字）${nl}${preview}` +
         (norm.warnings.length ? `${nl}⚠️ ${norm.warnings.join(`${nl}⚠️ `)}` : "") +
-        `${nl}${res.summary.join(nl)}${nl}下一步：preview_frame 抽这一帧看一眼字幕有没有压主体/出安全区`
+        `${nl}${res.summary.join(nl)}${nl}下一步：preview_frames 抽这一帧看一眼字幕有没有压主体/出安全区`
       );
     },
   },
@@ -4364,7 +4355,8 @@ const TOOLS: ToolDef[] = [
   {
     name: "preview_frame",
     description:
-      "渲染指定帧为图片（默认同时出竖屏+横屏），返回图片 URL。改完务必调用它自检：检查文字溢出、重叠、被裁。",
+      "（已并入 preview_frames：单帧给 frames:[帧号]，多帧给 frames 列表）渲染指定帧为图片（默认同时出竖屏+横屏），返回图片 URL。改完务必调用它自检：检查文字溢出、重叠、被裁。",
+    retiredTo: "preview_frames",
     shape: {
       frame: z.number().optional().describe("全局帧号，默认 0（给了 sceneId 时忽略）"),
       sceneId: z.string().optional().describe("按场景预览：给场景 id + offset 就不用自己算全局帧"),
@@ -4373,32 +4365,10 @@ const TOOLS: ToolDef[] = [
       projectId: z.string().optional().describe("要操作的工程 id，不传 = 当前默认工程（list_projects 查）"),
     },
     run: async (a) => {
-      const p = await resolveProject(a.projectId);
-      let frame = a.frame ?? 0;
-      if (a.sceneId) {
-        const idx = (p.scenes ?? []).findIndex((x: any) => x.id === a.sceneId);
-        if (idx < 0) throw new Error(`没有场景 ${a.sceneId}`);
-        // 多轨之后起点不再等于"前序时长之和"，必须走 sceneSpans（否则画中画会预览到别处）
-        const span = sceneSpans(p.scenes as any[])[idx];
-        const dur = span?.dur ?? (p.scenes as any[])[idx].durationInFrames;
-        const off = Math.max(0, Math.min(dur - 1, a.offset ?? 0));
-        frame = (span?.start ?? 0) + off;
-      }
-      const res = await api<{ stills: { format: string; url: string; frame: number }[] }>(
-        `/api/projects/${p.id}/stills`,
-        { method: "POST", body: JSON.stringify({ frame, formats: a.formats }) },
-      );
-      dirtySincePreview = false;
-      return [
-        `已渲染第 ${res.stills[0]?.frame ?? 0} 帧：`,
-        ...res.stills.map(
-          (s: { format: string; url: string }) =>
-            `  ${s.format}: ${BASE}${encodeURI(s.url)}` +
-            String.fromCharCode(10) +
-            `  本地：${path.join(ROOT, String(s.url).split("?")[0].replace(/^\/+/, ""))}`,
-        ),
-        "请打开图片检查排版是否溢出/重叠。",
-      ].join("\n");
+      const target = TOOLS.find((t) => t.name === "preview_frames")!;
+      const { frame, ...rest } = a;
+      const out = await target.run(frame === undefined ? rest : { ...rest, frames: [frame] });
+      return `（提示：「preview_frame」已并入 preview_frames——单帧写 frames:[帧号]，本次已按新工具执行，以后请直接用 preview_frames）\n${out}`;
     },
   },
   {
@@ -4864,9 +4834,11 @@ const TOOLS: ToolDef[] = [
   {
     name: "preview_frames",
     description:
-      "一次渲染多帧（最多 8 帧）为图片，返回各帧 URL。改完排版抽 2–3 帧一起看，比逐帧调用省往返。",
+      "渲染帧为图片（1–8 帧），返回各帧 URL。改完排版抽 2–3 帧一起看。单帧给 frames:[帧号]；按场景给 sceneId+offset（不用自己算全局帧）；around=\"transitions\" 自动取每幕交界帧。",
     shape: {
-      frames: z.array(z.number()).min(1).max(8).optional().describe("要看的帧号列表"),
+      frames: z.array(z.number()).min(1).max(8).optional().describe("要看的帧号列表（单帧就是 [帧号]；给 sceneId 时可省略）"),
+      sceneId: z.string().optional().describe("按场景预览：给场景 id + offset 就不用自己算全局帧"),
+      offset: z.number().optional().describe("场景内偏移（帧），配合 sceneId，默认 0"),
       around: z
         .enum(["transitions"])
         .optional()
@@ -4879,6 +4851,15 @@ const TOOLS: ToolDef[] = [
       const nl = String.fromCharCode(10);
       const lines: string[] = [];
       let frames = a.frames ?? [];
+      if (a.sceneId) {
+        const idx = (p.scenes ?? []).findIndex((x: any) => x.id === a.sceneId);
+        if (idx < 0) throw new Error(`没有场景 ${a.sceneId}`);
+        // 多轨之后起点不再等于"前序时长之和"，必须走 sceneSpans（否则画中画会预览到别处）
+        const span = sceneSpans(p.scenes as any[])[idx];
+        const dur = span?.dur ?? (p.scenes as any[])[idx].durationInFrames;
+        const off = Math.max(0, Math.min(dur - 1, a.offset ?? 0));
+        frames = [(span?.start ?? 0) + off];
+      }
       if (a.around === "transitions") {
         // 每幕交界前后各取几帧：转场只在交界那 8–22 帧里，静态单帧永远看不到
         const spans = sceneSpans(p.scenes as any[]);
@@ -4896,7 +4877,7 @@ const TOOLS: ToolDef[] = [
           lines.push(`（全片 ${bounds.length} 处交界共 ${picks.length} 帧，先看前 8 帧；要具体哪处就用 frames 指定）`);
         }
       }
-      if (!frames.length) throw new Error("给 frames 列表，或 around=\"transitions\" 自动取交界帧");
+      if (!frames.length) throw new Error('给 frames 列表（单帧 frames:[帧号]）、sceneId+offset，或 around="transitions" 自动取交界帧');
       for (const f of frames) {
         const res = await api<{ stills: { format: string; url: string }[] }>(
           `/api/projects/${p.id}/stills`,
@@ -5160,14 +5141,40 @@ const TOOLS: ToolDef[] = [
   {
     name: "list_assets",
     description:
-      "列出「我的素材」库（跨工程复用的共用池，文件在 assets/library/），带 id、类型、时长。最新的在前。\n" +
-      "**只列库，不含本工程目录里的文件** —— 那些用 list_project_assets 看。",
+      "列素材。scope=\"library\"（默认）：跨工程复用的「我的素材」库（assets/library/）；scope=\"project\"：**本工程自己的素材目录**（assets/projects/<工程id>/，删工程时会被清掉）。\n" +
+      "带 id、类型、大小/时长、是否被引用。最新的在前。",
     shape: {
+      scope: z.enum(["library", "project"]).optional().describe("library=共用库（默认），project=本工程素材目录"),
       query: z.string().optional().describe("按名字过滤（包含即可）"),
-      kind: z.enum(["image", "video", "audio"]).optional().describe("只列某一类"),
+      kind: z.enum(["image", "video", "audio", "file"]).optional().describe("只列某一类"),
       limit: z.number().int().min(1).max(500).optional().describe("最多返回条数，默认 100"),
+      projectId: z.string().optional().describe("scope=project 时要看的工程 id，不传 = 当前默认工程"),
     },
     run: async (a) => {
+      if (a.scope === "project") {
+        const p = await resolveProject(a.projectId);
+        const { items } = await api<{ items: ProjectAssetLite[] }>(`/api/projects/${p.id}/assets`);
+        const q = (a.query ?? "").trim().toLowerCase();
+        const list = (items ?? [])
+          .filter((x) => !a.kind || x.kind === a.kind)
+          .filter((x) => !q || x.name.toLowerCase().includes(q));
+        if (!list.length) {
+          return (
+            `「${p.name}」的素材目录是空的（assets/projects/${p.id}/）。\n` +
+            `上传：upload_asset(path, registerToLibrary:false)；共用素材放库：upload_asset(path)`
+          );
+        }
+        const lines = list.map(
+          (x) =>
+            `- ${x.name}（${x.kind}，${formatBytes(x.bytes)}）→ ${x.url}` +
+            (x.referenced ? "  · 工程正在用" : "  · 未被引用"),
+        );
+        return (
+          `「${p.name}」的素材目录：${list.length} 个文件\n` +
+          lines.join("\n") +
+          `\n（删工程时这个目录会被清掉；要跨工程复用请入「我的素材」库）`
+        );
+      }
       const { items } = await api<{ items: any[] }>("/api/library");
       const q = (a.query ?? "").trim().toLowerCase();
       // 先过滤再截断：以前先 slice 后过滤，「按名字找」会把更早的匹配项一起藏掉
@@ -5200,36 +5207,17 @@ const TOOLS: ToolDef[] = [
   {
     name: "list_project_assets",
     description:
-      "列出**本工程自己的素材目录**（assets/projects/<工程id>/）。与 list_assets（共用库）分开：\n" +
-      "这里的文件只属于这个工程，删工程时会被一起清掉。面板上也能看到同一份清单。",
+      "（已并入 list_assets：scope=\"project\" 看本工程目录，默认 scope=\"library\" 看共用库）列出**本工程自己的素材目录**（assets/projects/<工程id>/）。这里的文件只属于这个工程，删工程时会被一起清掉。",
+    retiredTo: "list_assets",
     shape: {
       projectId: z.string().optional().describe("工程 id，不传 = 当前默认工程"),
       query: z.string().optional().describe("按文件名过滤（包含即可）"),
       kind: z.enum(["image", "video", "audio", "file"]).optional().describe("只列某一类"),
     },
     run: async (a) => {
-      const p = await resolveProject(a.projectId);
-      const { items } = await api<{ items: ProjectAssetLite[] }>(`/api/projects/${p.id}/assets`);
-      const q = (a.query ?? "").trim().toLowerCase();
-      const list = (items ?? [])
-        .filter((x) => !a.kind || x.kind === a.kind)
-        .filter((x) => !q || x.name.toLowerCase().includes(q));
-      if (!list.length) {
-        return (
-          `「${p.name}」的素材目录是空的（assets/projects/${p.id}/）。\n` +
-          `上传：upload_asset(path, registerToLibrary:false)；共用素材放库：upload_asset(path)`
-        );
-      }
-      const lines = list.map(
-        (x) =>
-          `- ${x.name}（${x.kind}，${formatBytes(x.bytes)}）→ ${x.url}` +
-          (x.referenced ? "  · 工程正在用" : "  · 未被引用"),
-      );
-      return (
-        `「${p.name}」的素材目录：${list.length} 个文件\n` +
-        lines.join("\n") +
-        `\n（删工程时这个目录会被清掉；要跨工程复用请入「我的素材」库）`
-      );
+      const target = TOOLS.find((t) => t.name === "list_assets")!;
+      const out = await target.run({ ...a, scope: "project" });
+      return `（提示：「list_project_assets」已并入 list_assets——本工程目录传 scope:"project"，本次已按新工具执行，以后请直接用 list_assets）\n${out}`;
     },
   },
   {
@@ -5479,7 +5467,8 @@ const TOOLS: ToolDef[] = [
   {
     name: "update_element",
     description:
-      "修改场景里的自由元素：位置、尺寸、旋转、透明度、颜色/背景色、文字、图层、场景内时间、入出场特效；音频元素还能换音源、调音量。用户刚放进去的元素也能改，改完用户界面会实时更新。",
+      "修改场景里的自由元素：位置、尺寸、旋转、透明度、颜色/背景色、文字、图层、场景内时间、入出场特效；音频元素还能换音源、调音量。用户刚放进去的元素也能改，改完用户界面会实时更新。参数是平铺字段（直接给 opacity:0.5）。\n" +
+      "分清：内置版式场景里的元素用本工具；freeform 自由画布场景的元素用 update_freeform_element（patch 包裹式）。",
     shape: {
       projectId: z.string().optional().describe("要操作的工程 id，不传 = 当前默认工程（list_projects 查）"),
       sceneId: z.string().describe("元素所在场景"),
@@ -5591,7 +5580,8 @@ const TOOLS: ToolDef[] = [
   {
     name: "update_freeform_element",
     description:
-      "局部更新 freeform 场景里的一个元素（按 elementId 或 index），不用重发整个 elements 数组。patch 只写要改的字段（text/x/y/size/fill/bg/border/style/anim…）。",
+      "局部更新 freeform 场景里的一个元素（按 elementId 或 index），不用重发整个 elements 数组。patch 只写要改的字段（text/x/y/size/fill/bg/border/style/anim…）。\n" +
+      "分清：freeform 自由画布场景用本工具（patch 包裹式）；内置版式场景的元素用 update_element（平铺字段式）。",
     shape: {
       projectId: z.string().optional().describe("要操作的工程 id，不传 = 当前默认工程（list_projects 查）"),
       sceneId: z.string(),
@@ -7312,7 +7302,7 @@ const TOOLS: ToolDef[] = [
           visionNote +
           (visionNote ? nl : "") +
           `已建第 ${onlyIdx + 1} 幕做风格帧（${sb.shots[onlyIdx]?.type}，id=${ids[0]}）。${nl}` +
-          `下一步：preview_frame 抽 1–3 帧给用户过目（场景 id=${ids[0]}）——` +
+          `下一步：preview_frames 抽 1–3 帧给用户过目（场景 id=${ids[0]}）——` +
           `配色/字体/版式方向 OK 再 build_storyboard(replace=true) 全量铺开（会重建这一幕，正常）；` +
           `不对就 save_storyboard 改这一幕再 build_storyboard(shot=${onlyIdx + 1})，只重做 1 幕。${subNote}${orderNote}`
         );
@@ -7625,7 +7615,7 @@ const TOOLS: ToolDef[] = [
       names: z.array(z.string()).optional().describe("按名字精确取某几个工具的完整文档（含参数表）"),
     },
     run: async (a) => {
-      const others = TOOLS.filter((d) => !CORE_TOOL_NAMES.has(d.name));
+      const others = TOOLS.filter((d) => !CORE_TOOL_NAMES.has(d.name) && !d.retiredTo);
       if (a.names?.length) {
         const wanted: string[] = a.names;
         const picked = wanted
@@ -7693,7 +7683,7 @@ const TOOLS: ToolDef[] = [
       "  读：{\"name\":\"get_project\",\"args\":{\"projectId\":\"p_xxx\"}}\n" +
       "  写：{\"name\":\"update_scene\",\"args\":{\"sceneId\":\"s1\",\"props\":{\"title\":\"新标题\"}}}\n" +
       "  批量：{\"name\":\"apply_to_scenes\",\"args\":{\"tool\":\"set_subtitle_style\",\"args\":{\"style\":{\"bottom\":24}},\"applyToAll\":true}}\n" +
-      "易错：preview_frame（单帧，frame） vs preview_frames（多帧，frames）；没有 set_format，画幅是 set_formats（数组）。",
+      "易错：preview_frames（frames 是数组，单帧写 [帧号]）；没有 set_format，画幅是 set_formats（数组）。",
     shape: {
       name: z.string().describe("要执行的工具名（来自 tool_search 或 manual 全书）"),
       args: z.record(z.any()).optional().describe("参数对象，字段见该工具的 params"),
@@ -8035,7 +8025,7 @@ function fullDoc(d: ToolDef) {
 const SEARCH_ALIASES: Record<string, string[]> = {
   画中画: ["move_scene", "set_scene_box"],
   小窗: ["set_scene_box"],
-  卡点: ["set_transition", "add_effect"],
+  卡点: ["set_transitions", "add_effect"],
   撤销: ["restore_rev", "get_history"],
   找回: ["restore_rev", "get_history"],
   历史: ["get_history", "restore_rev"],
@@ -8060,19 +8050,19 @@ const SEARCH_ALIASES: Record<string, string[]> = {
   盖住: ["reorder_freeform_elements"],
   呼吸位: ["tts_narration"],
   断句: ["set_subtitle", "tts_narration"],
-  时长: ["set_scene_timing"],
+  时长: ["update_scene", "set_scene_timing"],
   多版本: ["duplicate_scene"],
   模板: ["list_templates", "save_template"],
   主题: ["set_theme"],
-  封面: ["render_cover", "preview_frame"],
-  转场: ["set_transition", "set_transitions", "preview_frames"],
+  封面: ["render_cover", "preview_frames"],
+  转场: ["set_transitions", "preview_frames"],
   字幕: ["set_subtitle", "set_subtitle_style", "fix_subtitles", "export_subtitles"],
   风格: ["list_styles", "apply_style", "probe_style", "confirm_style_probe"],
   颜色: ["set_theme"],
   配色: ["set_theme"],
   样式: ["set_subtitle_style", "apply_style"],
   渲染: ["render_video", "get_render_status", "cancel_render"],
-  预览: ["preview_frame", "preview_frames", "render_preview_clip"],
+  预览: ["preview_frames", "render_preview_clip"],
   动态: ["render_preview_clip"],
   分镜: ["save_storyboard", "build_storyboard", "build_film"],
   建片: ["build_film", "build_storyboard"],
@@ -8081,8 +8071,8 @@ const SEARCH_ALIASES: Record<string, string[]> = {
   问诊: ["intake", "save_brief"],
   尺寸: ["set_formats"],
   比例: ["set_formats"],
-  试: ["preview_frame", "preview_frames"],
-  抽帧: ["preview_frame", "preview_frames"],
+  试: ["preview_frames"],
+  抽帧: ["preview_frames"],
   出片: ["render_video"],
   成片: ["render_video"],
   导出: ["export_project", "export_subtitles"],
@@ -8092,7 +8082,7 @@ const SEARCH_ALIASES: Record<string, string[]> = {
     "list_assets",
     "upload_asset",
     "get_asset_info",
-    "list_project_assets",
+    "list_assets",
     "delete_project_asset",
     "organize_assets",
     "delete_asset",

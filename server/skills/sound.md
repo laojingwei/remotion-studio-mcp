@@ -73,7 +73,7 @@ set_beat_grid(bpm=128, offsetSec=0.25)      # offsetSec = 第一拍在第几秒�
 之后按这个 BPM 算帧号手动对位：`interval = 60 / bpm * fps`（128 BPM @30fps = 14.06 帧）。
 
 **卡点手法**（按性价比排序）：
-1. **转场起点对齐拍点**：把 `set_transition` 所在幕的接缝挪到拍点附近（±2 帧内听不出）
+1. **转场起点对齐拍点**：把 `set_transitions` 所在幕的接缝挪到拍点附近（±2 帧内听不出）
 2. **闪白/频闪压在重拍**：`add_effect(kind="flash", from=拍点帧, durationInFrames=4)`
 3. **画面切点对齐拍**：在拍点处 `add_scene` 或 `move_scene`
 4. **drop 前留白**：重拍前 2–4 帧把 BGM 音量压到 0，落地瞬间恢复

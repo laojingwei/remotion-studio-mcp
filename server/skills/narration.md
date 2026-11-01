@@ -18,7 +18,7 @@
 
 1. `tts_synthesize`（可带 instruct 语气、voice 音色）
 2. `get_asset_info` 量真实时长（秒 / 帧）
-3. `set_scene_timing`：帧数 = `ceil((秒数 + 0.7) × 30)`，0.7 秒是呼吸位
+3. `update_scene`（durationInFrames 字段）：帧数 = `ceil((秒数 + 0.7) × 30)`，0.7 秒是呼吸位
 4. 改过文案必须重量——同一段文字两次合成时长可能不同
 
 ## 字幕

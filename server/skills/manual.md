@@ -63,13 +63,13 @@
 | 元素 | 场景内图片/文本/形状/视频/音频元素，rich 外观全套（圆角/边框/阴影/滤镜/混合/裁切/字体/行高/字距/对齐/斜体/下划线） | `list_element_library` `add_element` `update_element` |
 | 动效 | 元素级关键帧动画（`anim[].from/to` 绝对值）、全片动效强度三档（0 关 / 1 标准 / 2 更强） | `update_element(anim)` `set_theme(motion)` |
 | 特效 | **11 种全屏区间特效**（闪白/扫光/震动/冲击/旋转/故障/模糊/暗角/去色/呼吸/频闪）+ custom，**支持循环**（单次时长 + 到几秒停） | `list_effect_types` `add_effect` `update_effect(loop)` |
-| 转场 | 幕间转场（fade/slide 等 12 种，时长可调；**所有版式通用，自由画布也是场景**）；带字幕的幕转场 ≤ 6 帧 | `set_transition` |
+| 转场 | 幕间转场（fade/slide 等 12 种，时长可调；**所有版式通用，自由画布也是场景**）；带字幕的幕转场 ≤ 6 帧 | `set_transitions` |
 | 多轨 | 任意条轨道、画中画小窗（缩放/位置/圆角）、同轨自动防重叠 | `move_scene` `set_scene_box` |
 | 音频 | TTS 配音（单段/多段**自动对齐幕长并写字幕**）、BGM 全局轨、场景内音频裁时间窗、音量调节 | `tts_narration` `add_audio_track` `set_audio` |
 | 字幕 | 硬字幕烧录（**一屏 8–16 字、不带标点**，写入自动拆段）+ SRT/VTT 导出，两者同一套时间 | `set_subtitle` `fix_subtitles` `set_subtitle_style` `export_subtitles` |
 | 风格 | **43 种风格规则库，全部带结构化预设**（`apply_style` 一键套：主题色+字体+圆角+转场+推荐版式+禁止项），也都能 `probe_style` 出真样张；风格文件可改造/混搭/自定义 | `list_styles` `get_style` `apply_style` |
 | 画幅 | 多画幅并存（9:16 / 16:9 / 1:1 / 自定义 16–7680）。**`set_formats` 默认覆盖**：没写进 formats 的画幅会被删掉（用户说「只要竖屏」就只传 portrait，否则编辑器顶栏会留着横屏按钮）；只改尺寸传 `merge:true` | `set_formats` |
-| 预览 | 单帧/多帧抽帧（按场景偏移）、真实浏览器渲染前 dryRun 预检 | `preview_frame(s)` `render_video(dryRun)` |
+| 预览 | 单帧/多帧抽帧（按场景偏移）、真实浏览器渲染前 dryRun 预检 | `preview_frames`（单帧 `frames:[f]`） `render_video(dryRun)` |
 | 渲染 | 正式出片（可等完成）、进度查询、取消、历史产物清理 | `render_video` `get_render_status` `cancel_render` `cleanup_renders` |
 | 素材 | **分两层目录**：`assets/library/`（我的素材，跨工程复用）+ `assets/projects/<工程id>/`（工程私有，删工程连带清）；素材库上传/列表/改名、探测真实时长、图标装饰元素库 | `upload_asset` `list_assets` `list_project_assets` `delete_project_asset` `organize_assets` `get_asset_info` |
 | 自检 | 只读诊断：空场景/素材缺失/音频超长/freeform 异常/字幕超标/安全区与竖屏构图（提醒级），一条条给修法。多画幅工程默认只查交付那一版，另一版传 `format` | `check_project(format?)` |

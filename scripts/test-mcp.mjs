@@ -121,10 +121,10 @@ async function main() {
     return Object.fromEntries(docs.map((d) => [d.name, d.params]));
   };
   const hasKey = (params, k) => Object.keys(params ?? {}).some((x) => x.replace("?", "") === k);
-  const { add_element: addEl, update_element: updEl, set_transition: setTr } = await docOf(
+  const { add_element: addEl, update_element: updEl, set_transitions: setTrs } = await docOf(
     "add_element",
     "update_element",
-    "set_transition",
+    "set_transitions",
   );
   check(
     "add_element 支持背景色与入场/出场特效",
@@ -136,7 +136,8 @@ async function main() {
     ["enter", "exit", "from", "durationInFrames", "bg", "muted", "loop"].every((k) => hasKey(updEl, k)),
     Object.keys(updEl ?? {}).join(","),
   );
-  check("set_transition 支持出场方向", hasKey(setTr, "direction"), Object.keys(setTr ?? {}).join(","));
+  check("set_transition 已退役且不再出现在目录", !allNames.includes("set_transition"));
+  check("set_transitions 支持批量与出场方向", hasKey(setTrs, "sceneIds") && hasKey(setTrs, "direction"), Object.keys(setTrs ?? {}).join(","));
   check("有 set_formats", allNames.includes("set_formats"));
   /* 换版式 + 批量 ops（v0.85） */
   check("有 set_scene_type", allNames.includes("set_scene_type"));

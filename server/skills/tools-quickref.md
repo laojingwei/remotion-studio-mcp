@@ -11,7 +11,7 @@
 - 需求与分镜：intake → save_brief → confirm_brief → save_storyboard → build_storyboard
 - 场景与元素：add/update_scene、39 版式（scene-recipes）、freeform、元素/特效/转场
 - 音频字幕：tts_narration、add_audio_track、set_subtitle、export_subtitles
-- 预览渲染：preview_frame(s)、render_video(dryRun/wait)、check_project
+- 预览渲染：preview_frames（单帧 frames:[f]）、render_video(dryRun/wait)、check_project
 - 风格主题：list_styles / apply_style / set_theme / set_formats
 - 批量：apply_ops（整批原子）
 - 协作记忆：reply_user / remember / recall
