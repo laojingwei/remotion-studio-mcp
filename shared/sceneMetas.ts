@@ -13,6 +13,8 @@ import { freeformPropsSchema } from "./freeform";
  * 拖到 40 帧松手，落库时被 clamp 回 60 —— 表现出来就是"缩到某个长度会自己弹回去"。
  * 两端现在共用这个常量，手柄拖到哪，落库就是哪。
  */
+import { dslIssues, dslSchema, type Scene3DDsl } from "./scene3dDsl";
+
 export const MIN_SCENE_FRAMES = 15;
 
 export type SceneMeta = {
@@ -1709,6 +1711,23 @@ export const scene3dMeta: SceneMeta = {
       ),
     title: z.string().default("").describe("画面下方标题（2D 叠层，3D 里不做中文文字），可留空"),
     sub: z.string().default("").describe("副标题，可留空"),
+    /**
+     * 场景图 DSL（M2）。和 preset 是**二选一**：给了 graph 就完全忽略 preset / spin / count。
+     * 校验分两层：zod 管字段与白名单，`dslIssues` 管 zod 表达不了的结构问题（重 id、
+     * parent 不存在、parent 成环、关键帧只有 from）。
+     */
+    graph: dslSchema
+      .optional()
+      .describe(
+        "自定义场景图：{ camera?, nodes[], particles?, post? }。给了它就忽略 preset —— " +
+          "6 个预设覆盖不到的构图（机器、分子、抽象雕塑）用这个搭。" +
+          "几何体白名单：box/sphere/cylinder/cone/torus/torusKnot/plane/capsule/" +
+          "icosahedron/dodecahedron/octahedron/ring；" +
+          "材质 type：standard（PBR）/physical（玻璃）/basic（线框、剪影）。" +
+          "动画和 freeform 同一套 {at:[起,止], from:{...}, to:{...}, ease}，" +
+          "键是 3D 标量：posX/posY/posZ/rotX/rotY/rotZ/scale/opacity。" +
+          "父节点用 parent 引用另一个节点的 id；节点上限 48 个",
+      ),
   }),
   defaultProps: {
     preset: "orbit-core",
@@ -1982,5 +2001,21 @@ export function droppedProps(type: string, props: Record<string, unknown>): stri
 export function normalizeProps(type: string, props: Record<string, unknown>) {
   const meta = getMeta(type);
   if (!meta) throw new Error(`未知场景类型: ${type}`);
-  return meta.schema.parse({ ...meta.defaultProps, ...props });
+  const out = meta.schema.parse({ ...meta.defaultProps, ...props });
+
+  /*
+   * 场景图的结构性问题（zod 表达不了的那部分）在这里挡。
+   *
+   * 为什么不写成 schema 的 `.superRefine()`：SceneMeta.schema 的类型是 `ZodObject`，
+   * 包成 `ZodEffects` 会直接把类型弄坏，而全项目有几十处依赖 `.shape`
+   * （编辑器面板、JSON schema 生成）。放在归一化这一层，行为一样，代价小得多。
+   */
+  const graph = (out as { graph?: Scene3DDsl }).graph;
+  if (graph) {
+    const issues = dslIssues(graph);
+    if (issues.length) {
+      throw new Error(`scene3d.graph 结构有问题：\n- ${issues.join("\n- ")}`);
+    }
+  }
+  return out;
 }

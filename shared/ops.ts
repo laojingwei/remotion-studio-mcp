@@ -386,6 +386,9 @@ function describeIssue(issue: Record<string, unknown>): string {
       return `${field} 取值不合法（可选：${JSON.stringify(issue.options ?? [])}）`;
     case "invalid_union":
       return `${field} 不符合任何允许的结构`;
+    case "invalid_union_discriminator":
+      // 判别联合（3D 的几何体白名单就是这样）：把可选值列出来，agent 才不用猜
+      return `${field} 取值不合法（可选：${(issue.options as unknown[])?.join(" / ") ?? "?"}）`;
     default:
       return `${field}：${String(issue.message ?? code)}`;
   }

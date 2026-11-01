@@ -18,7 +18,9 @@ const H = 720;
 /** 竖屏：单独一组，用来核对"相机按画幅分档"到底够不够 */
 const PW = 720;
 const PH = 1280;
-const FRAME = 60; // 第 2 秒：爆炸预设此刻正好在悬停段，其余预设也避开了转场
+// 第 2 秒：爆炸预设此刻正好在悬停段，其余预设也避开了转场。
+// 要对比"动画有没有在动"，用 SAMPLE_FRAME=100 再跑一遍比 md5 即可。
+const FRAME = Number(process.env.SAMPLE_FRAME ?? 60);
 
 /**
  * 用本机 Edge 出图，不走 Remotion 自动下载。
@@ -50,6 +52,126 @@ const LIGHT_THEME = {
     secondary: "#7A4BE0",
     accent: "#E05A1F",
   },
+};
+
+/* ─────────────────── M2：场景图 DSL 的三个例子 ─────────────────── */
+
+/**
+ * 分子/原子：中心核 + 三条轨道环 + 沿环公转的电子。
+ * 轨道环用 basic 材质（不受光，纯色细线），电子用高 emissive 小球 ——
+ * 这样"结构"和"能量点"在同一画面里读得开。
+ */
+const GRAPH_MOLECULE = {
+  camera: { position: [0, 2.1, 6.2], target: [0, 0, 0], fov: 40, orbit: { degPerSec: 10 } },
+  nodes: [
+    {
+      id: "core",
+      geometry: { type: "sphere", radius: 0.5, segments: 48 },
+      material: { color: "primary", metalness: 1, roughness: 0.2, emissive: "primary", emissiveIntensity: 0.08 },
+    },
+    ...[0, 60, 120].map((deg, i) => ({
+      id: `orbit${i}`,
+      geometry: { type: "torus", radius: 1.45, tube: 0.008, radialSegments: 8, tubularSegments: 128 },
+      material: { type: "basic", color: "accent", body: false, opacity: 0.55 },
+      transform: { rotation: [deg, 0, 0] },
+    })),
+    /*
+     * 电子挂在 pivot 上、pivot 挂在环上并自己绕 Y 转：
+     * 环负责"倾角"，pivot 负责"公转"。少了 pivot 这一层，电子只会定在环的某一点上
+     * （第一版就是这么写错的 —— 电子直接 parent 到环，环没有动画，画面里三个电子全叠在一起）。
+     */
+    ...[0, 1, 2].map((i) => ({
+      id: `pivot${i}`,
+      parent: `orbit${i}`,
+      geometry: { type: "sphere", radius: 0.001 },
+      material: { type: "basic", color: "text", body: false, opacity: 0 },
+      // 绕 **Z** 而不是 Y：torus 的圆在 XY 平面里，绕 Y 转会让电子跑到环外面去
+      anim: [{ at: [0, 120], from: { rotZ: i * 120 }, to: { rotZ: i * 120 + 360 }, ease: "linear" }],
+    })),
+    ...[0, 1, 2].map((i) => ({
+      id: `e${i}`,
+      parent: `pivot${i}`,
+      geometry: { type: "sphere", radius: 0.075, segments: 20 },
+      material: { color: "accent", body: false, metalness: 0, roughness: 0.3, emissive: "accent", emissiveIntensity: 3 },
+      transform: { position: [1.45, 0, 0] },
+    })),
+  ],
+};
+
+/** 机械：底座 + 立柱 + 两段臂（parent 串起来），臂在转，末端有玻璃球 */
+const GRAPH_MACHINE = {
+  // 取景对准模型的重心（臂伸向 +x，所以 target 要往右挪），否则主体会挤在右上角
+  camera: { position: [2.9, 2.2, 4.1], target: [0.75, 0.85, 0], fov: 42, orbit: { degPerSec: 6 } },
+  nodes: [
+    {
+      id: "base",
+      geometry: { type: "cylinder", radiusTop: 0.75, radiusBottom: 0.9, height: 0.22, segments: 48 },
+      material: { color: "secondary", metalness: 1, roughness: 0.28 },
+    },
+    {
+      id: "column",
+      geometry: { type: "box", width: 0.26, height: 1.5, depth: 0.26 },
+      material: { color: "secondary", metalness: 1, roughness: 0.32 },
+      transform: { position: [0, 0.86, 0] },
+    },
+    {
+      id: "arm1",
+      geometry: { type: "box", width: 1.5, height: 0.16, depth: 0.2 },
+      material: { color: "text", metalness: 1, roughness: 0.3 },
+      transform: { position: [0.7, 1.62, 0] },
+      anim: [{ at: [0, 120], from: { rotY: -25 }, to: { rotY: 25 }, ease: "easeInOut" }],
+    },
+    {
+      id: "jam1",
+      geometry: { type: "sphere", radius: 0.15, segments: 32 },
+      material: { color: "accent", metalness: 1, roughness: 0.22 },
+      transform: { position: [0.72, 0, 0] },
+      parent: "arm1",
+    },
+    {
+      id: "arm2",
+      geometry: { type: "box", width: 0.9, height: 0.13, depth: 0.16 },
+      material: { color: "text", metalness: 1, roughness: 0.3 },
+      transform: { position: [0.45, 0, 0] },
+      parent: "arm1",
+      anim: [{ at: [0, 120], from: { rotY: 35 }, to: { rotY: -20 }, ease: "easeInOut" }],
+    },
+    {
+      id: "lens",
+      geometry: { type: "sphere", radius: 0.2, segments: 40 },
+      material: { type: "physical", color: "text", transmission: 0.92, thickness: 0.5, ior: 1.6 },
+      transform: { position: [0.45, 0, 0] },
+      parent: "arm2",
+    },
+  ],
+  particles: { count: 260, spread: [4, 2.4, 4], size: 0.05, color: "accent", drift: 0.5, opacity: 0.5 },
+};
+
+/** 抽象雕塑：环面纽结 + 线框外壳 + 玻璃球 + 辉光开大 */
+const GRAPH_SCULPT = {
+  camera: { position: [0, 1.0, 6.9], target: [0, 0, 0], fov: 40, orbit: { degPerSec: 14 } },
+  nodes: [
+    {
+      id: "knot",
+      geometry: { type: "torusKnot", radius: 1.05, tube: 0.3, p: 2, q: 3 },
+      material: { color: "primary", metalness: 1, roughness: 0.26, emissive: "primary", emissiveIntensity: 0.06 },
+      anim: [{ at: [0, 120], from: { rotY: 0, rotX: 20 }, to: { rotY: 180, rotX: 20 }, ease: "linear" }],
+    },
+    {
+      id: "shell",
+      geometry: { type: "icosahedron", radius: 2.05, detail: 1 },
+      material: { type: "basic", color: "accent", body: false, wireframe: true, opacity: 0.09 },
+      anim: [{ at: [0, 120], from: { rotY: 0 }, to: { rotY: -90 }, ease: "linear" }],
+    },
+    {
+      id: "drop",
+      geometry: { type: "sphere", radius: 0.26, segments: 40 },
+      material: { type: "physical", color: "text", transmission: 0.95, thickness: 0.6, ior: 1.7 },
+      transform: { position: [1.65, 0.9, 0.6] },
+      anim: [{ at: [0, 120], from: { posY: 0.9 }, to: { posY: 1.35 }, ease: "easeInOut" }],
+    },
+  ],
+  post: { bloom: 1.15 },
 };
 
 type Case = {
@@ -128,7 +250,12 @@ const CASES: Case[] = [
     hostProps: { preset: "orbit-core", title: "双层 3D", sub: "场景 + 氛围层" },
     backdrop: { type: "scene3d", props: { preset: "grid-horizon" }, place: "上", opacity: 0.55 },
   },
+  /* M2：场景图 DSL —— 这三张不看预设，全部由 nodes/particles/camera 描述 */
+  { preset: "orbit-core", props: { graph: GRAPH_MOLECULE }, tag: "24-dsl-molecule" },
+  { preset: "orbit-core", props: { graph: GRAPH_MACHINE }, tag: "25-dsl-machine" },
+  { preset: "orbit-core", props: { graph: GRAPH_SCULPT }, tag: "26-dsl-sculpt" },
 ];
+
 
 const base = createSeedProject("p_3d_samples");
 

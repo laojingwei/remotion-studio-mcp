@@ -7,6 +7,9 @@ import type { Theme } from "../../../shared/schema";
 import { useSceneLayout } from "../../layout/useSceneLayout";
 import { Editable } from "../ui";
 import { installBloom } from "./bloom";
+import { DslScene, applyBloomMultiplier, dslCamera, dslAutoDistance } from "./DslScene";
+import { glowTexture, hash01, luminance, metalBody, shade } from "./color";
+import type { Scene3DDsl } from "../../../shared/scene3dDsl";
 
 /**
  * 真 3D 场景（Three.js / react-three-fiber）。
@@ -45,6 +48,11 @@ export type Scene3DProps = {
   overlay?: boolean;
   /** 场景预设：一次选好整个视觉母题 */
   preset: Scene3DPreset;
+  /**
+   * 自定义场景图（M2）：给了它就用它，**完全忽略 preset / spin / count**。
+   * 校验在 meta 的 schema 里做（几何/材质白名单 + 结构检查），这里只负责渲染。
+   */
+  graph?: Scene3DDsl;
   /** 光线风格（决定"这套画面是什么气质"）；auto = 按预设自动挑一个 */
   look: Scene3DLook | "auto";
   /** 主色取哪一路主题色 */
@@ -173,96 +181,7 @@ const pick = (theme: Theme, hue: Scene3DProps["hue"]): string => {
   return c.primary;
 };
 
-/**
- * 颜色乘系数（压暗/提亮）。
- *
- * **直接在 sRGB 数值上乘**，不要走 `Color.multiplyScalar`——后者作用在 linear 空间，
- * 而 sRGB 是约 2.4 次幂的映射：`multiplyScalar(0.1)` 出来的是人眼看到的 **0.32 倍**亮度。
- * 典型症状是"想压到很暗、渲出来还是中绿"，然后被迫一路往下试 0.05、0.02⋯⋯
- * 3D 调色最费时间的坑就是这个，写进去的数字和看到的亮度对不上。
- */
-const shade = (hex: string, k: number): string => {
-  const m = /^#?([0-9a-f]{6})$/i.exec(hex.trim());
-  if (!m) return hex;
-  const n = parseInt(m[1], 16);
-  const ch = (v: number) => Math.max(0, Math.min(255, Math.round(v * k)));
-  const r = ch((n >> 16) & 255);
-  const g = ch((n >> 8) & 255);
-  const b = ch(n & 255);
-  return `#${((1 << 24) | (r << 16) | (g << 8) | b).toString(16).slice(1)}`;
-};
-
-/**
- * 金属本体色：**降饱和 + 压暗**，不是"把主题色乘个系数"。
- *
- * 主题色直接当金属本体，是 3D 里最容易翻车的一步。默认主题的主色 `#C6F24E` 是一支
- * 高饱和柠檬绿，金属度拉满之后它整颗都在反射环境光，渲出来永远是"果冻/塑料球"——
- * 而且 `metalness / roughness / envMapIntensity` 这三个参数**救不回来**，它们只改变
- * 高光的形状和锐度，不改变本体色。这就是"怎么调都是糖果"的真正原因。
- *
- * 正确做法是 3D 的常识：**中性暗本体 + 彩色边光**。
- * 本体先按 `sat` 向自身灰度靠（把"颜色"抽掉），再按 `k` 压暗；颜色交给边光（rim light）
- * 和 `emissive`，高光交给环境贴图和一盏白色锐光。这样同一个预设换主题色时，
- * 变的是边缘的光，不是整颗球。
- */
-const metalBody = (hex: string, targetLum = 0.26, sat = 0.18): string => {
-  const m = /^#?([0-9a-f]{6})$/i.exec(hex.trim());
-  if (!m) return hex;
-  const n = parseInt(m[1], 16);
-  const r = (n >> 16) & 255;
-  const g = (n >> 8) & 255;
-  const b = n & 255;
-  const lum = 0.2126 * r + 0.7152 * g + 0.0722 * b;
-  // 先向自身灰度靠（抽掉颜色），再整体缩放到目标亮度。
-  // 用"目标亮度"而不是"乘系数"：主题主色可能是一支亮柠檬绿（lum 220），
-  // 也可能是深藏蓝（lum 65），乘同一个系数会一个变黑一个不够暗。
-  // 归一化之后，6 个预设在任何主题下的"本体明度"是同一条基准线。
-  const k = (targetLum * 255) / Math.max(1, lum);
-  const mix = (v: number) =>
-    Math.max(0, Math.min(255, Math.round((lum + (v - lum) * sat) * k)));
-  return `#${((1 << 24) | (mix(r) << 16) | (mix(g) << 8) | mix(b)).toString(16).slice(1)}`;
-};
-
-/** 确定性伪随机：同一 (i,k) 永远同一个值，绝不依赖 Math.random */const hash01 = (i: number, k: number): number => {
-  const x = Math.sin(i * 127.1 + k * 311.7) * 43758.5453;
-  return x - Math.floor(x);
-};
-
 const clamp01 = (v: number) => Math.max(0, Math.min(1, v));
-
-/**
- * 径向渐变贴图，用来做"光晕"。
- *
- * 之前试过用一个加法混合的半透明球壳做光晕：在低不透明度（0.14）下，
- * 它在 ANGLE/SwiftShader 上会被渲成一个**方形暗块**包住发光核（透明度调到 0.7 才看不出），
- * 换几何体、换分段数都没用。所以在 3D 里做柔光，一律用贴图 + sprite，不靠几何体轮廓。
- */
-let glowCache: THREE.CanvasTexture | null = null;
-const glowTexture = (): THREE.CanvasTexture | null => {
-  if (glowCache) return glowCache;
-  if (typeof document === "undefined") return null;
-  const size = 128;
-  const cv = document.createElement("canvas");
-  cv.width = cv.height = size;
-  const ctx = cv.getContext("2d");
-  if (!ctx) return null;
-  const g = ctx.createRadialGradient(size / 2, size / 2, 0, size / 2, size / 2, size / 2);
-  g.addColorStop(0, "rgba(255,255,255,1)");
-  g.addColorStop(0.22, "rgba(255,255,255,0.55)");
-  g.addColorStop(0.55, "rgba(255,255,255,0.14)");
-  g.addColorStop(1, "rgba(255,255,255,0)");
-  ctx.fillStyle = g;
-  ctx.fillRect(0, 0, size, size);
-  glowCache = new THREE.CanvasTexture(cv);
-  glowCache.colorSpace = THREE.SRGBColorSpace;
-  return glowCache;
-};
-
-/** 相对亮度：决定后处理强度。浅色主题上开满 Bloom 会让整幅画面糊成一层雾 */
-const luminance = (hex: string): number => {
-  const c = new THREE.Color(hex);
-  return 0.2126 * c.r + 0.7152 * c.g + 0.0722 * c.b;
-};
 
 /**
  * 按"物体半径刚好占画面 82%"反算相机距离。
@@ -1025,6 +944,7 @@ const GlobeArc: React.FC<{
 export const Scene3DScene: React.FC<Scene3DProps> = ({
   theme,
   preset = "orbit-core",
+  graph,
   look = "auto",
   hue = "primary",
   spin = 12,
@@ -1065,8 +985,25 @@ export const Scene3DScene: React.FC<Scene3DProps> = ({
    *   构图本身就是"铺满并超出"，反算距离反而会把它们缩成中间一小团，所以按画幅给固定值。
    */
   const aspect = width / height;
-  const cam =
-    preset === "grid-horizon"
+  /**
+   * DSL 的相机是"相机在 P、看向 T"，渲染时压成内容 group 的变换（见 DslScene.dslCamera）。
+   * 没写 camera 时按节点外接半径反算一个能装下的距离，避免"渲出来一片空白"。
+   */
+  const dslCam = graph ? dslCamera(graph, t) : null;
+  const autoDist = graph ? dslAutoDistance(graph) : 0;
+
+  const cam = graph
+    ? dslCam
+      ? { position: dslCam.camPos, fov: dslCam.fov }
+      : {
+          position: [0, 0.6, fitCamera(Math.max(1, autoDist), 42, aspect, 0.82)] as [
+            number,
+            number,
+            number,
+          ],
+          fov: 42,
+        }
+    : preset === "grid-horizon"
       ? { position: [0, 0.35, isPortrait ? 8.6 : 6.6] as [number, number, number], fov: 52 }
       : preset === "waveform"
         ? { position: [0, 2.0, isPortrait ? 7.4 : 8.0] as [number, number, number], fov: 46 }
@@ -1092,13 +1029,15 @@ export const Scene3DScene: React.FC<Scene3DProps> = ({
    * 浅色底不能只靠"强度减半"：白底的线性亮度本来就接近 1，阈值不提上去，
    * 整片背景都会被当成高光叠一遍（这才是浅色主题做 bloom 翻车的真正原因）。
    */
-  const bloomOpts = darkTheme
+  const lookBloom = darkTheme
     ? lookSpec.bloom
     : {
         strength: lookSpec.bloom.strength * 0.55,
         radius: lookSpec.bloom.radius,
         threshold: Math.min(0.99, lookSpec.bloom.threshold + 0.12),
       };
+  // DSL 的 post.bloom 是"倍数"而不是绝对值：agent 不该被迫知道 0.46 这个数怎么来的
+  const bloomOpts = graph ? applyBloomMultiplier(graph, lookBloom) : lookBloom;
   /** WebGL 后处理装不上时的降级：CSS 全屏混合（观感差一档，但不会黑屏） */
   const [cssBloom, setCssBloom] = React.useState(false);
   const bloomBlur = Math.round(Math.min(width, height) * 0.012);
@@ -1198,6 +1137,13 @@ export const Scene3DScene: React.FC<Scene3DProps> = ({
           爆炸环最下面那一段正好压在标题上，金属高光把字吃掉。
           抬 0.5 个世界单位（约画面的 8%），底部的 scrim 才有地方铺。
         */}
+        {graph ? (
+          /*
+            不套"有文字时上移"的那个 group：DSL 的相机是用户/agent 自己给的，
+            再叠一层位移就等于偷偷改了它的构图。
+          */
+          <DslScene spec={graph} frame={frame} t={t} theme={theme} camera={dslCam!} />
+        ) : (
         <group position={[0, title || sub ? 0.5 : 0, 0]}>
         {preset === "particle-field" ? (
           <ParticleField t={t} count={count} core={core} dot={dot} />
@@ -1213,6 +1159,7 @@ export const Scene3DScene: React.FC<Scene3DProps> = ({
           <OrbitCore t={t} spin={spin} count={count} core={core} dot={dot} accent={accent} />
         )}
         </group>
+        )}
 
       </ThreeCanvas>
 
