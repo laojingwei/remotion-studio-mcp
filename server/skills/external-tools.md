@@ -1,6 +1,4 @@
-
 # 外部工具（.other_modules）：anatomy 等轴测插图
-
 
 `<项目根>/.other_modules/` 存放**别人的开源项目**。故意不进仓库（.gitignore 已忽略，
 只保留 `.gitkeep` 和 `README.md`），clone 下来是空的。
@@ -19,10 +17,8 @@
 # 1. 看有没有装
 ls .other_modules/<工具名>   # 有 SKILL.md / 入口文件 = 已装
 
-# 2a. 没有 → 优先请用户下载（zip 或 git clone 解压后目录名要对上）
-# 2b. 用户让你自己下 → 试，失败是常态（本机实测：git ls-remote 通、
-#     git clone 和 curl 到 codeload 都会挂）。失败就明确告诉用户"我下不动，需要你手动放"，
-#     附上 README.md 表格里的仓库地址，不要反复重试。
+# 2a. 没有 → 询问用户是让你下载还是让用户自己下载；用户下载时告诉他具体操作步骤
+# 2b. 用户让你自己下 → 试，失败是常态。失败就明确告诉用户：需要他手动下载放进去，或告知该工具不下载无法使用。
 
 # 3. 校验（以 anatomy 为例）
 ls .other_modules/anatomy/SKILL.md .other_modules/anatomy/kit/iso-kit.mjs
@@ -102,8 +98,9 @@ node scripts/iso-embed.mjs .other_modules/anatomy/out/<名>.svg <工程id> <名>
 # 引用地址：/assets/projects/<工程id>/iso/<名>.svg
 ```
 
-不要手写主题映射——`iso-embed` 已经做了（scripts/iso-theme.mjs）。要调明暗对比
-改那个文件，别在 SVG 上打补丁。
+主题映射（明暗、配色）由 iso-embed 内部处理，**agent 不需要也不得改动它的实现**；
+本技能只关心怎么调用、产物落在哪。若产出的图明暗层次不满意，如实报告用户、由用户决定，
+不要改本项目源码，也不要在 SVG 上手写 `--anatomy-*` 变量打补丁。
 
 **进片子**：加一幕 `iso` 场景（见 `shared/sceneMetas.ts` 的 isoMeta）：
 

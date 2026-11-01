@@ -10,6 +10,7 @@ import { z } from "zod";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { listSkills, readSkill } from "./skills.service";
 import { recallAll, remember, type MemoryKind } from "./memory.service";
+import { ROOT as PROJECT_ROOT } from "./root";
 import { BACKDROP_TYPES } from "../shared/sceneKinds";
 import { BRIEF_STEPS, CONFIRM_GROUPS, CORE_STEPS, briefCoverage, briefProgress, briefToText, confirmBrief, legacyFieldNotice, readBrief, recomputeDesignLock, saveBrief, sceneCountHint, stepMissingFields, type Brief } from "./brief.service";
 import { FORM_SPECS, designLockSummary, lockViolations, normalizeForm } from "../shared/designLock";
@@ -1183,7 +1184,7 @@ const TOOLS: ToolDef[] = [
   {
     name: "start_guide",
     description:
-      "开工入口：返回完整创作流程（接单→brief→风格→分镜→搭建→配音→自检→渲染→沉淀），以及你现在处在哪一步、该读哪篇技能、下一步动作。每次新任务先调它一次。",
+      "开工入口：返回完整创作流程（接单→brief→风格→分镜→搭建→配音→自检→渲染→沉淀，含 3D/iso 场景的环境前置），以及你现在处在哪一步、该读哪篇技能、下一步动作。每次新任务先调它一次。",
     shape: {
       projectId: z.string().optional().describe("传了会判断当前工程进度"),
     },
@@ -1195,6 +1196,15 @@ const TOOLS: ToolDef[] = [
         "【闸口】① 工程归属　② 9 步真的问了用户　③ brief 用户点头　④ 稿件用户点头　⑤ **风格样张用户挑**　⑥ 分镜提案用户选　⑦ 风格帧用户过目　⑧ 观感规格齐 + 用户到编辑器看片　⑨ 交付前自检",
         "⑤⑥ 在用户明确说「直接做 / 别问了」时可跳（跳过要在最后说明「这版没做风格帧确认」）；①②③④⑦⑧ 永不跳。",
         "",
+        "项目根（技能和文档里写的 <项目根> 都指这里，相关相对路径从这里出发）：" + PROJECT_ROOT,
+        "环境前置【用到 3D（scene3d）或 iso 图解幕时，开工前先过一遍，这两个功能环境如不能用，明确告知用户】：",
+        "  • scene3d（3D 幕）唯一前置：**用户的浏览器要支持 WebGL**。three.js 已在依赖里，不用装任何东西；",
+        "    但 3D 幕的实时预览（编辑器）和渲染（Chrome）都吃 WebGL，浏览器不支持或被禁用时表现为 3D 幕黑屏。",
+        "    用户说「我看不到 3D」先查这个：换 Chrome/Edge 验证、或开 chrome://gpu 看 WebGL 是否可用，别先怀疑代码。",
+        "  • iso（图解拆解）唯一前置：**外部工具 anatomy 是否已下载**。如有需要用到该功能，先查：`ls .other_modules/anatomy/kit/iso-kit.mjs`。",
+        "    在 → 按 get_guide(\"external-tools\") 画图并落盘；",
+        "    不在 → 询问用户是让你来处理下载还是让用户自己下载，下载好后放进 .other_modules（主路径）。",
+        "    工具没下载时 iso 幕仍可引用已有 SVG（素材在 public/assets/projects/<id>/iso/），只是画不了新图。",
         "0. 定位《导演》 → get_guide(\"director\")；连续做同类片子可只读一节：get_guide(\"director\",\"流程\")",
         "1. 查记忆 → recall()：先看以前踩过什么坑、这个用户有什么偏好（一次调用，别省）",
         "2. 定工程归属【闸口①】 → list_projects() → **问用户：这次是新增一支，还是改已有工程？**",
