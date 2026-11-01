@@ -82,6 +82,15 @@ export const BACKDROP_TYPES = [
   "smoke",
   // 第六批：只有 matrix（wave/slot 带正文，垫在别的版式下会出现两套字）
   "matrix",
+  /**
+   * 3D 场景当氛围层。层次由 place / z 决定，和别的氛围层一样：
+   * - 垫在版式**下面**：画不透明底色，当背景用（辉光有底才成立）；
+   * - 盖在内容**上面**：自动切成透明画布，否则整块把字盖住。
+   *
+   * 用法：`backdrop: { type: "scene3d", props: { preset: "particle-field" } }`。
+   * 垫底下时它比"整幕 3D + 底部叠字"少一整类遮挡问题（3D 退成背景，字永远在前）。
+   */
+  "scene3d",
 ] as const;
 
 export type BackdropType = (typeof BACKDROP_TYPES)[number];

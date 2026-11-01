@@ -37,7 +37,12 @@ const chromeMode = browserPath?.toLowerCase().includes("chrome-headless-shell")
 const base = createSeedProject("p_tape_3d");
 
 /** 混排脚本：2D 开场 → 3D 主体 → 2D 说明 → 3D 拆解 → 3D 频谱 → 2D 收尾 */
-const SCENES: { type: string; frames: number; props?: Record<string, unknown> }[] = [
+const SCENES: {
+  type: string;
+  frames: number;
+  props?: Record<string, unknown>;
+  backdrop?: Record<string, unknown>;
+}[] = [
   {
     type: "title",
     frames: 75,
@@ -60,6 +65,8 @@ const SCENES: { type: string; frames: number; props?: Record<string, unknown> }[
         { text: "中文不进 3D，走 2D 叠层" },
       ],
     },
+    // 顺带验"3D 当底 + 2D 文字"在成片里的样子（也是过渡重叠区里两个 WebGL 共存的场合）
+    backdrop: { type: "scene3d", props: { preset: "particle-field", count: 5 }, opacity: 0.6 },
   },
   // studio（默认）：明亮产品光，看材质最清楚
   { type: "scene3d", frames: 120, props: { preset: "explode-parts", title: "构成", sub: "一个圆环拆成八段" } },
@@ -83,6 +90,7 @@ const project = {
       name: meta.name,
       durationInFrames: s.frames,
       props: normalizeProps(s.type, s.props ?? {}),
+      ...(s.backdrop ? { backdrop: s.backdrop } : {}),
       transitionIn: { type: "fade", durationInFrames: 10 },
     };
   }),

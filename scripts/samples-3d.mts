@@ -52,7 +52,18 @@ const LIGHT_THEME = {
   },
 };
 
-type Case = { preset: string; props?: Record<string, unknown>; theme?: typeof DEFAULT_THEME; portrait?: boolean; tag: string };
+type Case = {
+  preset: string;
+  props?: Record<string, unknown>;
+  theme?: typeof DEFAULT_THEME;
+  portrait?: boolean;
+  tag: string;
+  /** 有值就渲成"2D 版式 + 3D 氛围层"，用来验 Backdrop 接入 */
+  backdrop?: Record<string, unknown>;
+  /** 承载氛围层的 2D 版式（默认 bullets） */
+  host?: string;
+  hostProps?: Record<string, unknown>;
+};
 
 const CASES: Case[] = [
   { preset: "orbit-core", tag: "1-orbit-core" },
@@ -83,6 +94,40 @@ const CASES: Case[] = [
   // 柱阵对光线最敏感（发光体+受光柱体混在一起），单独比两套 look
   { preset: "waveform", props: { look: "studio" }, tag: "18-wave-studio" },
   { preset: "waveform", props: { look: "cyber" }, tag: "19-wave-cyber" },
+  /**
+   * 3D 当氛围层：上面压 2D 文字。
+   * 这是"3D 和文字共存"最不容易出事的姿势——3D 退成背景，字永远在最前。
+   */
+  {
+    preset: "particle-field",
+    tag: "20-backdrop-particles",
+    backdrop: { type: "scene3d", props: { preset: "particle-field", count: 6 }, opacity: 0.95 },
+  },
+  {
+    preset: "grid-horizon",
+    tag: "21-backdrop-grid",
+    backdrop: { type: "scene3d", props: { preset: "grid-horizon" }, opacity: 0.9 },
+    host: "title",
+    hostProps: { eyebrow: "背景是 3D", title: "文字永远在最前", subtitle: "3D 退成氛围层" },
+  },
+  // 层次自由：同一套 3D 放到"上"层，应当自动透明、字仍然可读
+  {
+    preset: "sparks",
+    tag: "22-backdrop-overlay",
+    backdrop: { type: "scene3d", props: { preset: "particle-field", count: 4 }, place: "上", opacity: 0.9 },
+  },
+  /**
+   * 双层 3D：3D 场景 + 3D 氛围层同时存在，一帧里两个 WebGL 上下文、两套 composer。
+   * 注意必须放"上"层：3D 场景本身是不透明的（要自带底色做辉光），
+   * 垫在它下面的氛围层会被整块盖住 —— "3D 场景 + 3D 底"是个无效组合。
+   */
+  {
+    preset: "orbit-core",
+    tag: "23-double-3d",
+    host: "scene3d",
+    hostProps: { preset: "orbit-core", title: "双层 3D", sub: "场景 + 氛围层" },
+    backdrop: { type: "scene3d", props: { preset: "grid-horizon" }, place: "上", opacity: 0.55 },
+  },
 ];
 
 const base = createSeedProject("p_3d_samples");
@@ -99,14 +144,30 @@ const propsFor = (c: Case) => {
         : { key: "landscape", label: "横屏 16:9", width: W, height: H },
     ],
     scenes: [
-      {
-        id: "scene_3d",
-        type: "scene3d",
-        name: meta.name,
-        durationInFrames: 120,
-        props: normalizeProps("scene3d", { preset: c.preset, title: "", sub: "", ...(c.props ?? {}) }),
-        transitionIn: { type: "fade", durationInFrames: 12 },
-      },
+      c.backdrop
+        ? {
+            id: "scene_bd",
+            type: c.host ?? "bullets",
+            name: "氛围层承载",
+            durationInFrames: 120,
+            props: normalizeProps(
+              c.host ?? "bullets",
+              c.hostProps ?? {
+                heading: "3D 当背景",
+                items: [{ text: "上面照常压 2D 文字" }, { text: "字永远在最前" }],
+              },
+            ),
+            backdrop: c.backdrop,
+            transitionIn: { type: "fade", durationInFrames: 12 },
+          }
+        : {
+            id: "scene_3d",
+            type: "scene3d",
+            name: meta.name,
+            durationInFrames: 120,
+            props: normalizeProps("scene3d", { preset: c.preset, title: "", sub: "", ...(c.props ?? {}) }),
+            transitionIn: { type: "fade", durationInFrames: 12 },
+          },
     ],
   };
   return { ...project, formatKey: c.portrait ? "portrait" : "landscape" };

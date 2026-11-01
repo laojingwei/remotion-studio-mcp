@@ -63,6 +63,17 @@ const BackdropBody: React.FC<{
    * 不透明底色，z-index 又高于版式 → 整块背景把标题盖没（抽帧时标题直接消失）。
    * 当时没发现是因为验证用的是 grain，底色恰好和主题背景同色，看不出来。
    */
+  /**
+   * `scene3d` 放在哪一层由调用方决定（place / z 都尊重）。
+   *
+   * 但它和别的氛围层有一个根本差别，必须在这里告诉组件：
+   * 垫在版式**下面**时它要画不透明底色（辉光才有地方叠加），
+   * 盖在内容**上面**时它必须透明，否则整块把字盖住。
+   * 组件据此切 gl 的 alpha 与场景背景，见 Scene3D 里的 `overlay`。
+   */
+  const is3d = backdrop.type === "scene3d";
+  const overlay = is3d && ((backdrop.place ?? "下") !== "下" || (backdrop.z ?? 0) > 0);
+
   return (
     <BackdropFxContext.Provider
       value={{ speed: backdrop.speed ?? 1, once: backdrop.mode === "once" }}
@@ -71,7 +82,13 @@ const BackdropBody: React.FC<{
         <AbsoluteFill
           style={{ opacity, pointerEvents: "none", ...(zIndex === undefined ? {} : { zIndex }) }}
         >
-          <Comp {...props} type={backdrop.type} theme={theme} sceneId={`${sceneId}::backdrop`} />
+          <Comp
+            {...props}
+            type={backdrop.type}
+            theme={theme}
+            sceneId={`${sceneId}::backdrop`}
+            overlay={overlay}
+          />
         </AbsoluteFill>
       </BareContext.Provider>
     </BackdropFxContext.Provider>
@@ -97,6 +114,8 @@ export const BackdropLayer: React.FC<{
   // 白名单再挡一次：schema 只约束了"是字符串"，工程包导入 / 手改 json 都可能绕过
   if (!isBackdropType(backdrop.type)) return null;
   if (!SCENE_COMPONENTS[backdrop.type]) return null;
+
+
 
   const w = backdropWindow(backdrop, sceneDuration, { sceneInFrames, sceneOutFrames });
   const full = isFullWindow(w, sceneDuration);

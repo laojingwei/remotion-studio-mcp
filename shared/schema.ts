@@ -426,7 +426,13 @@ export const sceneSchema = z.object({
    */
   backdrop: z
     .object({
-      type: z.string().describe(`动效类型：${BACKDROP_TYPES.join(" / ")}`),
+      type: z
+        .string()
+        .describe(
+          `动效类型：${BACKDROP_TYPES.join(" / ")}。` +
+            `scene3d 是 3D 场景当氛围层：垫在「下」层时当背景（最常用，3D 退成底、文字在前）；` +
+            `放到「上」/「顶」时会自动切成透明画布，当"光"叠在内容上`,
+        ),
       props: z.record(z.any()).optional().describe("覆盖该动效的参数，不传用默认值"),
       opacity: z.number().min(0).max(1).default(0.8).describe("不透明度 0–1，默认 0.8"),
       /**

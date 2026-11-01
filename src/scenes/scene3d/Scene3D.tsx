@@ -36,6 +36,13 @@ export type Scene3DPreset =
 
 export type Scene3DProps = {
   theme: Theme;
+  /** 场景 id（由 Video/Backdrop 注入）。氛围层会带 `::backdrop` 后缀，用来判断"我是不是背景" */
+  sceneId?: string;
+  /**
+   * 只对氛围层有意义：**盖在内容之上**时置 true。
+   * 这时画布必须透明（否则整块盖住下面的字），布局也不画自己的底色。
+   */
+  overlay?: boolean;
   /** 场景预设：一次选好整个视觉母题 */
   preset: Scene3DPreset;
   /** 光线风格（决定"这套画面是什么气质"）；auto = 按预设自动挑一个 */
@@ -1024,6 +1031,8 @@ export const Scene3DScene: React.FC<Scene3DProps> = ({
   count = 5,
   title = "",
   sub = "",
+  sceneId,
+  overlay = false,
 }) => {
   const frame = useCurrentFrame();
   const { fps, width, height } = useVideoConfig();
@@ -1031,6 +1040,13 @@ export const Scene3DScene: React.FC<Scene3DProps> = ({
   const c = theme.palette;
   const t = frame / fps;
   const isPortrait = height > width;
+  /**
+   * 是不是被当成氛围层在用（Backdrop 会给 sceneId 加 `::backdrop` 后缀）。
+   *
+   * 氛围层不画文字：它的作用就是"给上面的版式当底"，再叠一层字就变成两套字 ——
+   * 而且它自带的不透明底色会让字压在 2D 正文下面，谁也看不清。
+   */
+  const isBackdrop = !!sceneId?.endsWith("::backdrop");
 
   const core = pick(theme, hue);
   const dot = c.accent;
@@ -1088,7 +1104,13 @@ export const Scene3DScene: React.FC<Scene3DProps> = ({
   const bloomBlur = Math.round(Math.min(width, height) * 0.012);
 
   return (
-    <AbsoluteFill style={{ background: c.background, overflow: "hidden" }}>
+    <AbsoluteFill
+      style={{
+        // 盖在内容之上时不画底色（透明），垫在下面时画自己的底色（辉光要有底才成立）
+        background: overlay ? "transparent" : c.background,
+        overflow: "hidden",
+      }}
+    >
       <ThreeCanvas
         width={width}
         height={height}
@@ -1096,6 +1118,8 @@ export const Scene3DScene: React.FC<Scene3DProps> = ({
         // preserveDrawingBuffer 是硬要求：Remotion 是画完之后去"截屏"的，
         // 缓冲区没保留时截到的是空白（headless 下尤其明显）
         gl={{
+          // 叠在内容之上时必须开 alpha，否则透明区域会被合成成黑色、把下面的字盖掉
+          alpha: overlay,
           antialias: true,
           preserveDrawingBuffer: true,
           powerPreference: "high-performance",
@@ -1124,7 +1148,7 @@ export const Scene3DScene: React.FC<Scene3DProps> = ({
         camera={{ position: cam.position, fov: cam.fov }}
         style={{ position: "absolute", inset: 0 }}
       >
-        <color attach="background" args={[c.background]} />
+        {overlay ? null : <color attach="background" args={[c.background]} />}
         {preset === "grid-horizon" || preset === "waveform" ? (
           // 雾是最有效的"远处消隐"：没有它，网格/底板会在画面边缘硬切一条边
           <fog attach="fog" args={[c.background, 7, isPortrait ? 34 : 46]} />
@@ -1215,7 +1239,7 @@ export const Scene3DScene: React.FC<Scene3DProps> = ({
       ) : null}
 
       {/* 文字走 2D 叠层：3D 里做中文字体的成本太高（见 docs/threejs-plan.md） */}
-      {(title || sub) && (
+      {(title || sub) && !isBackdrop && (
         <AbsoluteFill
           style={{
             justifyContent: "flex-end",
