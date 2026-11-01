@@ -107,6 +107,15 @@ export const IsoScene: React.FC<IsoProps> = ({
    * dim 规则只作用于带 data-part 的元素 —— 底座/标尺这些没标记的保持原样，
    * 它们本来就是"环境"，压黑了图反而读不懂。
    */
+  /**
+   * anatomy 的 `.iso-svg{width:100%;height:auto}` 是给网页宽卡片用的：
+   * 竖版图（街机 650×1300）在 16:9 里会按宽撑开、上下整段出画。
+   * 这里覆盖成「双向 contain」—— 横图按宽、竖图按高，永远完整在画布里。
+   */
+  const fitCss =
+    `#${hostId}{width:100%;height:100%;display:flex;align-items:center;justify-content:center}` +
+    `#${hostId} svg{width:auto;height:auto;max-width:100%;max-height:100%}`;
+
   const focusCss = active.length
     ? `#${hostId} [data-part]{opacity:${dim}}` +
       active
@@ -166,7 +175,6 @@ export const IsoScene: React.FC<IsoProps> = ({
           id={hostId}
           className="iso-host"
           style={{
-            width: fit === "contain" ? "100%" : `${(100 / Math.max(zoom, 1)) * 1.12}%`,
             transform: `scale(${zoom}) translate(${panX}%, ${panY}%)`,
             transformOrigin: "50% 50%",
             lineHeight: 0,
@@ -175,7 +183,7 @@ export const IsoScene: React.FC<IsoProps> = ({
         />
       </div>
 
-      {focusCss ? <style dangerouslySetInnerHTML={{ __html: focusCss }} /> : null}
+      <style dangerouslySetInnerHTML={{ __html: fitCss + (focusCss ? focusCss : "") }} />
 
       {failed ? (
         <div
