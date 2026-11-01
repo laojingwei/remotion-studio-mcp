@@ -1,7 +1,7 @@
 import React from "react";
 import type { Scene } from "@shared/schema";
 import { BACKDROP_TYPES, isPeriodicBackdrop } from "@shared/sceneKinds";
-import { getMeta } from "@shared/sceneMetas";
+import { SCENE3D_PRESETS, getMeta, optionLabel } from "@shared/sceneMetas";
 import { useDoc } from "../store";
 import { RangeInput } from "../RangeInput";
 
@@ -113,6 +113,22 @@ export const BackdropSection: React.FC<{ scene: Scene }> = ({ scene }) => {
     write({ type });
   };
 
+  /**
+   * 改氛围层自己的 props（目前只有 scene3d 用得上：它是一整个"3D 场景"，
+   * 具体画哪个母题由 props.preset 决定 —— 下拉里只能选到 `scene3d` 这一个类型，
+   * 不做这一层的话用户永远只会看到默认的「环绕核心」）。
+   */
+  const writeProps = (patch: Record<string, unknown>) => {
+    if (!bd) return;
+    void apply([
+      {
+        op: "set_scene_backdrop",
+        sceneId: scene.id,
+        backdrop: { ...bd, props: { ...(bd.props ?? {}), ...patch } },
+      },
+    ]);
+  };
+
   /** 关掉区间：回到铺满整幕（柔化跟着回到"自动"，整幕时自动值就是 0，与旧工程一致） */
   const clearRange = () => write({ from: 0, duration: span, soften: "auto" });
 
@@ -135,6 +151,31 @@ export const BackdropSection: React.FC<{ scene: Scene }> = ({ scene }) => {
       </div>
       {current ? (
         <>
+          {current === "scene3d" ? (
+            <div className="field">
+              <label>
+                3D 画面
+                <span className="num">
+                  {optionLabel("preset", String((bd?.props as { preset?: string } | undefined)?.preset ?? "orbit-core"))}
+                </span>
+              </label>
+              <div className="seg" style={{ flexWrap: "wrap" }}>
+                {SCENE3D_PRESETS.map((id) => (
+                  <button
+                    key={id}
+                    className={`seg-item ${
+                      String((bd?.props as { preset?: string } | undefined)?.preset ?? "orbit-core") === id
+                        ? "is-on"
+                        : ""
+                    }`}
+                    onClick={() => writeProps({ preset: id })}
+                  >
+                    {optionLabel("preset", id)}
+                  </button>
+                ))}
+              </div>
+            </div>
+          ) : null}
           <div className="field">
             <label>
               层次

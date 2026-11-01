@@ -32,6 +32,14 @@ export type SceneMeta = {
    * 用 {n} 表示按数量展开（如 item{n} → item1、item2…）。
    */
   elements?: { id: string; label: string; /** 对应 props 字段（默认同 id） */ prop?: string }[];
+  /**
+   * 哪些字段在**当前数据下不生效**，面板据此把它们标灰并说明原因。
+   *
+   * 起因：scene3d 写了 `graph`（自定义场景图）之后，preset / spin / count / hue 全被忽略，
+   * 但面板照样渲染成可点的分段按钮 —— 用户点了一圈发现画面纹丝不动，只会以为编辑器坏了。
+   * 让 meta 自己声明这件事，比在面板里对某个场景硬编码判断要干净。
+   */
+  fieldNotes?: (props: Record<string, unknown>) => Record<string, string>;
 };
 
 export const titleMeta: SceneMeta = {
@@ -1745,6 +1753,20 @@ export const scene3dMeta: SceneMeta = {
     { id: "title", label: "标题" },
     { id: "sub", label: "副标题" },
   ],
+  fieldNotes: (props) => {
+    // 没有自定义场景图时，下面这些字段都正常生效
+    if (!props.graph) return {};
+    const lights = (props.graph as { lights?: unknown[] }).lights;
+    return {
+      preset: "这一幕用的是自定义场景图（graph），预设不参与渲染",
+      spin: "自定义场景图的动画由关键帧决定，速度不受这里控制",
+      count: "自定义场景图的数量由节点自己决定",
+      hue: "自定义场景图直接取主题色，不跟「主色」走",
+      ...(lights?.length
+        ? { look: "场景自带光源（lights）接管了打光，这里只剩辉光强度生效" }
+        : {}),
+    };
+  },
 };
 
 export const SCENE_METAS: SceneMeta[] = [
@@ -1842,6 +1864,39 @@ export const metaList = () =>
   }));
 
 /** 把 zod object 拆成字段描述，供 agent 与属性面板共用 */
+/**
+ * 枚举值的中文短名。
+ *
+ * 值和 id 都是英文（`orbit-core` / `cyber` / `primary`），面板上直接铺一排英文，
+ * 用户只能靠猜哪个是"球面网络"、哪个是"波形柱阵" —— 而这些恰恰是他最需要一眼认出来的。
+ * 映射只覆盖"值本身没有中文"的那几个字段，其余枚举（左对齐/居中之类）原样显示。
+ */
+const OPTION_LABELS: Record<string, Record<string, string>> = {
+  preset: {
+    "orbit-core": "环绕核心",
+    "particle-field": "粒子星云",
+    "grid-horizon": "网格地平线",
+    "explode-parts": "零件拆解",
+    waveform: "波形柱阵",
+    "globe-arc": "球面网络",
+  },
+  look: { auto: "自动", studio: "影棚", dramatic: "戏剧", cyber: "赛博", nature: "自然" },
+  hue: { primary: "主色", accent: "强调色", secondary: "次色", text: "文字色" },
+};
+
+/** 枚举值 → 中文短名（没有映射就原样返回） */
+export const optionLabel = (key: string, value: string): string => OPTION_LABELS[key]?.[value] ?? value;
+
+/** 3D 预设清单（面板里铺按钮用；顺序 = 推荐顺序） */
+export const SCENE3D_PRESETS = [
+  "orbit-core",
+  "particle-field",
+  "grid-horizon",
+  "explode-parts",
+  "waveform",
+  "globe-arc",
+] as const;
+
 export type FieldDesc = {
   key: string;
   kind: "text" | "number" | "boolean" | "enum" | "array" | "object";

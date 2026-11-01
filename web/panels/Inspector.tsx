@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import type { PlayerRef } from "@remotion/player";
-import { describeFields, getMeta, type FieldDesc } from "@shared/sceneMetas";
+import { describeFields, getMeta, optionLabel, type FieldDesc } from "@shared/sceneMetas";
 import { MAX_VOLUME } from "@shared/schema";
 import { gainForTarget } from "@shared/audio";
 import { fetchCompressCurve, fetchLoudness, type LoudnessResult } from "../apiClient";
@@ -32,7 +32,8 @@ const Field: React.FC<{
               className={`seg-item ${value === opt ? "is-on" : ""}`}
               onClick={() => onChange(opt)}
             >
-              {opt === "left" ? "左对齐" : opt === "center" ? "居中" : opt}
+              {/* 英文枚举值换成中文短名（预设/光线风格/主色三组），其余原样 */}
+              {opt === "left" ? "左对齐" : opt === "center" ? "居中" : optionLabel(field.key, opt)}
             </button>
           ))}
         </div>
@@ -243,6 +244,17 @@ export const Inspector: React.FC<{ playerRef?: React.RefObject<PlayerRef | null>
   const fields = useMemo(() => (meta ? describeFields(meta.schema) : []), [meta]);
 
   const [draft, setDraft] = useState<Record<string, unknown>>({});
+  /**
+   * 当前数据下**不生效**的字段（由 meta 自己声明，见 SceneMeta.fieldNotes）。
+   *
+   * 为什么要做这件事：3D 场景写了 graph（自定义场景图）之后，preset / 速度 / 数量 / 主色
+   * 全部被忽略，但面板照样把它们渲染成可点的按钮。用户点一圈发现画面纹丝不动，
+   * 只会得出「编辑器坏了」这个结论 —— 这比不显示更糟。
+   */
+  const notes = useMemo(
+    () => (meta?.fieldNotes ? meta.fieldNotes(draft) : {}),
+    [meta, draft.graph],
+  );
   const timer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
 
   /**
@@ -414,24 +426,61 @@ export const Inspector: React.FC<{ playerRef?: React.RefObject<PlayerRef | null>
 
             <div className="divider" />
 
-            {fields.map((f) =>
-              assetKey && f.key === assetKey ? (
-                <AssetField
-                  key={f.key}
-                  value={typeof draft[f.key] === "string" ? (draft[f.key] as string) : ""}
-                  accept="image/*"
-                  preview="image"
-                  onChange={(v) => commit({ ...draft, [f.key]: v })}
-                />
+            {Object.keys(notes).length ? (
+              <div
+                style={{
+                  border: "1px solid rgba(255,176,64,0.35)",
+                  background: "rgba(255,176,64,0.08)",
+                  borderRadius: 8,
+                  padding: "9px 11px",
+                  marginBottom: 10,
+                  font: "500 12px/1.6 system-ui, sans-serif",
+                  color: "#FFC857",
+                }}
+              >
+                这一幕用的是<b>自定义场景图</b>（由 agent 搭的节点树），下面标灰的参数不参与渲染。
+                <button
+                  className="mini"
+                  style={{ marginLeft: 6 }}
+                  onClick={() =>
+                    void apply([
+                      { op: "update_scene", sceneId: scene.id, patch: { props: { graph: null } } },
+                    ])
+                  }
+                >
+                  改回预置场景
+                </button>
+              </div>
+            ) : null}
+
+            {fields.map((f) => {
+              const note = notes[f.key];
+              const control =
+                assetKey && f.key === assetKey ? (
+                  <AssetField
+                    value={typeof draft[f.key] === "string" ? (draft[f.key] as string) : ""}
+                    accept="image/*"
+                    preview="image"
+                    onChange={(v) => commit({ ...draft, [f.key]: v })}
+                  />
+                ) : (
+                  <Field
+                    field={f}
+                    value={draft[f.key] ?? f.default ?? ""}
+                    onChange={(v) => commit({ ...draft, [f.key]: v })}
+                  />
+                );
+              return note ? (
+                <div key={f.key} style={{ opacity: 0.45, pointerEvents: "none" }} title={note}>
+                  {control}
+                  <p className="ff-hint" style={{ marginTop: -6 }}>
+                    {note}
+                  </p>
+                </div>
               ) : (
-                <Field
-                  key={f.key}
-                  field={f}
-                  value={draft[f.key] ?? f.default ?? ""}
-                  onChange={(v) => commit({ ...draft, [f.key]: v })}
-                />
-              ),
-            )}
+                <React.Fragment key={f.key}>{control}</React.Fragment>
+              );
+            })}
           </>
         ) : (
           <div className="empty">左侧选一个场景开始编辑</div>

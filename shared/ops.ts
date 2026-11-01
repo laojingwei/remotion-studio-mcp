@@ -1017,16 +1017,30 @@ export function applyOps(project: Project, ops: Op[]): OpResult {
           );
         }
         if (Object.keys(propsPatch).length) {
-          const ignored = droppedProps(scene.type, {
-            ...scene.props,
-            ...propsPatch,
-          });
+          /**
+           * `null` = 删掉这个字段，而不是把它设成 null。
+           *
+           * 起因很具体：scene3d 的 `graph`（自定义场景图）是可选字段，一旦写过就永远留着，
+           * 而它存在时 preset / spin / count 全被忽略 —— 用户在编辑器里点预设毫无反应，
+           * 又没有任何办法回到「用预设」。传 null 表达"清空"是最自然的写法，
+           * 但 zod 的 optional 不接受 null，所以在这里先删再归一化（默认值会补回来）。
+           */
+          const merged: Record<string, unknown> = { ...scene.props };
+          for (const [k, v] of Object.entries(propsPatch)) {
+            if (v === null) delete merged[k];
+            else merged[k] = v;
+          }
+          const removed = Object.entries(propsPatch)
+            .filter(([, v]) => v === null)
+            .map(([k]) => k);
+          if (removed.length) summary.push(`ℹ 已清空 props.${removed.join("、")}`);
+          const ignored = droppedProps(scene.type, merged);
           if (ignored.length) {
             summary.push(
               `⚠️「${scene.name}」（${scene.type}）不认识的 props 字段会被忽略：${ignored.join("、")}`,
             );
           }
-          scene.props = normalizeProps(scene.type, { ...scene.props, ...propsPatch });
+          scene.props = normalizeProps(scene.type, merged);
         }
         if (patch.name !== undefined) scene.name = patch.name as string;
         if (patch.subtitle !== undefined) scene.subtitle = patch.subtitle as string;
