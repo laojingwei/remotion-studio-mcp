@@ -24,11 +24,11 @@ const Field: React.FC<{
   if (field.kind === "enum") {
     const opts = field.options ?? [];
     /**
-     * 选项多的时候分段按钮会挤爆面板（3D 预设 6 个、光线风格 5 个，
-     * 一排横着根本放不下，还会把描述文字压成一行行碎句），改成下拉。
-     * 2–4 个值仍然用分段按钮：一眼看全、一次点中，比下拉快。
+     * 选项 ≥4 个改用下拉。分段按钮在 300px 宽的面板里放 4 个就开始缩字
+     * （主色/强调色/次色/文字色 已经是极限），5 个以上必然换行、把描述压成碎句。
+     * 2–3 个值仍然用分段按钮：一眼看全、一次点中，比下拉快。
      */
-    if (opts.length >= 5) {
+    if (opts.length >= 4) {
       return (
         <div className="field">
           <label>{field.label}</label>

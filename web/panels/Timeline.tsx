@@ -324,6 +324,27 @@ export const Timeline: React.FC<Props> = ({ playerRef }) => {
     return () => clearTimeout(t);
   }, [project, orderPin]);
 
+  /**
+   * 左侧列表点了某一幕 → 时间轴跟到那里。
+   *
+   * 只在**看不见**的时候才滚：否则在时间轴上点一个块、或拖完一次时长，
+   * 画面都会被重新居中一次，反而看不清自己刚才在动哪里。
+   * 用容器自己的 scrollLeft 而不是 scrollIntoView —— 后者会连带滚动整个页面，
+   * 面板一滚，用户就找不到原本在看的东西了。
+   */
+  useEffect(() => {
+    const body = bodyRef.current;
+    if (!body || !selectedId) return;
+    const el = body.querySelector<HTMLElement>(`[data-scene-block="${selectedId}"]`);
+    if (!el) return;
+    const br = body.getBoundingClientRect();
+    const er = el.getBoundingClientRect();
+    const pad = 24;
+    if (er.left >= br.left + pad && er.right <= br.right - pad) return;
+    const target = body.scrollLeft + (er.left - br.left) - (body.clientWidth - er.width) / 2;
+    body.scrollTo({ left: Math.max(0, target), behavior: "smooth" });
+  }, [selectedId]);
+
   // 播放头跟随（rAF 直接问 player，不触发文档重渲染）
   // 时间轴高度：写到 CSS 变量，记在 localStorage + 服务端
   useEffect(() => {
