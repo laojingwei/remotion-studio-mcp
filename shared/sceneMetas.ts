@@ -1769,8 +1769,73 @@ export const scene3dMeta: SceneMeta = {
   },
 };
 
+/**
+ * 等轴测图解（anatomy 产出）。和 image 的差别：SVG 是**矢量 + 带零件标记**的，
+ * 所以能在视频里按帧高亮某个零件、推近也不糊 —— 这是"图会讲话"的基础。
+ * 生成走 external-tools 技能（画图在 .other_modules/anatomy，落盘走 scripts/iso-embed.mjs）。
+ */
+export const isoMeta: SceneMeta = {
+  type: "iso",
+  name: "图解插图",
+  summary: "等轴测技术插图：零件级细节，可按帧高亮讲解，推近不糊（anatomy 产出）",
+  category: "图解",
+  schema: z.object({
+    src: z
+      .string()
+      .describe(
+        "SVG 地址，一般形如 /assets/projects/<工程id>/iso/<名>.svg。" +
+          "生成方式见 external-tools 技能：先在 .other_modules/anatomy 里画，再用 scripts/iso-embed.mjs 落盘 + 套主题",
+      ),
+    kicker: z.string().default("").describe("顶部小标签，可留空"),
+    caption: z.string().default("").describe("压在画面下方的标题，可留空"),
+    fit: z.enum(["contain", "cover"]).default("contain").describe("contain 完整显示 / cover 满屏"),
+    scrim: z.number().min(0).max(1).default(0.4).describe("底部压暗强度 0-1"),
+    focus: z
+      .array(
+        z.object({
+          part: z.string().describe("要高亮的零件，对应 SVG 里的 data-part 名"),
+          at: z.number().int().min(0).default(0).describe("从第几帧开始（幕内帧号）"),
+          dur: z.number().int().min(1).default(40).describe("持续多少帧"),
+          label: z.string().optional().describe("给这个零件配的一句话（v1 只存不用，留给引线标注）"),
+        }),
+      )
+      .max(8)
+      .optional()
+      .describe("按帧高亮零件，讲哪指哪；不填就是一张安静的图。高亮窗口内的零件加亮，其余压暗"),
+    camera: z
+      .object({
+        from: z.number().min(0.5).max(3).default(1).describe("开场缩放"),
+        to: z.number().min(0.5).max(3).default(1).describe("收尾缩放（和 from 不同就是缓慢推近/拉远）"),
+        x: z.number().min(-1).max(1).default(0).describe("水平平移（画幅比例）"),
+        y: z.number().min(-1).max(1).default(0).describe("垂直平移（画幅比例）"),
+      })
+      .optional()
+      .describe("推镜。SVG 是矢量，推近不会糊"),
+    dim: z
+      .number()
+      .min(0)
+      .max(1)
+      .default(0.3)
+      .describe("高亮时其余零件压到多暗（0=压黑 1=不压）。底座/标尺没标 data-part，不受影响"),
+  }),
+  defaultProps: {
+    src: "",
+    kicker: "",
+    caption: "",
+    fit: "contain",
+    scrim: 0.4,
+    focus: [],
+    camera: { from: 1, to: 1.12, x: 0, y: 0 },
+    dim: 0.3,
+  },
+  duration: { default: 120, min: MIN_SCENE_FRAMES, max: 108000 },
+  elements: [{ id: "kicker", label: "顶部小标签" }, { id: "caption", label: "图解标题" }],
+};
+
 export const SCENE_METAS: SceneMeta[] = [
   freeformMeta,
+  scene3dMeta,
+  isoMeta,
   titleMeta,
   bulletsMeta,
   chartMeta,

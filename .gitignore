@@ -40,3 +40,11 @@ memory/
 
 # 临时提交信息文件
 .git-msg.tmp
+
+# ── 外部工具（别人的开源项目，按需下载到这里）─────────────────
+# 这个目录**故意不进仓库**：里面是第三方代码，clone 下来应该是空的。
+# 需要某个工具时由 agent 或用户下载进来，见 .workbuddy/skills/external-tools/SKILL.md
+# 只留 .gitkeep，让 clone 后能看到"这里能放东西"，而不是一个不存在的路径。
+/.other_modules/*
+!/.other_modules/.gitkeep
+!/.other_modules/README.md
