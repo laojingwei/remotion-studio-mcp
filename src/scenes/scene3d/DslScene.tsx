@@ -33,7 +33,8 @@ const ease = (kind: string | undefined, x: number): number => {
 type Tr = {
   pos: [number, number, number];
   rot: [number, number, number];
-  scale: number;
+  /** 渲染时用的三分量缩放：有 scaleXYZ 就用它，否则用 scale 铺成三轴 */
+  scale: [number, number, number];
   opacity: number;
 };
 
@@ -48,7 +49,7 @@ const evalNode = (node: DslNode, frame: number): Tr => {
   const out: Tr = {
     pos: [...(base?.position ?? [0, 0, 0])] as [number, number, number],
     rot: [...(base?.rotation ?? [0, 0, 0])] as [number, number, number],
-    scale: base?.scale ?? 1,
+    scale: base?.scaleXYZ ? [...base.scaleXYZ] as [number, number, number] : [base?.scale ?? 1, base?.scale ?? 1, base?.scale ?? 1],
     opacity: 1,
   };
   for (const a of node.anim ?? []) {
@@ -64,7 +65,9 @@ const evalNode = (node: DslNode, frame: number): Tr => {
     };
     out.pos = [pick("posX", out.pos[0]), pick("posY", out.pos[1]), pick("posZ", out.pos[2])];
     out.rot = [pick("rotX", out.rot[0]), pick("rotY", out.rot[1]), pick("rotZ", out.rot[2])];
-    out.scale = pick("scale", out.scale);
+    // 动画的 scale 是"整体缩放"：乘到三轴上，不会破坏 scaleXYZ 的比例
+    const k = pick("scale", 1);
+    out.scale = [out.scale[0] * k, out.scale[1] * k, out.scale[2] * k];
     out.opacity = pick("opacity", out.opacity);
   }
   return out;
@@ -164,10 +167,18 @@ const materialOf = (
   const emissive = m?.emissive ? resolveColor(m.emissive, theme) : undefined;
   const op = (m?.opacity ?? 1) * opacity;
   const transparent = op < 1;
+  const side =
+    m?.side === "double" ? THREE.DoubleSide : m?.side === "back" ? THREE.BackSide : THREE.FrontSide;
 
   if (m?.type === "basic") {
     return (
-      <meshBasicMaterial color={raw} wireframe={m.wireframe} transparent={transparent} opacity={op} />
+      <meshBasicMaterial
+        color={raw}
+        wireframe={m.wireframe}
+        side={side}
+        transparent={transparent}
+        opacity={op}
+      />
     );
   }
   if (m?.type === "physical") {
@@ -181,6 +192,7 @@ const materialOf = (
         ior={m.ior}
         emissive={emissive}
         emissiveIntensity={m.emissiveIntensity}
+        side={side}
         transparent
         opacity={op}
         flatShading={m.flatShading}
@@ -194,6 +206,7 @@ const materialOf = (
       roughness={m?.roughness ?? 0.35}
       emissive={emissive}
       emissiveIntensity={m?.emissiveIntensity ?? 1}
+      side={side}
       transparent={transparent}
       opacity={op}
       flatShading={m?.flatShading ?? false}
@@ -211,8 +224,15 @@ const NodeView: React.FC<{
 }> = ({ node, childrenOf, frame, theme }) => {
   const tr = evalNode(node, frame);
   const kids = childrenOf.get(node.id) ?? [];
+  /*
+   * **弧度**：schema 里 rotX/rotY/rotZ 写的是度（人写"23.5 度"而不是"0.41 弧度"），
+   * 但 three 的 `rotation` 属性吃的是弧度。第一版直接把度数传进去，于是"倾斜 23.5 度"
+   * 变成了 23.5 弧度（≈1346°）——地轴几乎是竖的、55° 的斜光束渲成了水平线。
+   * 静帧里这个错看起来只是"角度有点怪"，很容易被当成审美问题放过去。
+   */
+  const rotRad = tr.rot.map((d) => (d * Math.PI) / 180) as [number, number, number];
   return (
-    <group position={tr.pos} rotation={tr.rot} scale={tr.scale}>
+    <group position={tr.pos} rotation={rotRad} scale={tr.scale}>
       <mesh>
         {geometryOf(node.geometry)}
         {materialOf(node, theme, tr.opacity)}

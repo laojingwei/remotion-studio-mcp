@@ -99,7 +99,12 @@ const octahedron = z.object({
 
 const ring = z.object({
   type: z.literal("ring"),
-  innerRadius: z.number().positive().default(0.35),
+  /**
+   * innerRadius 必须是 `min(0)` 而不是 `positive()`：**0 就是实心圆盘**，
+   * 而实心圆盘恰恰是最常用的那个——地面上的光斑、镜头光晕、圆形色块都靠它。
+   * 这条是实跑打出来的：第一版写成 positive()，agent 想画一个光斑直接被拒。
+   */
+  innerRadius: z.number().min(0).default(0.35),
   outerRadius: z.number().positive().default(0.6),
 });
 
@@ -159,6 +164,13 @@ export const materialSchema = z.object({
   thickness: z.number().positive().default(0.4).describe("physical 有效：玻璃厚度感"),
   ior: z.number().min(1).max(2.5).default(1.5).describe("physical 有效：折射率"),
   wireframe: z.boolean().default(false).describe("basic 有效：线框"),
+  side: z
+    .enum(["front", "back", "double"])
+    .default("front")
+    .describe(
+      "哪一面可见。平面/圆盘（plane、ring）默认只朝 +Z：把它们转成「朝下」后会整片消失——" +
+        "地面光斑、贴地标线这类用法必须传 double",
+    ),
   flatShading: z.boolean().default(false).describe("平面着色：多面体想棱角分明时开"),
   opacity: z.number().min(0).max(1).default(1),
   body: bodyTone,
@@ -206,6 +218,11 @@ export const nodeSchema = z.object({
       position: vec3.default([0, 0, 0]),
       rotation: z.tuple([deg, deg, deg]).default([0, 0, 0]),
       scale: z.number().positive().default(1),
+      /**
+       * 非等比缩放。`scale` 只能整体放大，"同一束光摊成更长的椭圆"这种就必须分轴。
+       * 实跑时卡住的正是这个：光斑要拉长，只有 scale 做不出来。
+       */
+      scaleXYZ: z.tuple([z.number().positive(), z.number().positive(), z.number().positive()]).optional(),
     })
     .optional(),
   anim: z.array(animSchema).max(8).optional().describe("关键帧，最多 8 段"),
