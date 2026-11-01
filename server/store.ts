@@ -10,8 +10,57 @@ export const DATA_DIR = path.join(PROJECT_ROOT, "data", "projects");
 export const OUT_DIR = path.join(PROJECT_ROOT, "out");
 export const PUBLIC_DIR = path.join(PROJECT_ROOT, "public");
 
+/**
+ * 悬空链接自愈：data / out / public 有可能是指向外部工作区（如 D:\Remotion workspace）的符号链接。
+ *
+ * 为什么需要这段：`mkdirSync(recursive)` 只会在**真实路径**上逐级补建目录。当链接的目标被删掉后，
+ * 路径解析在链接这一级就断了 —— Node 既不会去建链接的目标目录，也不会绕过链接在本项目里建，
+ * 只抛一个 `ENOENT: mkdir ...\data\projects`，看不出真正原因（链接坏了），服务直接起不来。
+ *
+ * 处理策略（用户确认过的语义）：链接**有效**就按原设计用外部目录，不打扰；链接**悬空**就移除链接本身
+ * （绝不碰目标），回到本项目内新建真实目录，并打一行日志说明改到哪儿去了。
+ */
+function healDanglingLink(target: string): void {
+  const rel = path.relative(PROJECT_ROOT, target);
+  if (!rel || rel.startsWith("..") || path.isAbsolute(rel)) return;
+  let cur = PROJECT_ROOT;
+  for (const seg of rel.split(path.sep)) {
+    cur = path.join(cur, seg);
+    let st: fs.Stats;
+    try {
+      st = fs.lstatSync(cur);
+    } catch {
+      return; // 这一级还不存在：交给下面的 mkdir 建
+    }
+    if (!st.isSymbolicLink()) continue;
+    try {
+      fs.statSync(cur); // 跟随链接能拿到真实 stat = 链接有效
+      return;
+    } catch {
+      let linkTarget = "?";
+      try {
+        linkTarget = fs.readlinkSync(cur);
+      } catch {
+        /* 读不到就写 ? */
+      }
+      try {
+        // 先按符号链接删（unlink）；Windows 上目录联接要用 rmdir 才删得掉
+        fs.unlinkSync(cur);
+      } catch {
+        fs.rmdirSync(cur);
+      }
+      console.warn(
+        `[store] ${cur} 原是指向 ${linkTarget} 的链接，但目标目录不存在 —— 已移除链接，改在项目内新建目录` +
+          `（如仍想放到外部工作区，把该目录建好再手工重建链接即可）`,
+      );
+      return;
+    }
+  }
+}
+
 const ensureDirs = () => {
   for (const dir of [DATA_DIR, OUT_DIR, PUBLIC_DIR, path.join(PUBLIC_DIR, "assets")]) {
+    healDanglingLink(dir);
     fs.mkdirSync(dir, { recursive: true });
   }
 };

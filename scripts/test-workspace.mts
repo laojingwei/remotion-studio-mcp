@@ -133,7 +133,10 @@ test("dryRun：未迁移时没有任何条目被标记为跳过", () => {
  * 用例必挂，后面所有人就习惯性忽略这条红。所以按实际状态分支判断。
  */
 test("reset 只回滚真的迁移过的目录（没迁移过则无事可做）", () => {
-  const migrated = !!getWorkspaceStatus().workspaceDir;
+  // 「迁过」的判据是**真的存在链接**，不是配置里有记录：外部工作区被手工删掉后，
+  // workspace.json 可能残留而三块早已回到工程内——那种情况 reset 无事可做（只清残留配置）
+  const st = getWorkspaceStatus();
+  const migrated = !!st.workspaceDir && st.dirs.some((d) => d.linked);
   const r = resetWorkspace({ dryRun: true });
   assert.equal(r.moved.length, 0, "dryRun 不能搬任何东西");
   if (migrated) {

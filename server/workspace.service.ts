@@ -370,7 +370,14 @@ export function resetWorkspace(opts: { dryRun?: boolean } = {}): RelocateResult 
     targetFreeAfter: freeSpace(ROOT),
     warnings: [],
   };
-  if (!plan.length || dryRun) return result;
+  if (!plan.length || dryRun) {
+    // 没有链接可回滚，但配置可能残留（外部工作区被手工删掉过）——顺手清掉，别让界面一直显示「已迁移」
+    if (!dryRun && readConfig().workspaceDir) {
+      writeConfig({ workspaceDir: null });
+      result.warnings.push("三块目录本来就在工程内，已清除残留的工作空间配置");
+    }
+    return result;
+  }
 
   // 复制回工程目录（此时 from 是链接，to 位置是链接本身，先复制到临时位置再换）
   const staged: { item: RelocatePlanItem; tmp: string }[] = [];
@@ -408,7 +415,19 @@ export function repairWorkspace(): string[] {
   for (const name of DIRS) {
     const mount = path.join(ROOT, name);
     const to = path.join(cfg.workspaceDir!, name);
-    if (!fs.existsSync(to)) continue;
+    if (!fs.existsSync(to)) {
+      // 目标块不在了（用户删了外部工作区里的内容）：链接留着也只会悬空，
+      // 干脆摘掉，回到工程内新建——否则后面任何一次 mkdir 都会被断链卡住（ENOENT）
+      if (isLink(mount)) {
+        try {
+          fs.unlinkSync(mount);
+          warnings.push(`链接 ${name}/ 的目标已不存在，已摘掉链接并在工程内重建`);
+        } catch {
+          /* 摘不掉就留给 store 的兜底自愈 */
+        }
+      }
+      continue;
+    }
     const exists = fs.existsSync(mount);
     const linked = isLink(mount);
     if (exists && !linked) continue; // 已经是实体目录，不动它
@@ -422,6 +441,13 @@ export function repairWorkspace(): string[] {
     } catch (err) {
       warnings.push(`重建链接失败：${name}/（${err instanceof Error ? err.message : err}）`);
     }
+  }
+  // 一块链接都不剩 = 工作空间已实际停用：清掉残留配置，否则界面/复位逻辑都以为还迁着
+  if (!DIRS.some((n) => isLink(path.join(ROOT, n)))) {
+    writeConfig({ workspaceDir: null });
+    warnings.push(
+      `三块目录都已回到工程内（工作空间 ${cfg.workspaceDir} 未再使用），已清除 workspace.json 里的记录`,
+    );
   }
   return warnings;
 }
