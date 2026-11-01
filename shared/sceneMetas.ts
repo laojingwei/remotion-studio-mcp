@@ -1726,7 +1726,9 @@ export const scene3dMeta: SceneMeta = {
           "材质 type：standard（PBR）/physical（玻璃）/basic（线框、剪影）。" +
           "动画和 freeform 同一套 {at:[起,止], from:{...}, to:{...}, ease}，" +
           "键是 3D 标量：posX/posY/posZ/rotX/rotY/rotZ/scale/opacity。" +
-          "父节点用 parent 引用另一个节点的 id；节点上限 48 个",
+          "父节点用 parent 引用另一个节点的 id；节点上限 48 个。" +
+          "要真实光照（比如太阳照亮地球）就加 lights —— 给了它，整套预设打光会撤掉，" +
+          "明暗完全由你给的灯决定；point 光放在太阳位置最常用",
       ),
   }),
   defaultProps: {

@@ -228,6 +228,48 @@ export const nodeSchema = z.object({
   anim: z.array(animSchema).max(8).optional().describe("关键帧，最多 8 段"),
 });
 
+/* ────────────────────────────── 光源 ────────────────────────────── */
+
+/**
+ * 场景里的灯。和材质一样用**单对象 + type 枚举**，字段按 type 生效。
+ *
+ * 为什么需要它：`graph` 搭出来的东西默认是被 `look` 那四盏**固定方向**的灯照的，
+ * 所以「地球的明暗面」永远不对着太阳 —— 位置在绕圈，光照却纹丝不动。
+ * 科普片里这一条是致命的：观众看到的是「地球不转向太阳」，而全片的论点正是「歪着转」。
+ */
+export const lightSchema = z.object({
+  id: z.string().optional(),
+  type: z
+    .enum(["ambient", "directional", "point", "spot"])
+    .default("point")
+    .describe(
+      "ambient=均匀环境光（没有方向，别拿它当主光）；" +
+        "directional=平行光（太阳在无穷远、不需要距离衰减时用它）；" +
+        "point=点光（放在太阳位置，地球绕过来就会被照亮，最常用）；" +
+        "spot=聚光（灯光打在小块区域上）",
+    ),
+  color: colorToken.default("text").describe("光色"),
+  intensity: z
+    .number()
+    .min(0)
+    .default(6)
+    .describe(
+      "强度。注意 three 的光是**物理单位**：point/spot 默认 decay=2，" +
+        "照度按 1/距离² 衰减，所以距离 2 时要 20 上下才够亮；directional/ambient 不受距离影响，1~3 就够",
+    ),
+  position: vec3.default([0, 0, 0]).describe("灯的位置（point/spot 用；directional 只用它定方向）"),
+  target: vec3.default([0, 0, 0]).describe("照向哪里（directional/spot 用，默认原点）"),
+  angle: z.number().min(1).max(89).default(30).describe("spot 的光锥半角（度）"),
+  penumbra: z.number().min(0).max(1).default(0.4).describe("spot 边缘软硬，0=硬边"),
+  distance: z.number().min(0).default(0).describe("point/spot 的照射距离，0=无限"),
+  decay: z
+    .number()
+    .min(0)
+    .max(4)
+    .default(2)
+    .describe("衰减指数，2=物理正确；设 0 就没有距离衰减（调不好亮度时先试这个）"),
+});
+
 export const dslSchema = z.object({
   camera: z
     .object({
@@ -241,6 +283,15 @@ export const dslSchema = z.object({
     })
     .optional(),
   nodes: z.array(nodeSchema).min(1).max(48).describe("节点数组，扁平结构 + parent 引用"),
+  lights: z
+    .array(lightSchema)
+    .max(8)
+    .optional()
+    .describe(
+      "自定义光源。**给了它，look 的四盏方向光（主光/边光/补光）就全部关掉**，" +
+        "只剩一点环境底光防止死黑 —— 也就是说这一场的明暗完全由这里的光决定。" +
+        "典型用法：太阳在原点时，放一盏 type 为 point 的光在同一点，地球绕到哪儿就照到哪儿",
+    ),
   particles: z
     .object({
       count: z.number().int().min(0).max(6000).default(800),

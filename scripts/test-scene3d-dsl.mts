@@ -157,6 +157,46 @@ test("关键帧 at 写反了会被点名", () => {
   assert.ok(msg.includes("end 小于 start"), msg);
 });
 
+/* ────────────────────────────── 光源 ────────────────────────────── */
+
+test("lights 不写时整个字段为空，不会凭空多出灯", () => {
+  const p = normalizeProps("scene3d", { graph: graphOf({ nodes: [{ id: "a", geometry: { type: "box" } }] }) }) as {
+    graph: { lights?: unknown[] };
+  };
+  assert.equal(p.graph.lights, undefined);
+});
+
+test("lights 里没写的字段用默认值补齐（agent 只写 type=point 也要能跑）", () => {
+  const p = normalizeProps("scene3d", {
+    graph: graphOf({ nodes: [{ id: "a", geometry: { type: "box" } }], lights: [{ type: "point" }] }),
+  }) as { graph: { lights: Array<Record<string, unknown>> } };
+  const l = p.graph.lights[0];
+  assert.equal(l.intensity, 6);
+  assert.equal(l.decay, 2);
+  assert.deepEqual(l.position, [0, 0, 0]);
+  assert.equal(l.color, "text");
+});
+
+test("灯超过 8 盏会被拒（不是渲不动，是不给 agent 乱堆的余地）", () => {
+  const msg = errOf(
+    graphOf({
+      nodes: [{ id: "a", geometry: { type: "box" } }],
+      lights: Array.from({ length: 9 }, () => ({ type: "point" })),
+    }),
+  );
+  assert.ok(msg.length > 0, "应当报错");
+});
+
+test("灯的 type 写错时把可选值列出来", () => {
+  const msg = errOf(
+    graphOf({
+      nodes: [{ id: "a", geometry: { type: "box" } }],
+      lights: [{ type: "sunlight" }],
+    }),
+  );
+  assert.ok(msg.includes("ambient") && msg.includes("point"), msg);
+});
+
 console.log("");
 if (failures.length) {
   console.log(`✗ ${failures.length} 个用例失败：${failures.join("、")}`);

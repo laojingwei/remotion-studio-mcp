@@ -1038,6 +1038,18 @@ export const Scene3DScene: React.FC<Scene3DProps> = ({
       };
   // DSL 的 post.bloom 是"倍数"而不是绝对值：agent 不该被迫知道 0.46 这个数怎么来的
   const bloomOpts = graph ? applyBloomMultiplier(graph, lookBloom) : lookBloom;
+
+  /**
+   * 场景自带光源时，把 look 的四盏方向光全撤掉。
+   *
+   * 为什么必须全撤而不是"调弱"：look 的灯方向是固定的，混杂在自定义光里会让
+   * "太阳照亮地球"这件事变得不成立 —— 地球的暗面会被边光补亮，看起来还是没转向太阳。
+   * 只留一点环境底光，是为了背光面不至于纯黑（科普片里全黑会被当成渲染失败）。
+   *
+   * 同时把环境贴图降到四分之一：`RoomEnvironment` 是一圈均匀柔光，
+   * 它本身就是"从四面八方打光"，留着会直接抹平明暗交界。
+   */
+  const dslLights = !!graph?.lights?.length;
   /** WebGL 后处理装不上时的降级：CSS 全屏混合（观感差一档，但不会黑屏） */
   const [cssBloom, setCssBloom] = React.useState(false);
   const bloomBlur = Math.round(Math.min(width, height) * 0.012);
@@ -1077,7 +1089,7 @@ export const Scene3DScene: React.FC<Scene3DProps> = ({
         // 环境贴图和辉光都必须在这里装：onCreated 同步执行、早于首帧，
         // 放 useEffect 里会晚于 Remotion 截走的那一帧（踩过两次，症状都是"改了代码、md5 不变"）
         onCreated={(state) => {
-          setupEnvironment(state, lookSpec.env);
+          setupEnvironment(state, dslLights ? lookSpec.env * 0.25 : lookSpec.env);
           try {
             installBloom(state, bloomOpts);
           } catch {
@@ -1099,44 +1111,48 @@ export const Scene3DScene: React.FC<Scene3DProps> = ({
           正面必须是中性光——彩色正面光会把整颗物体涂满颜色，那是"彩色塑料"不是"科技感"。
           四套 look 差在环境强度、主光色温、边光强度、以及有没有补光。
         */}
-        {lookSpec.hemisphere ? (
-          <hemisphereLight
-            args={[lookSpec.hemisphere.sky, lookSpec.hemisphere.ground, lookSpec.hemisphere.intensity]}
-          />
+        {dslLights ? (
+          /*
+            有自定义光时只给一点环境底光。数值很小是有意的：
+            它的作用只是让背光面留一点形，不是参与照明。
+          */
+          <ambientLight intensity={0.12} color="#ffffff" />
         ) : (
-          <ambientLight intensity={lookSpec.ambient} color="#ffffff" />
+          <>
+            {lookSpec.hemisphere ? (
+              <hemisphereLight
+                args={[lookSpec.hemisphere.sky, lookSpec.hemisphere.ground, lookSpec.hemisphere.intensity]}
+              />
+            ) : (
+              <ambientLight intensity={lookSpec.ambient} color="#ffffff" />
+            )}
+            <directionalLight
+              position={lookSpec.key.pos}
+              intensity={lookSpec.key.intensity}
+              color={lightColor(lookSpec.key.color, core, dot)}
+            />
+            <directionalLight
+              position={lookSpec.rimA.pos}
+              intensity={lookSpec.rimA.intensity}
+              color={lightColor(lookSpec.rimA.color, core, dot)}
+            />
+            {lookSpec.rimB ? (
+              <directionalLight
+                position={lookSpec.rimB.pos}
+                intensity={lookSpec.rimB.intensity}
+                color={lightColor(lookSpec.rimB.color, core, dot)}
+              />
+            ) : null}
+            {lookSpec.fill ? (
+              <directionalLight
+                position={lookSpec.fill.pos}
+                intensity={lookSpec.fill.intensity}
+                color={lightColor(lookSpec.fill.color, core, dot)}
+              />
+            ) : null}
+          </>
         )}
-        <directionalLight
-          position={lookSpec.key.pos}
-          intensity={lookSpec.key.intensity}
-          color={lightColor(lookSpec.key.color, core, dot)}
-        />
-        <directionalLight
-          position={lookSpec.rimA.pos}
-          intensity={lookSpec.rimA.intensity}
-          color={lightColor(lookSpec.rimA.color, core, dot)}
-        />
-        {lookSpec.rimB ? (
-          <directionalLight
-            position={lookSpec.rimB.pos}
-            intensity={lookSpec.rimB.intensity}
-            color={lightColor(lookSpec.rimB.color, core, dot)}
-          />
-        ) : null}
-        {lookSpec.fill ? (
-          <directionalLight
-            position={lookSpec.fill.pos}
-            intensity={lookSpec.fill.intensity}
-            color={lightColor(lookSpec.fill.color, core, dot)}
-          />
-        ) : null}
 
-        {/*
-          有标题/副标题时，整组 3D 内容上移一点。
-          这是实拍才发现的：静帧里 title 为空，看不出问题；一旦叠上文字，
-          爆炸环最下面那一段正好压在标题上，金属高光把字吃掉。
-          抬 0.5 个世界单位（约画面的 8%），底部的 scrim 才有地方铺。
-        */}
         {graph ? (
           /*
             不套"有文字时上移"的那个 group：DSL 的相机是用户/agent 自己给的，

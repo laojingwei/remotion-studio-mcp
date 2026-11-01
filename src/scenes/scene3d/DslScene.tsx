@@ -290,6 +290,77 @@ const Particles: React.FC<{
   );
 };
 
+/* ─────────────────────────── 光源 ─────────────────────────── */
+
+/**
+ * 场景自定义光。
+ *
+ * 两个渲染细节值得记：
+ *
+ * 1. **灯必须挂在内容 group 外面**（见下面 DslScene 的 fragment）。
+ *    `camera.orbit` 的实现是"反向旋转内容组"，如果灯跟着转，太阳就会绕着地球转 ——
+ *    这正是要修的那个问题（光照方向不动）的另一半。
+ * 2. directional/spot 的 `target` 必须**真的加进场景**才会生效。
+ *    three 用 `light.target.matrixWorld` 定方向，一个没挂进场景的 Object3D
+ *    matrixWorld 永远是单位矩阵，位置就当成原点 —— 表现是"灯照哪儿都是原点"。
+ *    这里用 ref 回调（commit 阶段同步执行，早于 Remotion 截图），不用 useEffect。
+ */
+const bindTarget = (t: [number, number, number]) => (l: THREE.DirectionalLight | THREE.SpotLight | null) => {
+  if (!l) return;
+  l.target.position.set(t[0], t[1], t[2]);
+  if (l.parent) l.parent.add(l.target);
+};
+
+const DslLights: React.FC<{ lights: NonNullable<Scene3DDsl["lights"]>; theme: Theme }> = ({
+  lights,
+  theme,
+}) => (
+  <>
+    {lights.map((l, i) => {
+      const color = resolveColor(l.color, theme);
+      if (l.type === "ambient") {
+        return <ambientLight key={i} color={color} intensity={l.intensity} />;
+      }
+      if (l.type === "directional") {
+        return (
+          <directionalLight
+            key={i}
+            position={l.position}
+            color={color}
+            intensity={l.intensity}
+            ref={bindTarget(l.target)}
+          />
+        );
+      }
+      if (l.type === "spot") {
+        return (
+          <spotLight
+            key={i}
+            position={l.position}
+            color={color}
+            intensity={l.intensity}
+            angle={(l.angle * Math.PI) / 180}
+            penumbra={l.penumbra}
+            distance={l.distance}
+            decay={l.decay}
+            ref={bindTarget(l.target)}
+          />
+        );
+      }
+      return (
+        <pointLight
+          key={i}
+          position={l.position}
+          color={color}
+          intensity={l.intensity}
+          distance={l.distance}
+          decay={l.decay}
+        />
+      );
+    })}
+  </>
+);
+
 /* ─────────────────────────── 场景本体 ─────────────────────────── */
 
 export const DslScene: React.FC<{
@@ -312,12 +383,16 @@ export const DslScene: React.FC<{
   }, [spec.nodes]);
 
   return (
-    <group quaternion={camera.quat} position={camera.groupPos}>
-      {spec.particles ? <Particles spec={spec.particles} theme={theme} t={t} /> : null}
-      {roots.map((n) => (
-        <NodeView key={n.id} node={n} childrenOf={childrenOf} frame={frame} theme={theme} />
-      ))}
-    </group>
+    <>
+      {/* 灯在世界坐标里，不进下面那个会被反向旋转的内容组 */}
+      {spec.lights?.length ? <DslLights lights={spec.lights} theme={theme} /> : null}
+      <group quaternion={camera.quat} position={camera.groupPos}>
+        {spec.particles ? <Particles spec={spec.particles} theme={theme} t={t} /> : null}
+        {roots.map((n) => (
+          <NodeView key={n.id} node={n} childrenOf={childrenOf} frame={frame} theme={theme} />
+        ))}
+      </group>
+    </>
   );
 };
 
