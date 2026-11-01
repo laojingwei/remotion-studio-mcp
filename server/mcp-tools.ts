@@ -1094,6 +1094,81 @@ const FORMAT_PRESETS: Record<string, { label: string; width: number; height: num
   tall45: { label: "竖版 4:5", width: 1080, height: 1350 },
 };
 
+
+/**
+ * 需求改口的影响面：brief 里哪几个字段变了 → 下游要跟着重做什么。
+ *
+ * 为什么需要：复盘问题 3，项目中途从「无配音」改成「要 AI 配音」，
+ * scriptType 从「屏幕文案」变成「双轨」，段落表要重算、幕长要重排、已放元素要挪。
+ * 工具不说话，agent 只能自己推，推漏一步就是成片对不上稿。
+ */
+function describeBriefImpact(prev: Brief | null, next: Brief): string[] {
+  if (!prev) return [];
+  const out: string[] = [];
+  const changed = (k: string) =>
+    JSON.stringify((prev as Record<string, unknown>)[k] ?? null) !==
+    JSON.stringify((next as Record<string, unknown>)[k] ?? null);
+
+  const voiceChanged = changed("voiceSpec") || changed("voice");
+  const scriptChanged = changed("scriptType");
+  const segChanged = changed("segments");
+  const formChanged = changed("form");
+
+  if (voiceChanged) {
+    out.push("声音规格变了 → 已合成的旁白全部作废，要重跑 tts_narration，并重新确认试听（confirm_narration）");
+  }
+  if (scriptChanged) {
+    out.push("稿件类型变了 → 稿件结构要重写（save_script），分镜每幕的 text 也要跟着回填");
+  }
+  if (segChanged) {
+    out.push("段落表变了 → 幕长按新段落重算，已建场景的时长要重排（update_scene / 重建分镜）");
+  }
+  if (formChanged) {
+    out.push("形态变了 → 版式策略要重选（「有没有东西在动」决定 freeform 还是内置版式），已有场景可能要整体重做");
+  }
+  if (changed("durationSec")) {
+    out.push("目标时长变了 → 段落表时长合计要重新对齐（±5%），否则不是赶就是拖");
+  }
+  if (changed("mustInfo") || changed("bans")) {
+    out.push("契约信息变了 → 建完后要重跑 brief_audit（check_project 也会按新契约体检）");
+  }
+  if (voiceChanged || segChanged) {
+    out.push("幕长一变，已放的元素/贴纸坐标和关键帧都会错位：先定幕长再放定时元素，或回头改它们的 durationInFrames");
+  }
+  return out;
+}
+
+
+/**
+ * 交付验收通过时，把「这支片子的稳定偏好」写进记忆 —— 下次开工 recall 就能命中，
+ * 不用再问一遍画幅/风格/配音（复盘问题：recall 永远是「没有匹配的记忆」）。
+ * 同一句话重复写会被 remember 去重；措辞带具体值，换了偏好自然产生新条目。
+ */
+function rememberDeliveryPreferences(p: ProjectLite, brief: Brief | null): string[] {
+  const notes: string[] = [];
+  const push = (text: string, tags: string[]) => {
+    try {
+      remember({ kind: "preference", text, tags });
+      notes.push(text);
+    } catch {
+      /* 记忆写不进去不影响交付 */
+    }
+  };
+  const fmts = (p as unknown as { formats?: { key: string; label: string }[] }).formats ?? [];
+  if (fmts.length === 1) push(`画幅偏好：${fmts[0].label}（${fmts[0].key}）—— 单画幅交付，用户没要多版本`, ["画幅"]);
+  else if (fmts.length > 1) push(`画幅偏好：多画幅交付（${fmts.map((x) => x.key).join(" / ")}）`, ["画幅"]);
+
+  const style = (brief as { style?: string } | null)?.style;
+  if (style) push(`风格偏好：${style}`, ["风格"]);
+
+  const vs = (brief as { voiceSpec?: { gender?: string; speed?: string } } | null)?.voiceSpec;
+  if (vs?.gender) push(`配音偏好：${vs.gender}${vs.speed ? `，语速 ${vs.speed}` : ""}`, ["配音"]);
+
+  const tone = (brief as { transitionTone?: string } | null)?.transitionTone;
+  if (tone) push(`转场偏好：${tone}`, ["转场"]);
+  return notes;
+}
+
 const TOOLS: ToolDef[] = [
   {
     name: "start_guide",
@@ -1745,6 +1820,20 @@ const TOOLS: ToolDef[] = [
         setCurrentProject(projects[0].id);
       }
       const nl = String.fromCharCode(10);
+      // 对账：out/ 里有、data/ 里没有的工程 = 多半是另一个实例/另一份数据目录。
+      // 不说的话，agent 会以为工程被删了，或者对着错误的工程继续改
+      let orphanNote = "";
+      try {
+        const { ids, dataDir } = await api<{ ids: string[]; dataDir: string }>("/api/orphans");
+        if (ids.length) {
+          orphanNote =
+            `${nl}⚠ 对账提醒：out/ 里有 ${ids.length} 个工程不在当前数据目录（${ids.slice(0, 5).join("、")}${ids.length > 5 ? "…" : ""}）。` +
+            `${nl}  当前数据目录：${dataDir}。这些工程要么是别的实例/别的数据目录写的，要么已被删只剩渲染产物。` +
+            `${nl}  别当成「工程被删了」：先确认 SERVER_URL 指向的是不是同一个实例，再动手。`;
+        }
+      } catch {
+        /* 对账拿不到不影响列表本身 */
+      }
       return (
         `共 ${projects.length} 个工程（★ = 当前默认工程）：` +
         nl +
@@ -1753,7 +1842,8 @@ const TOOLS: ToolDef[] = [
             (p) =>
               `${p.id === lastProjectId ? "★" : " "} ${p.name}（id=${p.id}，${p.scenes} 场景，rev=${p.rev}）`,
           )
-          .join(nl)
+          .join(nl) +
+        orphanNote
       );
     },
   },
@@ -1840,7 +1930,14 @@ const TOOLS: ToolDef[] = [
             .map((f: any) => {
               const kind = f.kind === "enum" ? `(${f.options.join("|")})` : `(${f.kind})`;
               const dv = f.default !== undefined ? ` 默认=${JSON.stringify(f.default)}` : "";
-              return `    - ${f.key} ${kind}${dv}${shapeOf(f)}：${f.label}`;
+              // 容量与范围必须写出来：复盘里「六档塞不进 items 上限 5」「value 传超范围被拒」都是建完才发现
+              const cap =
+                f.kind === "array" && (f.minItems != null || f.maxItems != null)
+                  ? ` 容量=${f.minItems ?? 0}-${f.maxItems ?? "∞"}`
+                  : f.kind === "number" && (f.numMin != null || f.numMax != null)
+                    ? ` 范围=${f.numMin ?? "-∞"}-${f.numMax ?? "∞"}`
+                    : "";
+              return `    - ${f.key} ${kind}${dv}${cap}${shapeOf(f)}：${f.label}`;
             })
             .join("\n");
           const els = (t.elements ?? []).length
@@ -2570,7 +2667,10 @@ const TOOLS: ToolDef[] = [
       let ducking: typeof prevDuck;
       if (a.ducking === false) ducking = { ...(prevDuck ?? DEFAULT_DUCKING), enabled: false };
       else if (a.ducking === true) ducking = { ...(prevDuck ?? DEFAULT_DUCKING), enabled: true };
-      else if (a.ducking && typeof a.ducking === "object") ducking = { ...(prevDuck ?? DEFAULT_DUCKING), ...a.ducking };
+      else if (a.ducking && typeof a.ducking === "object")
+        // 传了细化参数 = 明确要用避让。以前只合并、不置 enabled，
+        // 上次若关着就会「传了深度却回执说已关闭」（复盘问题 17）
+        ducking = { ...(prevDuck ?? DEFAULT_DUCKING), ...a.ducking, enabled: (a.ducking as { enabled?: boolean }).enabled ?? true };
       else ducking = prevDuck; // 没提避让就保持现状（set_audio 是全量替换，漏带会丢配置）
 
       const res = await api<any>(`/api/projects/${p.id}/ops`, {
@@ -3522,6 +3622,13 @@ const TOOLS: ToolDef[] = [
         .boolean()
         .optional()
         .describe("把每段写进 sceneId 对应场景（音频 + 场景时长 + 字幕），默认 false"),
+      keepSceneDuration: z
+        .boolean()
+        .optional()
+        .describe(
+          "true = 只换音频，不改幕长（默认 false 会按新配音长度重排这一幕）。" +
+            "改一句台词想只重配那一段时用它：segments 只给要改的段 + applyToScenes + keepSceneDuration=true，其余幕和元素坐标都不动",
+        ),
       fromStoryboard: z
         .boolean()
         .optional()
@@ -3679,11 +3786,21 @@ const TOOLS: ToolDef[] = [
               ops.push({ op: "remove_element", sceneId: r.sceneId, elementId: el.id });
             }
           }
-          ops.push({
-            op: "update_scene",
-            sceneId: r.sceneId,
-            patch: { durationInFrames: r.suggested },
-          });
+          // keepSceneDuration=true：只换音频，不重排这一幕（改一句台词时其余内容不该被牵动）
+          const targetDur = a.keepSceneDuration
+            ? Math.max(1, Number((scene as { durationInFrames?: number }).durationInFrames ?? r.suggested))
+            : r.suggested;
+          if (!a.keepSceneDuration) {
+            ops.push({
+              op: "update_scene",
+              sceneId: r.sceneId,
+              patch: { durationInFrames: targetDur },
+            });
+          } else if (r.suggested > targetDur) {
+            lines.push(
+              `⚠️ 场景 ${r.sceneId} 的配音 ${r.suggested} 帧比幕长 ${targetDur} 帧长：keepSceneDuration 下音频会被幕尾截断，要完整播放请关掉它重跑`,
+            );
+          }
           // 旁白文本往往是一整句，直接当字幕上屏就是一屏几十字：先拆再存。
           // keepSubtitles=true 时跳过——钩子幕手工拆的三拍断点会被整句覆盖掉（复盘坑 #8）
           if (!a.keepSubtitles) {
@@ -3706,7 +3823,7 @@ const TOOLS: ToolDef[] = [
               size: 6,
               audioVolume: 1,
               from: 0,
-              durationInFrames: r.suggested,
+              durationInFrames: a.keepSceneDuration ? Math.min(r.suggested, targetDur) : targetDur,
             },
           });
           applied++;
@@ -4444,8 +4561,10 @@ const TOOLS: ToolDef[] = [
           );
         }
         const r = markReviewConfirmed(p.id, a.feedback);
+        const memo = rememberDeliveryPreferences(p as never, readBrief(p.id));
         return (
-          `已记：用户验收通过（${r.confirmedAt}）✅${dirtyNote}${nl}下一步：render_video（先 dryRun 预检，再正式渲染）`
+          `已记：用户验收通过（${r.confirmedAt}）✅${dirtyNote}${nl}下一步：render_video（先 dryRun 预检，再正式渲染）` +
+          (memo.length ? `${nl}已沉淀 ${memo.length} 条偏好（下次开工 recall 就能命中，不用再问）：${memo.join("；")}` : "")
         );
       }
       if (!a.feedback?.length) {
@@ -4903,10 +5022,17 @@ const TOOLS: ToolDef[] = [
   {
     name: "render_cover",
     description:
-      "导出封面候选图：把某一帧（默认第 0 帧）渲染成 PNG，作为信息流封面或给用户挑。\n封面经常不该等于片头第一帧：要单独设计就先改首幕文案、或另建一幕当封面再抽（brief.cover 写要求）。",
+      "导出封面候选图：把某一帧渲染成 PNG，作为信息流封面或给用户挑。\n" +
+      "**不传 frame 时取首幕 80% 处**（文字入场动画到这时已落定）——抽第 0 帧经常是纯背景，封面是空的。\n" +
+      "封面经常不该等于片头第一帧：要单独设计就先改首幕文案、或另建一幕当封面再抽（brief.cover 写要求）。",
     shape: {
       projectId: z.string().optional().describe("要操作的工程 id，不传 = 当前默认工程（list_projects 查）"),
-      frame: z.number().int().min(0).optional().describe("用第几帧当封面，默认 0"),
+      frame: z
+        .number()
+        .int()
+        .min(0)
+        .optional()
+        .describe("用第几帧当封面；不传 = 首幕 80% 处（动画落定后，避免空白封面）"),
       formats: z
         .union([z.string(), z.array(z.string())])
         .optional()
@@ -4914,7 +5040,13 @@ const TOOLS: ToolDef[] = [
     },
     run: async (a) => {
       const p = await resolveProject(a.projectId);
-      const frame = a.frame ?? 0;
+      const span = sceneSpans(p.scenes as any[])[0];
+      const autoFrame = span ? span.start + Math.max(0, Math.round(span.dur * 0.8)) : 0;
+      const frame = a.frame ?? autoFrame;
+      const autoNote =
+        a.frame !== undefined
+          ? ""
+          : `（未指定帧号，自动取首幕 80% 处第 ${frame} 帧：文字入场动画到这时已落定；要别的帧就传 frame）`;
       const brief = readBrief(p.id);
       const res = await api<{ stills: { format: string; url: string }[] }>(
         `/api/projects/${p.id}/stills`,
@@ -4926,7 +5058,7 @@ const TOOLS: ToolDef[] = [
       );
       dirtySincePreview = false;
       return (
-        `封面候选（第 ${frame} 帧）：${nl}${files.join(nl)}` +
+        `封面候选（第 ${frame} 帧）：${nl}${files.join(nl)}${autoNote ? `${nl}${autoNote}` : ""}` +
         (brief?.cover
           ? `${nl}封面要求（brief.cover）：${brief.cover}`
           : `${nl}⚠️ brief 里还没写封面要求：intake(11) 问一句「用片头第一帧还是单独做一张，封面文案是什么」`) +
@@ -6431,6 +6563,12 @@ const TOOLS: ToolDef[] = [
         .optional()
         .describe("第几组：1=内容骨架 2=画面清单 3=声音字幕 4=素材与交付（新流程用这个）"),
       step: z.number().int().min(1).max(11).optional().describe("老接口：第几步（1–11）"),
+      mode: z
+        .enum(["quick", "full"])
+        .optional()
+        .describe(
+          "quick = 快问三题（给谁看 / 多久 / 画面里有没有东西在动），其余按默认值走并写进 assumed；full = 默认的 4 组详问",
+        ),
       projectId: z.string().optional().describe("要操作的工程 id，不传 = 当前默认工程（list_projects 查）"),
     },
     run: async (a) => {
@@ -6438,6 +6576,7 @@ const TOOLS: ToolDef[] = [
       const p = await resolveProject(a.projectId);
       const brief = readBrief(p.id);
       const progress = briefProgress(brief);
+
       const cov = briefCoverage(brief);
       const script = readScript(p.id);
 
@@ -6448,6 +6587,28 @@ const TOOLS: ToolDef[] = [
         ...(cov.blocking.length > 10 ? [`  …还有 ${cov.blocking.length - 10} 项`] : []),
         ...cov.warnings.map((x) => `  ⚠️ ${x.message}`),
       ].join(nl);
+
+      // 快问：低表达欲用户不该被 9 步问诊拖着走三四个来回（复盘问题 2）。
+      // 只问「用户能一句话答完、且答错代价最大」的三件；其余全部按默认值走，但必须写进 assumed。
+      if (a.mode === "quick") {
+        return [
+          "快问三题（一次问完，用户答完就能开工）：",
+          "1. 给谁看？（平台 + 受众，一句话）→ 决定画幅与安全区",
+          "2. 多久？（秒数；不确定就说个大概）→ 决定段落表",
+          "3. **画面里有没有东西在动？**",
+          "   · 有具体的东西在动（天体运行、机械原理、数据流转）→ 这幕用 freeform，逐帧摆位置",
+          "   · 只是一组并列的信息（清单/对比/参数）→ 用内置版式，快且稳",
+          "   ↳ 这一问比「用哪个版式」重要：答成「文字卡片」而用户想的是「科普动画」，就会整片重做",
+          "",
+          "提交（照抄改字即可）：",
+          'save_brief(core:{who:"给谁看"}, durationSec:30, form:"动画演示", motionLevel:"标准")',
+          "",
+          "其余没答的字段一律按默认值走，但**必须逐条写进 assumed**，confirm_brief 时要带用户原话；",
+          "想按 4 组详问就传 intake(mode=\"full\")。",
+          "",
+          covBlock,
+        ].join(nl);
+      }
 
       if (a.group) {
         const g = CONFIRM_GROUPS.find((x) => x.no === a.group);
@@ -6753,6 +6914,8 @@ const TOOLS: ToolDef[] = [
     },
     run: async (a) => {
       const p = await resolveProject(a.projectId);
+      // 存一份改之前的，用来算「需求改口的影响面」
+      const prevBrief = readBrief(p.id);
       // projectId 只是定位工程，不写进 brief
       const { projectId: _ignored, step: _step, ...briefFields } = a;
       // 9 步问诊：按 step 校验那一步的必填项，缺了不落盘，逼 agent 回去问用户
@@ -6773,6 +6936,11 @@ const TOOLS: ToolDef[] = [
         method: "PUT",
         body: JSON.stringify(fields),
       });
+
+      // 需求改口的影响面：改之前 vs 改之后，哪些下游会跟着变。
+      // 复盘问题 3：从「无配音」改成「要 AI 配音」时，scriptType/段落表/幕长全要重算，
+      // 工具不说话，agent 只能自己推——推漏了就是成片对不上稿。
+      const impact = describeBriefImpact(prevBrief, brief as Brief);
       const progress = briefProgress(brief as never);
       // 批量通道（不带 step）不校验必填：把还缺的步骤明说，别让 agent 以为存完就过了
       const missingSteps =
@@ -6796,6 +6964,9 @@ const TOOLS: ToolDef[] = [
         `已保存 brief（工程 ${p.id}）` +
         String.fromCharCode(10) +
         briefToText(brief as never) +
+        (impact.length
+          ? `${String.fromCharCode(10)}🧭 需求改口的影响面：${String.fromCharCode(10)}${impact.map((x) => `  · ${x}`).join(String.fromCharCode(10))}`
+          : "") +
         batchWarn +
         lockNote +
         String.fromCharCode(10) +
@@ -7249,6 +7420,26 @@ const TOOLS: ToolDef[] = [
       });
       const ids = res.createdSceneIds ?? [];
 
+      // 转场继承设计锁：不套的话每幕都是版本默认 fade 12 帧，
+      // 契约里写的「利落（none/zoom ≤10 帧）」当场违约，之后还得手动补一次 set_transitions
+      const lock: any = (brief as any)?.designLock;
+      const lockTypes: string[] = Array.isArray(lock?.transitionWhitelist) ? lock.transitionWhitelist : [];
+      let lockNote = "";
+      if (lockTypes.length && !lockTypes.includes("none") && ids.length) {
+        const t = {
+          type: lockTypes[0],
+          durationInFrames: Number(lock.transitionMaxFrames) || TRANSITION_DEFAULT_FRAMES,
+        };
+        await api(`/api/projects/${p.id}/ops`, {
+          method: "POST",
+          body: JSON.stringify({
+            actor: "agent",
+            ops: ids.map((sceneId: string) => ({ op: "update_scene", sceneId, patch: { transitionIn: t } })),
+          }),
+        });
+        lockNote = `转场已按设计锁套用：${t.type} ${t.durationInFrames} 帧（白名单 ${lockTypes.join(" / ")}；要改就再 set_transitions）`;
+      }
+
       // 字幕：一律先拆段再落库。分镜的 text 是「这一幕说的话」，经常是一整句甚至两句，
       // 直接上屏就是一屏几十字；这里拆好，后面 set_subtitle_style 调字号也不会再变长
       const subReport: string[] = [];
@@ -7304,7 +7495,7 @@ const TOOLS: ToolDef[] = [
           `已建第 ${onlyIdx + 1} 幕做风格帧（${sb.shots[onlyIdx]?.type}，id=${ids[0]}）。${nl}` +
           `下一步：preview_frames 抽 1–3 帧给用户过目（场景 id=${ids[0]}）——` +
           `配色/字体/版式方向 OK 再 build_storyboard(replace=true) 全量铺开（会重建这一幕，正常）；` +
-          `不对就 save_storyboard 改这一幕再 build_storyboard(shot=${onlyIdx + 1})，只重做 1 幕。${subNote}${orderNote}`
+          `不对就 save_storyboard 改这一幕再 build_storyboard(shot=${onlyIdx + 1})，只重做 1 幕。${subNote}${orderNote}${lockNote ? `${nl}${lockNote}` : ""}`
         );
       }
       // 建完顺手判一次"空"：在用户看到之前报，而不是等他第一眼说"太空旷"
@@ -7328,7 +7519,7 @@ const TOOLS: ToolDef[] = [
           return "";
         }
       })();
-      return `${skipNote}已按分镜建了 ${ids.length} 幕：${nl}${ids.map((id, i) => `${i + 1}. ${id}（${sb.shots[i]?.type}）`).join(nl)}${nl}下一步：tts_narration 配音（applyToScenes=true 自动对齐场景时长和字幕）${orderNote}${leftoverNote}${subNote}${visionNote}${densityNote}`;
+      return `${skipNote}已按分镜建了 ${ids.length} 幕：${nl}${ids.map((id, i) => `${i + 1}. ${id}（${sb.shots[i]?.type}）`).join(nl)}${lockNote ? `${nl}${lockNote}` : ""}${nl}下一步：tts_narration 配音（applyToScenes=true 自动对齐场景时长和字幕）${orderNote}${leftoverNote}${subNote}${visionNote}${densityNote}`;
     },
   },
   {
@@ -7420,6 +7611,7 @@ const TOOLS: ToolDef[] = [
       const inFrames = a.animations?.inFrames ?? 14;
       const aliases: Record<string, string> = {};
       const problems: string[] = [];
+      let lockApplied = 0;
 
       for (const [i, sc] of a.scenes.entries()) {
         const meta = getMeta(sc.type);
@@ -7473,13 +7665,26 @@ const TOOLS: ToolDef[] = [
           });
         }
 
-        const tin = sc.transitionIn !== undefined ? sc.transitionIn : a.transitions
-          ? { type: a.transitions.type, durationInFrames: a.transitions.durationInFrames ?? TRANSITION_DEFAULT_FRAMES }
-          : undefined;
+        // 转场取值优先级：单幕显式 > 本次统一参数 > **设计锁**（brief.designLock 的白名单 + 帧数上限）
+        // 少最后一档时，建幕会用版式默认 fade 12 帧，把契约里的「利落」冲掉，之后还得手动补 set_transitions
+        const lock: any = (brief as any)?.designLock;
+        const lockTypes: string[] = Array.isArray(lock?.transitionWhitelist) ? lock.transitionWhitelist : [];
+        const lockFrames = Number(lock?.transitionMaxFrames ?? 0);
+        const lockPick =
+          lockTypes.length && !lockTypes.includes("none")
+            ? { type: lockTypes[0], durationInFrames: lockFrames > 0 ? lockFrames : TRANSITION_DEFAULT_FRAMES }
+            : undefined;
+        const tin =
+          sc.transitionIn !== undefined
+            ? sc.transitionIn
+            : a.transitions
+              ? { type: a.transitions.type, durationInFrames: a.transitions.durationInFrames ?? TRANSITION_DEFAULT_FRAMES }
+              : lockPick;
         const patch: Record<string, unknown> = {};
         if (tin !== undefined) patch.transitionIn = tin;
         if (sc.transitionOut !== undefined) patch.transitionOut = sc.transitionOut;
         if (Object.keys(patch).length) ops.push({ op: "update_scene", sceneId: `@${alias}`, patch });
+        if (!a.transitions && sc.transitionIn === undefined && lockPick) lockApplied++;
       }
 
       const res = await api<{
@@ -7513,6 +7718,10 @@ const TOOLS: ToolDef[] = [
         `已建成 ${built.length} 幕${a.replace ? "（已清空原有场景）" : "（追加）"}，rev=${res.project.rev}` +
         `${nl}共 ${totalFrames} 帧 / ${totalSec.toFixed(1)}s${devNote}` +
         `${nl}别名：${built.map((x: { alias: string; id: string }) => `${x.alias} → ${x.id}`).join("、")}` +
+        (lockApplied
+          ? `${nl}转场已按设计锁套用（${lockApplied} 幕）：${(brief as any)?.designLock?.transitionWhitelist?.join(" / ") ?? ""} ` +
+            `${Number((brief as any)?.designLock?.transitionMaxFrames ?? 0) || TRANSITION_DEFAULT_FRAMES} 帧（单幕显式指定优先）`
+          : "") +
         (problems.length ? `${nl}⚠️ ${problems.join(`${nl}⚠️ `)}` : "") +
         `${nl}下一步：render_preview_clip 出一段 6 秒看动态（转场/字幕/BGM）→ 再 check_project 自检 → request_review`
       );

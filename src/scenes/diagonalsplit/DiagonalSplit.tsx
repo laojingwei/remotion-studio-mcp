@@ -40,25 +40,21 @@ const Panel: React.FC<{
         minWidth: 0,
       }}
     >
-      <div
-        style={{
-          flex: horizontal ? "0 0 34%" : 1,
-          minHeight: horizontal ? u(26) : u(34),
-          borderRadius: u(1.6),
-          overflow: "hidden",
-          background: imageSrc
-            ? undefined
-            : `linear-gradient(135deg, ${c.primary}44, ${c.secondary}22)`,
-          display: "grid",
-          placeItems: "center",
-        }}
-      >
-        {imageSrc ? (
+      {/* 没图就不占位：以前无图会渲染一个写着 IMAGE 的灰框，纯文字内容根本没法用 */}
+      {imageSrc ? (
+        <div
+          style={{
+            flex: horizontal ? "0 0 34%" : 1,
+            minHeight: horizontal ? u(26) : u(34),
+            borderRadius: u(1.6),
+            overflow: "hidden",
+            display: "grid",
+            placeItems: "center",
+          }}
+        >
           <img src={imageSrc} alt="" style={{ width: "100%", height: "100%", objectFit: "cover" }} />
-        ) : (
-          <span style={{ fontFamily: theme.font.body, fontSize: h(1.7), color: c.textMuted }}>IMAGE</span>
-        )}
-      </div>
+        </div>
+      ) : null}
       <div
         style={{
           flex: horizontal ? 1 : 0,

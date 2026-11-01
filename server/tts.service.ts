@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import { spawnSync } from "node:child_process";
 import { ROOT as PROJECT_ROOT } from "./root";
 import path from "node:path";
 import { assetUrlOf } from "../shared/customTemplate";
@@ -194,5 +195,75 @@ export async function synthesize(
   }
   fs.mkdirSync(dir, { recursive: true });
   fs.writeFileSync(path.join(dir, file), buf);
+  normalizeLoudness(path.join(dir, file));
   return { url, file, bytes: buf.length, format: ext };
+}
+
+/* ───────────────────────── 响度归一（E1） ───────────────────────── */
+
+/** ffmpeg 位置：环境变量 > Remotion 自带 > PATH */
+function ffmpegBin(): string {
+  const env = (process.env.FFMPEG_PATH ?? "").trim();
+  if (env && fs.existsSync(env)) return env;
+  if (process.platform === "win32") {
+    const bundled = path.join(
+      PROJECT_ROOT,
+      "node_modules",
+      "@remotion",
+      "compositor-win32-x64-msvc",
+      "ffmpeg.exe",
+    );
+    if (fs.existsSync(bundled)) return bundled;
+  }
+  return "ffmpeg"; // 交给 PATH；找不到就跳过归一
+}
+
+/**
+ * TTS 出来的旁白普遍 -25 ~ -27 LUFS、峰值 -8dBFS，配平时一抬就到峰值墙，
+ * 用户第一反应永远是「声音太小」（复盘问题 16）。
+ * 这里在合成后直接做一次单遍 loudnorm：拉到 -16 LUFS / 真峰 -1.5dBTP，
+ * 后面 balance_audio 就不用硬顶着削波风险去放大人声。
+ *
+ * 失败一律**不阻断**（返回 false 只打日志）：TTS 能用比响度更重要。
+ * 环境变量 TTS_NORMALIZE=0 可整体关掉。
+ */
+export function normalizeLoudness(file: string): boolean {
+  if ((process.env.TTS_NORMALIZE ?? "").trim() === "0") return false;
+  const tmp = `${file}.norm${path.extname(file)}`;
+  try {
+    const r = spawnSync(
+      ffmpegBin(),
+      [
+        "-y",
+        "-hide_banner",
+        "-loglevel",
+        "error",
+        "-i",
+        file,
+        "-af",
+        "loudnorm=I=-16:TP=-1.5:LRA=11",
+        "-ar",
+        "48000",
+        tmp,
+      ],
+      { timeout: 120_000, windowsHide: true },
+    );
+    if (r.status !== 0 || !fs.existsSync(tmp) || fs.statSync(tmp).size === 0) {
+      try {
+        fs.rmSync(tmp, { force: true });
+      } catch {
+        /* 清理失败无所谓 */
+      }
+      return false;
+    }
+    fs.renameSync(tmp, file);
+    return true;
+  } catch {
+    try {
+      fs.rmSync(tmp, { force: true });
+    } catch {
+      /* ignore */
+    }
+    return false;
+  }
 }

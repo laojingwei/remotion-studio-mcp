@@ -51,7 +51,7 @@ import {
   resetBundle,
 } from "./render.service";
 import { probeMany } from "./media.service";
-import { ensureSeed, PUBLIC_DIR, readLastProjectId, readUiPrefs, writeProject, writeUiPrefs } from "./store";
+import { DATA_DIR, ensureSeed, orphanOutputProjects, PUBLIC_DIR, readLastProjectId, readUiPrefs, writeProject, writeUiPrefs } from "./store";
 import { analyzeBeats } from "./audio-analysis.service";
 import { measureLoudness } from "./loudness.service";
 import { buildCompressCurve, summarizeCurve } from "../shared/audio";
@@ -75,6 +75,18 @@ import {
 for (const w of repairWorkspace()) console.warn(`[workspace] ${w}`);
 ensureSeed();
 
+// 对账：out/ 里有、data/ 里没有的工程 —— 通常是另一个实例/另一份数据目录写出来的。
+// 不说话的话，agent 会以为工程被删了，或者对着错误的工程继续改（复盘问题 18）
+{
+  const orphans = orphanOutputProjects();
+  if (orphans.length) {
+    console.warn(
+      `[store] out/projects 里有 ${orphans.length} 个工程不在当前数据目录（${orphans.slice(0, 5).join("、")}${orphans.length > 5 ? "…" : ""}）：` +
+        `可能是另一个实例在用别的数据目录。当前数据目录：${DATA_DIR}`,
+    );
+  }
+}
+
 const PORT = Number(process.env.PORT ?? 4380);
 const app = new Hono();
 
@@ -96,6 +108,15 @@ app.get("/api/scene-types", (c) => c.json({ types: metaList() }));
 /* ────────────────────────────── 工程 ────────────────────────────── */
 
 app.get("/api/projects", (c) => c.json({ projects: projects.list() }));
+
+/** 对账：out/ 里有、data/ 里没有的工程（多实例/多数据目录的信号） */
+app.get("/api/orphans", (c) => {
+  try {
+    return c.json({ dataDir: DATA_DIR, ids: orphanOutputProjects() });
+  } catch (err) {
+    return fail(c, err);
+  }
+});
 
 /* ───────────── 文本转语音（TTS） ───────────── */
 

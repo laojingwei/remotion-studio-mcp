@@ -886,6 +886,23 @@ export function saveBrief(projectId: string, patch: Brief): Brief {
   next.updatedAt = new Date().toISOString();
   fs.mkdirSync(path.dirname(file), { recursive: true });
   fs.writeFileSync(file, JSON.stringify(next, null, 2), "utf8");
+
+  // 写后回读：复盘里出现过「save_brief 回执成功、get_brief 说还没有 brief」——
+  // 当时是多实例/多数据目录（见 review-issues-plan A1），但回执伪造成功本身就是隐患。
+  // 这里落盘后立刻读回比对，读不到或不一致就直接报错，绝不再返回成功。
+  let back: Brief | null = null;
+  try {
+    back = readBrief(projectId);
+  } catch {
+    back = null;
+  }
+  if (!back || back.updatedAt !== next.updatedAt) {
+    throw new Error(
+      `brief 写入后回读不到（文件：${file}）。` +
+        `服务端可能正在用另一份数据目录（清单里没有这个工程？先 list_projects 对一下），或者磁盘不可写。` +
+        `本次没有保存成功，不要当成已保存继续往下走。`,
+    );
+  }
   return next;
 }
 

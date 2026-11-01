@@ -1,6 +1,7 @@
 import React from "react";
 import { AbsoluteFill, Img, useCurrentFrame, useVideoConfig, Video, staticFile } from "remotion";
 import { evalAnim, type FreeEl, type FreeformProps } from "../../../shared/freeform";
+import { withColorAlpha } from "../../../shared/color";
 import { editRegistry } from "../ui";
 import type { Theme } from "../../../shared/schema";
 
@@ -280,8 +281,8 @@ const Fx: React.FC<{ el: FreeEl; frame: number; unit: number }> = ({ el, frame, 
                 position: "absolute",
                 left: `${x}%`,
                 top: `${y}%`,
-                width: Math.max(1.5, w * 0.012),
-                height: Math.max(1.5, w * 0.012),
+                width: Math.max(1.5, (w * (el.dotSize ?? 1.2)) / 100),
+                height: Math.max(1.5, (w * (el.dotSize ?? 1.2)) / 100),
                 borderRadius: "50%",
                 background: color,
                 opacity: tw,
@@ -409,7 +410,13 @@ const OneEl = React.memo(function OneEl({ el, index, sceneId, frame, unit, theme
       <div
         style={{
           width: wPx,
-          height: el.shape === "line" ? Math.max(2, hPx * 0.03) : hPx,
+          // 线宽：给了 strokeWidth 就按短边百分比（可控），没给才退回按 size 推的旧行为
+          height:
+            el.shape === "line"
+              ? el.strokeWidth !== undefined
+                ? Math.max(1, (unit * el.strokeWidth) / 100)
+                : Math.max(2, hPx * 0.03)
+              : hPx,
           // fill 优先；只给了 bg 也当作形状填充（否则会被主题主色盖住）
           background: el.fill ?? el.bg ?? theme.palette.primary,
           borderRadius:
@@ -438,8 +445,8 @@ const OneEl = React.memo(function OneEl({ el, index, sceneId, frame, unit, theme
         viewBox={el.viewBox ?? "0 0 24 24"}
         width={wPx}
         height={el.height !== undefined ? hPx : undefined}
-        fill={el.fill ?? "none"}
-        stroke={el.stroke ?? "none"}
+        fill={el.fill ? withColorAlpha(el.fill, a.opacity ?? 1) : "none"}
+        stroke={el.stroke ? withColorAlpha(el.stroke, a.opacity ?? 1) : "none"}
         strokeWidth={el.strokeWidth ?? 2}
         strokeLinecap="round"
         style={{ display: "block" }}

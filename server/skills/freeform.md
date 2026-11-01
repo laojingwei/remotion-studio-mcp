@@ -47,12 +47,17 @@
 
 - `text`：`text`（支持 `\n`）、`fontFamily`、`weight`、`lineHeight`、`letterSpacing`、`textAlign`、`maxWidth`（短边%）、`fill`
 - `shape`：`shape`（rect/circle/line/triangle）、`fill`
+  **线宽用 `strokeWidth`（短边百分比），不要靠 size 猜**：不传时粗细 = 高度的 3%（约 19px），
+  想细就显式 `strokeWidth:0.15`（≈1.6px）；`size` 只管线有多长
 - `image`/`video`：`src`（先 upload_asset）
 - `svg`：`svg` + `viewBox` + `fill`/`stroke`/`strokeWidth`。
+  **半透明两种写法都行**：元素级 `opacity:0.22` 会乘进 fill/stroke 的 alpha；也可直接写 `fill:"rgba(90,200,250,0.22)"`
   **⚠️ 改 svg 时必须同时传 viewBox**：默认 `0 0 24 24`，内容不是 24×24 图标就会被压成一个看不见的点，而且不报错
 - `fx`：`kind`（glow/grid/noise/particles/stars/scanlines/rings/beam/dust/wave/meteor）、`color`、`density`、`speed`。
   **fx 容器是 `size`×短边 的正方形**：要铺满 16:9 全屏请 `size ≥ 200`，否则四周露硬边。
-  `noise` 默认已是细腻颗粒（想更浓直接调元素 `opacity`，1 = 最浓）
+  `noise` 默认已是细腻颗粒（想更浓直接调元素 `opacity`，1 = 最浓）。
+  **`stars` 的点径用 `dotSize`（元素宽度的百分比，默认 1.2）**：它不随 `size` 放大——
+  铺满全屏（`size:210`）时默认仍是小星点；`size` 只决定星星撒开多大范围
 
 ### 背景色 / 边框（不用写内联 CSS）
 
@@ -134,3 +139,15 @@ update_freeform_element(sceneId, elementId="card-01", patch={ "bg": "#FFFFFF", "
 - 内置版式"不够独特"或"文案塞不进模板"时
 - 需要光效/氛围/巨字排版/自定义构图时
 - 仍然可以用 `empty` 场景 + 自由元素层（那是"叠加层"，自由画布是"场景内的完整构图"）
+
+### 尺寸怎么换算（全部以**短边**为 1）
+
+| 你想画 | 怎么写 | 换算 |
+|---|---|---|
+| 一条横线，长度 = 屏幕宽 60% | `shape:"line", width:60, height:0, strokeWidth:0.2` | `width` 是短边%；线宽用 `strokeWidth` |
+| 一个 3:2 矩形 | `shape:"rect", width:40, height:26.7` | 高度 = 宽度 × (2/3) × (短边/长边) 的比例自己算 |
+| 贴在上一个元素右侧 2% | `x: 上一个.x + 上一个.width/2 + 2` | 全部是短边百分比，可直接加减 |
+| svg 图标 24×24 想显示成 8% | `size:8, viewBox:"0 0 24 24"` | viewBox 与 size 无关，改 viewBox 不改大小 |
+| 元素左边缘对齐 x=10% | `anchor:"left", x:10` | 默认 anchor:center（x 是中心） |
+
+> 竖屏 1080×1920：1 单位 = 10.8px；横屏 1920×1080：1 单位 = 10.8px（短边都是 1080）。

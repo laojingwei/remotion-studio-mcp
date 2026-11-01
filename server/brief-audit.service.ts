@@ -33,6 +33,7 @@ type AnyScene = {
   transitionIn?: { type?: string; durationInFrames?: number } | null;
   transitionOut?: { type?: string; durationInFrames?: number } | null;
   elements?: AnyElement[];
+  props?: Record<string, unknown>;
 };
 type AnyProject = {
   fps?: number;
@@ -48,7 +49,33 @@ export function normForMatch(s: unknown): string {
     .toLowerCase();
 }
 
-/** 把工程里所有"看得见的字"摊平：字幕 + 元素文本 */
+/** 看起来像颜色/URL/枚举值，不是"给人看的字" —— 不进契约语料，避免误判与噪音 */
+const NON_TEXT = /^(#[0-9a-f]{3,8}|\/|https?:|rgba?\(|hsla?\()/i;
+const NON_TEXT_KEYS = new Set(["type", "kind", "src", "url", "id", "fontFamily", "style", "filter", "blendMode", "fit", "textAlign", "direction", "mode", "place", "shape", "easing"]);
+
+/** 递归摊平内置版式 props 里的文字（heading / items[].text / rows / value+label…） */
+function collectPropStrings(v: unknown, key: string, out: string[], depth = 0): void {
+  if (v === null || v === undefined || depth > 6) return;
+  if (typeof v === "string") {
+    const t = v.trim();
+    if (!t || NON_TEXT.test(t) || NON_TEXT_KEYS.has(key)) return;
+    // 纯数字/纯序号不进语料（时长、序号之类），但 "1 音浪 = 0.1 元" 这种混合文本要留
+    out.push(t);
+    return;
+  }
+  if (typeof v === "number" || typeof v === "boolean") return;
+  if (Array.isArray(v)) {
+    for (const item of v) collectPropStrings(item, key, out, depth + 1);
+    return;
+  }
+  if (typeof v === "object") {
+    for (const [k, val] of Object.entries(v as Record<string, unknown>)) {
+      collectPropStrings(val, k, out, depth + 1);
+    }
+  }
+}
+
+/** 把工程里所有"看得见的字"摊平：字幕 + 元素文本 + 内置版式 props 文字 */
 export function collectProjectText(project: AnyProject): {
   all: string;
   perScene: string[];
@@ -73,6 +100,9 @@ export function collectProjectText(project: AnyProject): {
       const t = String(el?.text ?? "").trim();
       if (t) parts.push(t);
     }
+    // 内置版式的正文（heading / items[].text / rows / value+label）也要进语料：
+    // 契约讲的是"画面上有没有出现"，只看字幕等于强迫所有项目都配字幕（复盘问题 5）
+    collectPropStrings(s.props ?? {}, "", parts);
     perScene.push(parts.join(" "));
   }
   return { all: perScene.join(" "), perScene, subtitleLines };

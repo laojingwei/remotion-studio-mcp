@@ -170,9 +170,12 @@ export const PieScene: React.FC<PieProps> = ({
             }}
           >
             {d.display || Math.round(d.value).toLocaleString("en-US")}
-            <span style={{ color: c.textMuted, fontWeight: 400, marginLeft: u(0.8) }}>
-              {Math.round(frac * 100)}%
-            </span>
+            {/* display 里已经带了百分比就不再补一个：否则图例变成「80% 80%」 */}
+            {/\d\s*%/.test(d.display) ? null : (
+              <span style={{ color: c.textMuted, fontWeight: 400, marginLeft: u(0.8) }}>
+                {Math.round(frac * 100)}%
+              </span>
+            )}
           </span>
         </Editable>
       ))}

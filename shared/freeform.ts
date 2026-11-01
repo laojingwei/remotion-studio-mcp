@@ -82,7 +82,10 @@ export const freeElSchema = z.object({
         at: z.tuple([z.number(), z.number()]).describe("起止帧 [start, end]（场景内）"),
         from: z.record(z.union([z.string(), z.number()])).optional(),
         to: z.record(z.union([z.string(), z.number()])).optional(),
-        ease: z.enum(["linear", "easeInOut", "spring"]).optional(),
+        ease: z
+          .enum(["linear", "easeInOut", "spring", "easeOut", "easeIn", "easeOutBack"])
+          .optional()
+          .describe("缓动：linear / easeInOut / spring（easeOut、easeIn、easeOutBack 也认）"),
       }),
     )
     .optional(),
@@ -93,6 +96,8 @@ export const freeElSchema = z.object({
     .optional(),
   color: z.string().optional(),
   density: z.number().optional(),
+  /** stars 点径（占元素宽度的百分比，默认 1.2）—— 不随 size 线性放大，铺满整屏时才是小星点而不是大圆点 */
+  dotSize: z.number().optional(),
   speed: z.number().optional(),
 });
 
@@ -117,6 +122,14 @@ export type FreeformProps = z.infer<typeof freeformPropsSchema>;
 
 const easeFn = (kind: string | undefined, t: number): number => {
   const x = Math.max(0, Math.min(1, t));
+  // 别名：文档/习惯写法里常见 easeOut，以前整个 props 校验就挂了
+  if (kind === "easeOut" || kind === "easeOutQuad") return 1 - Math.pow(1 - x, 2);
+  if (kind === "easeIn" || kind === "easeInQuad") return x * x;
+  if (kind === "easeOutBack") {
+    const c1 = 1.70158;
+    const c3 = c1 + 1;
+    return 1 + c3 * Math.pow(x - 1, 3) + c1 * Math.pow(x - 1, 2);
+  }
   if (kind === "spring") {
     // easeOutBack 近似：落定时带一点回弹
     const c1 = 1.70158;

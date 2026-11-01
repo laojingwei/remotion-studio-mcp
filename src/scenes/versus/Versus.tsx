@@ -5,6 +5,8 @@ import { Editable, SceneFrame, useEnter } from "../ui";
 
 export type VersusProps = {
   theme: Theme;
+  /** 顶部标题（可留空） */
+  heading?: string;
   leftTitle: string;
   leftText: string;
   rightTitle: string;
@@ -14,6 +16,7 @@ export type VersusProps = {
 /** VS 对战：左右两强对比，中间 VS 徽标 */
 export const VersusScene: React.FC<VersusProps> = ({
   theme,
+  heading = "",
   leftTitle,
   leftText,
   rightTitle,
@@ -61,6 +64,13 @@ export const VersusScene: React.FC<VersusProps> = ({
   return (
     <SceneFrame theme={theme} justify="center" align="center">
       <div style={{ display: "flex", flexDirection: "column", gap: u(3), width: "100%", opacity: enter.opacity, transform: `translateY(${enter.y * u(1)}px)` }}>
+        {heading ? (
+          <Editable id="heading" title="标题">
+            <div style={{ fontFamily: theme.font.heading, fontSize: h(isPortrait ? 3.6 : 3.2), fontWeight: 800, color: c.text, textAlign: "center" }}>
+              {heading}
+            </div>
+          </Editable>
+        ) : null}
         <div style={{ display: "flex", flexDirection: isPortrait ? "column" : "row", gap: u(2), alignItems: "center", width: "100%" }}>
           {side("left", leftTitle, leftText, c.primary)}
           {isPortrait ? (

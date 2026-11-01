@@ -157,7 +157,7 @@ export const outroMeta: SceneMeta = {
     eyebrow: z.string().default("THE END").describe("顶部小标签（中文片可改，如「完」）"),
     title: z.string().describe("号召语"),
     action: z.string().default("").describe("次要说明"),
-    handle: z.string().default("").describe("账号/链接，可留空"),
+    handle: z.string().default("").describe("账号/链接，可留空（schema 默认就是空；模板里别写占位账号）"),
   }),
   defaultProps: {
     eyebrow: "THE END",
@@ -690,6 +690,7 @@ export const versusMeta: SceneMeta = {
   category: "游戏",
   summary: "左右两强对比，中间 VS 徽标",
   schema: z.object({
+    heading: z.string().default("").describe("顶部标题，可留空"),
     leftTitle: z.string().default("我的队伍"),
     leftText: z.string().describe("左侧说明"),
     rightTitle: z.string().default("对面"),
@@ -1013,7 +1014,10 @@ export const counterMeta: SceneMeta = {
   summary: "大数字从 0 弹到目标值 + 一条强调线；适合要让人记住的量（金额、涨幅、数量）",
   schema: z.object({
     value: z.number().default(370).describe("目标数字（可小数，如 1.2 表示 1.2 万）"),
-    prefix: z.string().default("¥").describe("前缀，如 ¥ / +，可留空"),
+    prefix: z
+      .string()
+      .default("¥")
+      .describe("前缀，如 ¥ / +。**数字带单位（°/%/万）时请显式传 \"\"**——默认 ¥ 会直接上屏"),
     suffix: z.string().default("").describe("后缀，如 万 / 元 / %，可留空"),
     label: z.string().default("到手只剩这些").describe("数字下面的说明，可留空"),
     decimals: z.number().int().min(0).max(3).default(0).describe("小数位数"),
@@ -1327,6 +1331,10 @@ export const funnelMeta: SceneMeta = {
       .min(3)
       .max(5)
       .describe("3–5 层，按流程顺序传（第一层最大），不排序"),
+    showConversion: z
+      .boolean()
+      .default(false)
+      .describe("层间是否显示「↓xx%」转化率。默认关：没给转化数据时自动算=凭空造数，要显示再开启"),
   }),
   defaultProps: {
     heading: "本场转化",

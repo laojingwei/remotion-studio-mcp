@@ -793,6 +793,27 @@ export function applyOps(project: Project, ops: Op[]): OpResult {
 
         scene.type = op.type;
         scene.props = normalizeProps(op.type, migrated);
+        // 换版式后元素 id 必须还在：id 是 update_freeform_element 的唯一定位方式，
+        // 一旦丢了就只能按 index 改，而 index 任何一次增删都会错位（复盘问题 11）。
+        // 老数据里没有 id 的，这里补一个稳定的 f0/f1…，并在回执里说清楚补过
+        if (op.type === "freeform") {
+          const els = (scene.props as { elements?: Record<string, unknown>[] }).elements;
+          if (Array.isArray(els)) {
+            let patched = 0;
+            els.forEach((el, i) => {
+              if (!el || typeof el !== "object") return;
+              if (!el.id) {
+                el.id = `f${i}`;
+                patched++;
+              }
+            });
+            if (patched) {
+              summary.push(
+                `换版式后有 ${patched} 个元素没有 id，已按位置补成 f0/f1…（以后用 update_freeform_element 按 id 改）`,
+              );
+            }
+          }
+        }
         // 时长：显式传了就用它，否则按新类型的上下限重新夹一次
         scene.durationInFrames = clampDurationWithNote(
           op.type,
@@ -1195,10 +1216,17 @@ export function applyOps(project: Project, ops: Op[]): OpResult {
             ? list.findIndex((e) => e["id"] === op.elementId)
             : (op.index ?? -1);
         if (idx < 0 || idx >= list.length) {
-          // 报错带"这一幕有几个元素"：只说「没有元素 13」，调用方分不清 13 是 id 还是下标
+          // 报错要给出**可用 id 清单**：只说「共 14 个、可用 index 0–13」，
+          // agent 还是不知道哪个 id 对，只能退回按下标改（任何增删都会错位）
+          const ids = list
+            .map((e, i) => `${String((e as { id?: string }).id ?? "(无 id)")}@${i}`)
+            .slice(0, 12)
+            .join("、");
           throw new Error(
             op.elementId
-              ? `freeform 里没有元素 ${op.elementId}：「${scene.name}」共 ${list.length} 个元素（可用 index 0–${list.length - 1}）。elementId 按 id 匹配，要按下标改请传 index`
+              ? `freeform 里没有元素 ${op.elementId}：「${scene.name}」共 ${list.length} 个元素。` +
+                `可用 id（id@下标）：${ids}${list.length > 12 ? "…" : ""}。` +
+                `要按下标改就传 index（0–${list.length - 1}）`
               : `freeform 元素下标越界：${op.index}（「${scene.name}」共 ${list.length} 个，可用 0–${list.length - 1}）`,
           );
         }
@@ -1353,10 +1381,17 @@ export function applyOps(project: Project, ops: Op[]): OpResult {
             ? list.findIndex((e) => (e as { id?: string }).id === op.elementId)
             : (op.index ?? -1);
         if (idx < 0 || idx >= list.length) {
-          // 报错带"这一幕有几个元素"：只说「没有元素 13」，调用方分不清 13 是 id 还是下标
+          // 报错要给出**可用 id 清单**：只说「共 14 个、可用 index 0–13」，
+          // agent 还是不知道哪个 id 对，只能退回按下标改（任何增删都会错位）
+          const ids = list
+            .map((e, i) => `${String((e as { id?: string }).id ?? "(无 id)")}@${i}`)
+            .slice(0, 12)
+            .join("、");
           throw new Error(
             op.elementId
-              ? `freeform 里没有元素 ${op.elementId}：「${scene.name}」共 ${list.length} 个元素（可用 index 0–${list.length - 1}）。elementId 按 id 匹配，要按下标改请传 index`
+              ? `freeform 里没有元素 ${op.elementId}：「${scene.name}」共 ${list.length} 个元素。` +
+                `可用 id（id@下标）：${ids}${list.length > 12 ? "…" : ""}。` +
+                `要按下标改就传 index（0–${list.length - 1}）`
               : `freeform 元素下标越界：${op.index}（「${scene.name}」共 ${list.length} 个，可用 0–${list.length - 1}）`,
           );
         }

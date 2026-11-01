@@ -67,6 +67,29 @@ const ensureDirs = () => {
 
 const fileOf = (id: string) => path.join(DATA_DIR, id, "project.json");
 
+/**
+ * `out/projects/` 下有、`data/projects/` 里没有的工程 id。
+ *
+ * 复盘问题 18：同一台机器上两套实例/两套数据目录并存时，agent 的清单里会突然少了刚做完的工程
+ * （它其实在另一份数据里），或者冒出几个从没创建过的高 rev 工程。
+ * 启动时与 list_projects 都拿它做对账，宁可多说一句，也别让人以为工程被删了。
+ */
+export function orphanOutputProjects(): string[] {
+  ensureDirs();
+  const outProjects = path.join(OUT_DIR, "projects");
+  let dirs: string[] = [];
+  try {
+    dirs = fs
+      .readdirSync(outProjects, { withFileTypes: true })
+      .filter((d) => d.isDirectory())
+      .map((d) => d.name);
+  } catch {
+    return [];
+  }
+  const known = new Set(listProjectIds());
+  return dirs.filter((id) => !known.has(id));
+}
+
 export function listProjectIds(): string[] {
   ensureDirs();
   return fs

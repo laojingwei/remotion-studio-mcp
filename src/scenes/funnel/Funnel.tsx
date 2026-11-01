@@ -10,6 +10,8 @@ export type FunnelProps = {
   heading: string;
   /** 漏斗各层，按流程顺序传（第一层最大），不要自己排序 */
   stages: { label: string; value: number; display: string }[];
+  /** 层间是否显示转化率（默认关）：没给转化数据时自动算=凭空造数 */
+  showConversion?: boolean;
 };
 
 type Stage = { label: string; value: number; display: string };
@@ -152,6 +154,7 @@ export const FunnelScene: React.FC<FunnelProps> = ({
   theme,
   heading = "",
   stages = [],
+  showConversion = false,
 }) => {
   const { u, h, isPortrait } = useSceneLayout();
   const c = theme.palette;
@@ -195,7 +198,9 @@ export const FunnelScene: React.FC<FunnelProps> = ({
               stage={s}
               index={i}
               widthPct={widthOf(s.value)}
-              conv={i === 0 ? null : list[i - 1].value > 0 ? s.value / list[i - 1].value : null}
+              conv={
+                showConversion && i > 0 && list[i - 1].value > 0 ? s.value / list[i - 1].value : null
+              }
               barH={barH}
               valueSize={valueSize}
               stages={list.length}
