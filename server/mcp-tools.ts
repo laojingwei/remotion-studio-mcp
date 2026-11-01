@@ -63,6 +63,28 @@ const BRK = String.fromCharCode(10);
 const TRANSITION_DEFAULT_FRAMES = 12;
 
 /**
+ * 流程闸口旁路（build_storyboard / build_film 的 skipChecks 参数）。
+ *
+ * 分级原则：**验收（confirm_review）与契约（mustInfo/禁词）是交付硬闸**，走各自的 force 机制；
+ * 需求问诊 / 风格样张 / 稿件确认 / 配音试听是**流程性闸口**——用户明确说「直接建 / 不用问了」时
+ * 应该放行，但必须附用户原话（≥2 字），跳过要在回执里留痕，风险说清由用户自担。
+ */
+function processGateBypass(a: { skipChecks?: boolean; skipReason?: string }): string | null {
+  if (!a.skipChecks) return null;
+  if (!a.skipReason || [...a.skipReason.trim()].length < 2) {
+    throw new Error(
+      "skipChecks=true 必须同时给 skipReason（用户让你跳过的原话，至少 2 字）——没有原话不能跳过流程闸口",
+    );
+  }
+  return a.skipReason.trim();
+}
+const SKIPPED_NOTE = (gates: string[], by: string) =>
+  `⚠ 已按用户要求跳过流程闸口：${gates.join("、")}（用户原话：「${by}」）——这些环节没走完，质量风险由用户自担。`;
+
+/** force 旁路原话的最短长度。原话由 agent 转述、无法验真，卡长度只会增加摩擦，能对上口径即可 */
+const FORCE_QUOTE_MIN = 2;
+
+/**
  * 平台 UI 遮挡区（画面百分比，经验值，只用于提醒，绝不硬裁）。
  *
  * 为什么只提醒：元素出框经常是有意设计（大字标题、延伸色块、出血图）。
@@ -4001,8 +4023,8 @@ const TOOLS: ToolDef[] = [
       projectId: z.string().optional().describe("要操作的工程 id，不传 = 当前默认工程"),
       userSaid: z
         .string()
-        .min(5)
-        .describe("用户听完之后的原话片段（至少 5 字）。不是「用户同意了」，是他实际说的那句"),
+        .min(FORCE_QUOTE_MIN)
+        .describe(`用户听完之后的原话片段（至少 ${FORCE_QUOTE_MIN} 字）。不是「用户同意了」，是他实际说的那句`),
     },
     run: async (a) => {
       const p = await resolveProject(a.projectId);
@@ -4397,16 +4419,13 @@ const TOOLS: ToolDef[] = [
           "刚改过画面还没抽帧确认：先 preview_frames 看一眼，确认改对了再请用户看整片——否则他看到的可能是改坏的那一版。",
         );
       }
-      // 验收标准没定，看片就是白看：观感五项必须先齐
+      // 验收标准没定，看片就是白看：观感五项必须先齐 —— 但用户是最终裁判，
+      // 他明确要直接看时不必死挡，改成显著提醒（标准的意义是让反馈可执行，不是拦人）
       const briefNow = readBrief(p.id);
       const visionMissing = stepMissingFields(11, briefNow);
-      if (visionMissing.length) {
-        throw new Error(
-          `观感还没定齐（缺：${visionMissing.join("、")}）：` +
-            `先 intake(11) 问用户 → save_brief(step=11, mood=[], safeArea, cover, subtitleSpec, sfx)，再请他看片。` +
-            `没定标准就让人看片，他只能说「感觉不对」，你还是不知道改哪儿。`,
-        );
-      }
+      const visionNote = visionMissing.length
+        ? `⚠ 观感标准没定齐（缺：${visionMissing.join("、")}）：用户看完只能说「感觉不对」，你还是不知道改哪儿。建议先 intake(11) 补齐再请他看片。`
+        : "";
       markReviewRequested(p.id);
       const nl = String.fromCharCode(10);
       const sec = Math.round(totalDuration(p as never) / (p.fps || 30));
@@ -4415,6 +4434,7 @@ const TOOLS: ToolDef[] = [
           ? a.focus.join("、")
           : "节奏顺不顺（有没有拖沓或赶）/ 转场突不突兀 / 字幕有没有溢出或被裁 / 声音和画面对不对得上";
       return [
+        ...(visionNote ? [visionNote] : []),
         `已记录：请用户去编辑器看工程「${p.name}」（${(p.scenes ?? []).length} 幕，约 ${sec} 秒）`,
         `编辑器：${BASE}  →  左侧工程列表选「${p.name}」（id=${p.id}），点播放整片看一遍`,
         `重点让他看：${focus}`,
@@ -4439,22 +4459,23 @@ const TOOLS: ToolDef[] = [
     run: async (a) => {
       const p = await resolveProject(a.projectId);
       const nl = String.fromCharCode(10);
-      if (a.approved && dirtySincePreview) {
-        throw new Error(
-          "刚改过画面还没抽帧确认：用户看的版本和工程现状可能不一致，先 preview_frames 核对，再记验收通过。",
-        );
-      }
+      // 用户明确 approved 后不再硬挡：用户看的就是编辑器里的最新状态，
+      //「改过没抽帧」只值得提醒。真正的闸在 render_video（那边还有 force 机制兜底）。
+      const dirtyNote =
+        a.approved && dirtySincePreview
+          ? `${nl}⚠ 提醒：验收通过后工程又改过画面且没再抽帧——若用户看的就是最新版就没问题，否则建议 preview_frames 复核一次再渲染。`
+          : "";
       if (a.approved) {
         if (a.selfRender) {
           markSelfRender(p.id);
           return (
-            `已记：用户自己导出（工程「${p.name}」）。` +
+            `已记：用户自己导出（工程「${p.name}」）。${dirtyNote}` +
             `${nl}你不用渲染了；收尾可以 get_guide("memory") 做沉淀，需要时再帮他改。`
           );
         }
         const r = markReviewConfirmed(p.id, a.feedback);
         return (
-          `已记：用户验收通过（${r.confirmedAt}）✅${nl}下一步：render_video（先 dryRun 预检，再正式渲染）`
+          `已记：用户验收通过（${r.confirmedAt}）✅${dirtyNote}${nl}下一步：render_video（先 dryRun 预检，再正式渲染）`
         );
       }
       if (!a.feedback?.length) {
@@ -4508,7 +4529,7 @@ const TOOLS: ToolDef[] = [
         .string()
         .optional()
         .describe(
-          "用户让你跳过闸口时的**原话**（至少 5 字）。不给原话，force / forceContract 一律拒绝——" +
+          "用户让你跳过闸口时的**原话**（至少 2 字）。不给原话，force / forceContract 一律拒绝——" +
             "留下用户原话，跳过验收才有据可查——agent 自己转述的「用户同意了」不算数",
         ),
       fileName: z
@@ -4533,14 +4554,12 @@ const TOOLS: ToolDef[] = [
       const formats = typeof a.formats === "string" ? [a.formats] : a.formats;
       const nl0 = String.fromCharCode(10);
 
-      // force 闸口：跳过验收/契约，必须有用户原话撑着。
-      // 布尔 force 的问题不是"太好绕过"，而是**事后无法追责**：
-      // 事故里 agent 传了 force=true，日志里只留下一个 true，看不出用户说没说过"直接渲"。
+      // force 闸口：跳过验收/契约，必须有用户原话撑着（事后可对证）。
       if ((a.force || a.forceContract) && !a.dryRun) {
         const q = String(a.forceUserQuote ?? "").trim();
-        if (q.length < 5) {
+        if ([...q].length < FORCE_QUOTE_MIN) {
           throw new Error(
-            `force / forceContract 必须带用户原话（forceUserQuote，至少 5 字）——` +
+            `force / forceContract 必须带用户原话（forceUserQuote，至少 ${FORCE_QUOTE_MIN} 字）——` +
               `收到的是「${q || "(空)"}」。${nl0}` +
               `  要跳过的闸口：${[a.force ? "验收（force）" : "", a.forceContract ? "契约（forceContract）" : ""].filter(Boolean).join(" + ")}${nl0}` +
               `  该做的：把「还差什么」告诉用户，问他要不要先出片；他说了之后原样贴进来，例如 ${nl0}` +
@@ -6397,7 +6416,11 @@ const TOOLS: ToolDef[] = [
         `工程「${p.name}」：${scenes.length} 场景 / ${total} 帧（${(total / (p.fps || 30)).toFixed(1)}s）` +
         `${nl}（⚠️ = 要修 · ℹ️ = 确认一下，可能是故意的 · 💡 = 可选优化）`;
       if (!issues.length) return `${head}${nl}✅ 没有发现明显问题。${nl}自检清单见 get_guide(\"qa\")`;
-      return `${head}${nl}发现 ${issues.length} 条：${nl}${issues.join(nl)}`;
+      // 封顶 30 条：误报多时全量吐出来只会把真问题淹掉
+      const CAP = 30;
+      const shown = issues.slice(0, CAP);
+      const more = issues.length > CAP ? `${nl}…还有 ${issues.length - CAP} 条没列出（先修已列出的，多数会连带消失；需要全量再说）` : "";
+      return `${head}${nl}发现 ${issues.length} 条（${CAP < issues.length ? `显示前 ${CAP} 条` : "全部"}）：${nl}${shown.join(nl)}${more}`;
     },
   },
   {
@@ -7119,52 +7142,79 @@ const TOOLS: ToolDef[] = [
         .describe("只建第 N 幕（1 起）——风格帧验证专用；只建单幕时忽略 replace"),
       replace: z.boolean().optional().describe("先删掉工程现有场景再建（默认 false：追加）"),
       attachSubtitle: z.boolean().optional().describe("把每幕 text 写成字幕，默认 true"),
+      skipChecks: z
+        .boolean()
+        .optional()
+        .describe(
+          "跳过流程闸口（需求问诊 / 需求确认 / 风格样张 / 稿件确认 / 配音试听）。用户明确说「直接建 / 不用问了」才传；验收与契约闸口不受影响",
+        ),
+      skipReason: z
+        .string()
+        .optional()
+        .describe("用户让你跳过的原话（至少 2 字）；skipChecks=true 时必填，会记录在回执里"),
     },
     run: async (a) => {
       const p = await resolveProject(a.projectId);
+      const bypass = processGateBypass(a);
+      const skippedGates: string[] = [];
+      /** 流程性闸口统一处理：不旁路就挡，旁路就留痕 */
+      const gate = (blocked: boolean, message: string, label: string) => {
+        if (!blocked) return;
+        if (bypass) {
+          skippedGates.push(label);
+          return;
+        }
+        throw new Error(message);
+      };
       // 需求 9 步没问完就不许开建（重要配置不能自己定）
       const brief = readBrief(p.id);
       const progress = briefProgress(brief);
-      if (!progress.finished) {
-        throw new Error(
-          `需求还没问完（${progress.done.length}/9），下一步该问第 ${progress.next} 步。` +
-            `先用 intake(${progress.next}) 看要问什么，save_brief(step=${progress.next}) 逐步补齐，再 build_storyboard。`,
-        );
-      }
-      if (!(brief as any)?.confirmedAt) {
-        throw new Error(
-          "需求还没请用户确认：把 9 步总结发给用户，用户确认后调用 confirm_brief，再 build_storyboard。",
-        );
-      }
-      // 开工前必须给用户看过样张：方向错了，后面 50 幕全是白做
+      gate(
+        !progress.finished,
+        `需求还没问完（${progress.done.length}/9），下一步该问第 ${progress.next} 步。` +
+          `先用 intake(${progress.next}) 看要问什么，save_brief(step=${progress.next}) 逐步补齐，再 build_storyboard。` +
+          `（用户明确说「直接建」时：skipChecks=true + skipReason=他的原话）`,
+        `需求问诊未完成（${progress.done.length}/9）`,
+      );
+      gate(
+        !(brief as any)?.confirmedAt,
+        "需求还没请用户确认：把 9 步总结发给用户，用户确认后调用 confirm_brief，再 build_storyboard。",
+        "需求未确认",
+      );
+      // 开工前给用户看过样张：方向错了，后面 50 幕全是白做
       const probe = readReview(p.id);
-      if (!probe?.probeAt) {
-        throw new Error(
-          "开工前还没让用户看过效果：先 probe_style(slugs=[...]) 出 1–3 张风格样张 → 把图发给用户挑 → " +
-            "confirm_style_probe(slug)，再写分镜。\n" +
-            "这一步省不得：方向不对的话，现在改一张图；等 50 幕铺完再改，是全线返工。",
-        );
-      }
+      gate(
+        !probe?.probeAt,
+        "开工前还没让用户看过效果：先 probe_style(slugs=[...]) 出 1–3 张风格样张 → 把图发给用户挑 → " +
+          "confirm_style_probe(slug)，再写分镜。\n" +
+          "这一步省不得：方向不对的话，现在改一张图；等 50 幕铺完再改，是全线返工。",
+        "风格样张未确认",
+      );
 
       // 稿子没确认就别写分镜（无稿类除外）：分镜每一幕的 text 都该来自稿件，不该临场编
       const briefScriptType = (brief as any)?.scriptType as string | undefined;
       const needsScript = !!briefScriptType && !/无稿/.test(briefScriptType);
       if (needsScript) {
         const sc = readScript(p.id);
-        if (!sc || (!sc.segments?.length && !sc.sourceText)) {
-          throw new Error(
-            `稿件类型是「${briefScriptType}」，但还没有稿件：` +
-              `intake(10) 看该问什么 → save_script 写稿 → confirm_script 请用户过目，再写分镜。`,
-          );
-        }
-        if (!sc.confirmedAt) {
-          throw new Error(
-            "稿件还没请用户确认：把稿子（每段 + 预估秒数）发给用户过目，点头后 confirm_script，再 save_storyboard / build_storyboard。",
-          );
-        }
+        gate(
+          !sc || (!sc.segments?.length && !sc.sourceText),
+          `稿件类型是「${briefScriptType}」，但还没有稿件：` +
+            `intake(10) 看该问什么 → save_script 写稿 → confirm_script 请用户过目，再写分镜。`,
+          "稿件未写",
+        );
+        gate(
+          !sc?.confirmedAt,
+          "稿件还没请用户确认：把稿子（每段 + 预估秒数）发给用户过目，点头后 confirm_script，再 save_storyboard / build_storyboard。",
+          "稿件未确认",
+        );
       }
       // 配音闸口：没让用户听过这一版，不许铺开画面
-      await assertNarrationHeard(p.id, "建幕");
+      if (bypass) {
+        skippedGates.push("配音试听未确认");
+      } else {
+        await assertNarrationHeard(p.id, "建幕");
+      }
+      const skipNote = skippedGates.length ? SKIPPED_NOTE(skippedGates, bypass as string) + "\n" : "";
       const sb = readStoryboard(p.id);
       if (!sb?.shots?.length) throw new Error("还没有分镜表，先用 save_storyboard 写");
       // 观感（mood / 安全区 / 封面 / 字幕 / 音效）没定不拦写分镜，但要说一句：
@@ -7258,6 +7308,7 @@ const TOOLS: ToolDef[] = [
         : "";
       if (onlyIdx >= 0) {
         return (
+          skipNote +
           visionNote +
           (visionNote ? nl : "") +
           `已建第 ${onlyIdx + 1} 幕做风格帧（${sb.shots[onlyIdx]?.type}，id=${ids[0]}）。${nl}` +
@@ -7287,7 +7338,7 @@ const TOOLS: ToolDef[] = [
           return "";
         }
       })();
-      return `已按分镜建了 ${ids.length} 幕：${nl}${ids.map((id, i) => `${i + 1}. ${id}（${sb.shots[i]?.type}）`).join(nl)}${nl}下一步：tts_narration 配音（applyToScenes=true 自动对齐场景时长和字幕）${orderNote}${leftoverNote}${subNote}${visionNote}${densityNote}`;
+      return `${skipNote}已按分镜建了 ${ids.length} 幕：${nl}${ids.map((id, i) => `${i + 1}. ${id}（${sb.shots[i]?.type}）`).join(nl)}${nl}下一步：tts_narration 配音（applyToScenes=true 自动对齐场景时长和字幕）${orderNote}${leftoverNote}${subNote}${visionNote}${densityNote}`;
     },
   },
   {
@@ -7340,15 +7391,32 @@ const TOOLS: ToolDef[] = [
         .optional()
         .describe("freeform 元素的入场动画预设（元素自带 anim 时以元素为准）"),
       subtitles: z.boolean().optional().describe("写不写字幕，默认 true（有 text/subtitle 才写）"),
+      skipChecks: z
+        .boolean()
+        .optional()
+        .describe("跳过流程闸口（需求确认 / 配音试听）。用户明确说「直接建 / 不用问了」才传；验收与契约闸口不受影响"),
+      skipReason: z
+        .string()
+        .optional()
+        .describe("用户让你跳过的原话（至少 2 字）；skipChecks=true 时必填，会记录在回执里"),
     },
     run: async (a) => {
       const p = await resolveProject(a.projectId);
+      const bypass = processGateBypass(a);
+      const skippedGates: string[] = [];
       const brief = readBrief(p.id);
-      if (!brief?.confirmedAt) {
-        throw new Error("brief 还没确认：先走完 4 组问诊 + confirm_brief，再 build_film（否则建出来的东西没人认过）");
+      if (!(brief as any)?.confirmedAt) {
+        if (bypass) skippedGates.push("需求未确认");
+        else
+          throw new Error("brief 还没确认：先走完 4 组问诊 + confirm_brief，再 build_film（否则建出来的东西没人认过）");
       }
       // 配音闸口：合成过但没人听过 → 不许建幕（建了就等于把幕长锁死在这版语音上）
-      await assertNarrationHeard(p.id, "建整片");
+      if (bypass) {
+        skippedGates.push("配音试听未确认");
+      } else {
+        await assertNarrationHeard(p.id, "建整片");
+      }
+      const skipNote = skippedGates.length ? SKIPPED_NOTE(skippedGates, bypass as string) + "\n" : "";
       const nl = String.fromCharCode(10);
       const fps = p.fps || 30;
       const ops: Record<string, unknown>[] = [];
@@ -7441,7 +7509,7 @@ const TOOLS: ToolDef[] = [
 
       const totalFrames = (res.project.scenes ?? []).reduce((n: number, s: { durationInFrames?: number }) => n + Number(s.durationInFrames ?? 0), 0);
       const totalSec = totalFrames / fps;
-      const planned = Number(brief.durationSec ?? 0);
+      const planned = Number((brief as any)?.durationSec ?? 0);
       const devNote =
         planned > 0
           ? `；brief 计划 ${planned}s → 实际 ${totalSec.toFixed(1)}s（${(((totalSec - planned) / planned) * 100).toFixed(0)}%）`
@@ -7451,6 +7519,7 @@ const TOOLS: ToolDef[] = [
       }
 
       return (
+        skipNote +
         `已建成 ${built.length} 幕${a.replace ? "（已清空原有场景）" : "（追加）"}，rev=${res.project.rev}` +
         `${nl}共 ${totalFrames} 帧 / ${totalSec.toFixed(1)}s${devNote}` +
         `${nl}别名：${built.map((x: { alias: string; id: string }) => `${x.alias} → ${x.id}`).join("、")}` +
