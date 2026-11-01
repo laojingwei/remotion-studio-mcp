@@ -919,7 +919,8 @@ export function applyOps(project: Project, ops: Op[]): OpResult {
         const meta = getMeta(op.backdrop.type);
         const speed =
           typeof op.backdrop.speed === "number"
-            ? Math.max(0.2, Math.min(4, op.backdrop.speed))
+            // 上限 10：面板能拉到 10×，这里再卡 4 就会出现"拖到底但画面没更快"
+            ? Math.max(0.1, Math.min(10, op.backdrop.speed))
             : 1;
         const mode = op.backdrop.mode ?? "loop";
         /*

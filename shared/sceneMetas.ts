@@ -1887,15 +1887,23 @@ const OPTION_LABELS: Record<string, Record<string, string>> = {
 /** 枚举值 → 中文短名（没有映射就原样返回） */
 export const optionLabel = (key: string, value: string): string => OPTION_LABELS[key]?.[value] ?? value;
 
-/** 3D 预设清单（面板里铺按钮用；顺序 = 推荐顺序） */
-export const SCENE3D_PRESETS = [
-  "orbit-core",
-  "particle-field",
-  "grid-horizon",
-  "explode-parts",
-  "waveform",
-  "globe-arc",
-] as const;
+/**
+ * 3D 母题清单（面板里铺按钮 / 场景选择器里直接建场景用；顺序 = 推荐顺序）。
+ *
+ * 带一句短说明，是因为"环绕核心 / 粒子星云"这种名字只说了它长什么样，
+ * 没说要讲什么内容 —— 建场景的人真正要选的是后者。
+ */
+export const SCENE3D_PRESET_OPTIONS: { id: string; label: string; summary: string }[] = [
+  { id: "orbit-core", label: "环绕核心", summary: "一个几何体自转，几颗卫星绕着走——聚焦一个概念" },
+  { id: "particle-field", label: "粒子星云", summary: "悬浮粒子云有中心核——发散、想象、智能" },
+  { id: "grid-horizon", label: "网格地平线", summary: "透视网格铺向远方——科技感、速度、未来" },
+  { id: "explode-parts", label: "零件拆解", summary: "环形零件炸开再合拢——讲构成、拆解、步骤" },
+  { id: "waveform", label: "波形柱阵", summary: "一排柱子起伏成波形——讲数据、趋势、声音" },
+  { id: "globe-arc", label: "球面网络", summary: "球面点阵加拱形连线——讲全球、连接、辐射" },
+];
+
+/** 3D 预设 id 清单 */
+export const SCENE3D_PRESETS = SCENE3D_PRESET_OPTIONS.map((o) => o.id);
 
 export type FieldDesc = {
   key: string;

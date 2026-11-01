@@ -549,6 +549,32 @@ button.primary:disabled {
   border-bottom: 1px solid var(--line);
 }
 
+/* 场景搜索：场景多到二三十幕时，靠滚动找一幕是很痛苦的事 */
+.panel-search {
+  padding: 7px 10px;
+  border-bottom: 1px solid var(--line);
+}
+
+.panel-search input {
+  width: 100%;
+  box-sizing: border-box;
+  background: var(--panel-2);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 6px 9px;
+  color: var(--text);
+  font: 12px/1.4 system-ui, sans-serif;
+  outline: none;
+}
+
+.panel-search input:focus {
+  border-color: var(--line-strong);
+}
+
+.panel-search input::placeholder {
+  color: var(--muted);
+}
+
 .icon-btn {
   background: transparent;
   border: 1px solid var(--line);

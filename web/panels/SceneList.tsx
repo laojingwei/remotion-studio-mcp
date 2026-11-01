@@ -29,6 +29,17 @@ const SCENE_ICON: Record<string, string> = {
   timeline: "⋮",
   pricing: "¥",
   bigtext: "大",
+  scene3d: "◐",
+};
+
+/** 选择器条目：scene3d 会被展开成 6 个母题，各自带一份 props */
+type PickerItem = {
+  key: string;
+  type: string;
+  name: string;
+  summary: string;
+  category?: string;
+  props?: Record<string, unknown>;
 };
 
 export const SceneList: React.FC = () => {
@@ -52,6 +63,13 @@ export const SceneList: React.FC = () => {
     y: number;
   } | null>(null);
   const [types, setTypes] = useState<{ type: string; name: string; summary: string; category?: string }[]>([]);
+  /**
+   * 场景搜索。
+   *
+   * 一支片子动辄二三十幕，靠滚列表找"那个讲公转的"很难。这里按**幕名 / 版式名 / 场景类型 /
+   * 字幕**匹配 —— 用户记得的多半是文案里的一句，而不是幕名。
+   */
+  const [q, setQ] = useState("");
 
   useEffect(() => {
     fetchSceneTypes()
@@ -77,18 +95,50 @@ export const SceneList: React.FC = () => {
     return () => document.removeEventListener("pointerdown", onDown, true);
   }, [pickerOpen]);
 
-  const categories = useMemo(
-    () => ["全部", ...Array.from(new Set(types.map((t) => t.category || "其他")))],
+  /**
+   * 选择器条目。
+   *
+   * 3D 场景在这里只是**一个**卡片：换母题（环绕核心 / 粒子星云…）走右侧属性栏的
+   * 预设那一排，不在这里分裂成 6 张 —— 选择器只解决"加什么类型的一幕"，
+   * 不解决"这一幕画什么"。两件事混在一个面板里，列表会长得没法扫。
+   */
+  const pickerItems = useMemo<PickerItem[]>(
+    () =>
+      types.map((t) => ({
+        key: t.type,
+        type: t.type,
+        name: t.name,
+        summary: t.summary,
+        category: t.category,
+      })),
     [types],
   );
-  const visibleTypes = useMemo(
-    () => types.filter((t) => activeCat === "全部" || (t.category || "其他") === activeCat),
-    [types, activeCat],
+
+  const categories = useMemo(
+    () => ["全部", ...Array.from(new Set(pickerItems.map((t) => t.category || "其他")))],
+    [pickerItems],
   );
+  const visibleTypes = useMemo(
+    () => pickerItems.filter((t) => activeCat === "全部" || (t.category || "其他") === activeCat),
+    [pickerItems, activeCat],
+  );
+
+  const keyword = q.trim().toLowerCase();
+  const matched = useMemo(() => {
+    const scenes = project?.scenes ?? [];
+    if (!keyword) return scenes;
+    return scenes.filter((s) => {
+      const meta = getMeta(s.type);
+      return [s.name, meta?.name ?? "", s.type, s.subtitle ?? ""]
+        .join(" ")
+        .toLowerCase()
+        .includes(keyword);
+    });
+  }, [project?.scenes, keyword]);
 
   if (!project) return null;
 
-  const add = async (type: string) => {
+  const add = async (item: PickerItem) => {
     setHover(null);
     setPickerOpen(false);
     /*
@@ -103,7 +153,14 @@ export const SceneList: React.FC = () => {
       project.scenes[project.scenes.length - 1]?.id,
     ];
     const anchor = candidates.find(exists);
-    await apply([{ op: "add_scene", type, ...(anchor ? { afterSceneId: anchor } : {}) }]);
+    await apply([
+      {
+        op: "add_scene",
+        type: item.type,
+        ...(item.props ? { props: item.props } : {}),
+        ...(anchor ? { afterSceneId: anchor } : {}),
+      },
+    ]);
   };
 
   const remove = async (sceneId: string) => {
@@ -118,6 +175,19 @@ export const SceneList: React.FC = () => {
         <button className="icon-btn" data-add-scene onClick={() => setPickerOpen((v) => !v)} title="新增场景">
           ＋
         </button>
+      </div>
+
+      <div className="panel-search">
+        <input
+          value={q}
+          placeholder="搜索场景：名字 / 版式 / 字幕…"
+          onChange={(e) => setQ(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === "Escape") setQ("");
+            // 回车直接选中第一个匹配项，省一次点击
+            if (e.key === "Enter" && matched.length) select(matched[0].id);
+          }}
+        />
       </div>
 
       {pickerOpen ? (
@@ -136,9 +206,9 @@ export const SceneList: React.FC = () => {
           <div className="picker-list picker-grid">
             {visibleTypes.map((t) => (
               <button
-                key={t.type}
+                key={t.key}
                 className="picker-card"
-                onClick={() => add(t.type)}
+                onClick={() => add(t)}
                 onMouseEnter={(e) => {
                   const r = e.currentTarget.getBoundingClientRect();
                   const x = r.right + 10 + 170 > window.innerWidth ? r.left - 178 : r.right + 10;
@@ -169,15 +239,21 @@ export const SceneList: React.FC = () => {
       ) : null}
 
       <div className="scene-list">
-        {project.scenes.map((s, i) => {
+        {keyword && !matched.length ? <div className="hint" style={{ padding: "10px 4px" }}>没有匹配「{q}」的场景</div> : null}
+        {matched.map((s) => {
+          // 序号仍然按**全片顺序**显示：搜索只是过滤视图，不能让人以为第 2 幕变成了第 1 幕
+          const i = project.scenes.findIndex((x) => x.id === s.id);
           const meta = getMeta(s.type);
           return (
             <div
               key={s.id}
               className={`scene-item ${selectedId === s.id ? "is-active" : ""} ${flashId === s.id ? "is-flash" : ""} ${dragId === s.id ? "is-dragging" : ""}`}
               data-scene-id={s.id}
-              draggable
-              onDragStart={() => setDragId(s.id)}
+              draggable={!keyword}
+              onDragStart={() => {
+                // 过滤视图里拖动会让人以为"拖到第 1 位"，实际落点是全片索引 —— 干脆关掉
+                if (!keyword) setDragId(s.id);
+              }}
               onDragEnd={() => setDragId(null)}
               onDragOver={(e) => e.preventDefault()}
               onDrop={() => {

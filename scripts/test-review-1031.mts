@@ -468,17 +468,18 @@ test("speed 落库，默认 1", () => {
   ]).project.scenes.find((x) => x.id === sceneId)!;
   assert.equal(fast.backdrop?.speed, 2);
 });
-test("speed 超界被夹到 0.2–4（不报错，但不让写坏）", () => {
+test("speed 超界被夹到 0.1–10（不报错，但不让写坏）", () => {
+  // 上下限跟着面板滑块走：用户能拖到 10×，后端就不该在 4 处悄悄截断
   const p = createSeedProject("t");
   const sceneId = p.scenes[0].id;
   const slow = applyOps(p, [
     { op: "set_scene_backdrop", sceneId, backdrop: { type: "glow", speed: 0.01 } },
   ]).project.scenes.find((x) => x.id === sceneId)!;
-  assert.equal(slow.backdrop?.speed, 0.2);
+  assert.equal(slow.backdrop?.speed, 0.1);
   const fast = applyOps(p, [
     { op: "set_scene_backdrop", sceneId, backdrop: { type: "glow", speed: 99 } },
   ]).project.scenes.find((x) => x.id === sceneId)!;
-  assert.equal(fast.backdrop?.speed, 4);
+  assert.equal(fast.backdrop?.speed, 10);
 });
 test("漏光可以设 once（扫一次就停）", () => {
   const p = createSeedProject("t");

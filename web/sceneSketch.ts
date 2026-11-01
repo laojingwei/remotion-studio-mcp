@@ -3,6 +3,10 @@
  * 只表达版式结构：色块 = 文字/图片，线框 = 卡片/容器。
  */
 export const SCENE_SKETCH: Record<string, string> = {
+  // 3D 场景：轨道 + 中心体 + 文字区。6 个母题共用这一张——它们差在画面内容，
+  // 版式结构一样（画面占上半、标题在底部）
+  scene3d:
+    '<ellipse cx="60" cy="96" rx="44" ry="14" fill="none"/><circle cx="60" cy="96" r="14"/><circle cx="104" cy="96" r="4"/><rect x="16" y="140" width="40" height="5" rx="2"/><rect x="16" y="152" width="72" height="8" rx="2"/>',
   title:
     '<rect x="14" y="60" width="34" height="5" rx="2"/><rect x="14" y="76" width="92" height="13" rx="3"/><rect x="14" y="94" width="70" height="7" rx="2"/>',
   hero:

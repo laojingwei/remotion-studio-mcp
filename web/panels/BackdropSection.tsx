@@ -193,10 +193,11 @@ export const BackdropSection: React.FC<{ scene: Scene }> = ({ scene }) => {
               <span className="num">{Math.round(opacity * 100)}%</span>
             </label>
             <RangeInput
-              min={20}
+              // 下限放到 1%：3D 氛围层当底妆时，20% 往往还是太抢
+              min={1}
               max={100}
-              step={5}
-              value={opacity * 100}
+              step={1}
+              value={Math.max(1, Math.round(opacity * 100))}
               delay={160}
               onChange={(pct) => write({ opacity: pct / 100 })}
             />
@@ -208,8 +209,9 @@ export const BackdropSection: React.FC<{ scene: Scene }> = ({ scene }) => {
               <span className="num">{speed.toFixed(1)}×</span>
             </label>
             <RangeInput
-              min={30}
-              max={200}
+              // 上限 10×：慢速漂移和"疾驰"都要能拉到，中间的值按需自己找
+              min={10}
+              max={1000}
               step={10}
               value={Math.round(speed * 100)}
               delay={160}
