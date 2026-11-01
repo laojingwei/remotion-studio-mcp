@@ -1016,13 +1016,13 @@ export const counterMeta: SceneMeta = {
     value: z.number().default(370).describe("目标数字（可小数，如 1.2 表示 1.2 万）"),
     prefix: z
       .string()
-      .default("¥")
-      .describe("前缀，如 ¥ / +。**数字带单位（°/%/万）时请显式传 \"\"**——默认 ¥ 会直接上屏"),
-    suffix: z.string().default("").describe("后缀，如 万 / 元 / %，可留空"),
-    label: z.string().default("到手只剩这些").describe("数字下面的说明，可留空"),
+      .default("")
+      .describe("前缀，如 ¥ / + / 约，默认空（**不要靠默认值**：它会被写进 props 直接上屏）"),
+    suffix: z.string().default("").describe("后缀，如 万 / 元 / % / °，可留空"),
+    label: z.string().default("").describe("数字下面的说明，可留空"),
     decimals: z.number().int().min(0).max(3).default(0).describe("小数位数"),
   }),
-  defaultProps: { value: 370, prefix: "¥", suffix: "", label: "到手只剩这些", decimals: 0 },
+  defaultProps: { value: 370, prefix: "", suffix: "", label: "", decimals: 0 },
   duration: { default: 110, min: MIN_SCENE_FRAMES, max: 108000 },
   elements: [{ id: "value", label: "数字" }, { id: "label", label: "说明" }],
 };

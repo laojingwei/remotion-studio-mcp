@@ -1102,6 +1102,16 @@ const FORMAT_PRESETS: Record<string, { label: string; width: number; height: num
  * scriptType 从「屏幕文案」变成「双轨」，段落表要重算、幕长要重排、已放元素要挪。
  * 工具不说话，agent 只能自己推，推漏一步就是成片对不上稿。
  */
+/**
+ * 每个工程「已经提醒过的影响面」累计表。
+ *
+ * 为什么要累计：需求常常分两次写（先主体、再补几项），第二次的 diff 只含第二次的字段，
+ * 第一次那句「配音规格变了 → 旁白全部作废」就被覆盖掉了，用户很容易漏看。
+ * 这里按工程累积，回执里把「本次」和「之前提过但本次没提」分开列。
+ * 进程重启丢失可接受：影响面本来就是即时提醒，不是审计记录。
+ */
+const briefImpactLog = new Map<string, string[]>();
+
 function describeBriefImpact(prev: Brief | null, next: Brief): string[] {
   if (!prev) return [];
   const out: string[] = [];
@@ -1639,10 +1649,15 @@ const TOOLS: ToolDef[] = [
   {
     name: "apply_style",
     description:
-      "一键套用风格：改主题（配色/字体/圆角）+ 所有场景入场转场，返回推荐版式与禁止项。**只能套带预设的风格**（list_styles 里没标「仅规则」的），仅规则风格会报错。只覆盖「系统的值」，版式与文案仍按风格规则重做。",
+      "一键套用风格：改主题（配色/字体/圆角）+ 场景入场转场，返回推荐版式与禁止项。**只能套带预设的风格**（list_styles 里没标「仅规则」的），仅规则风格会报错。只覆盖「系统的值」，版式与文案仍按风格规则重做。\n" +
+      "转场只改**还是版本默认（fade 12 帧 / 未设）**的场景：已经用 set_transitions 显式设过的不动，要全覆盖传 overwriteTransitions=true。",
     shape: {
       slug: z.string().describe("风格 slug"),
       transitions: z.boolean().optional().describe("是否同时应用转场，默认 true"),
+      overwriteTransitions: z
+        .boolean()
+        .optional()
+        .describe("true = 覆盖所有场景的入场转场（含已显式设过的）；默认 false 只改还是默认转场的场景"),
       projectId: z.string().optional().describe("要操作的工程 id，不传 = 当前默认工程（list_projects 查）"),
     },
     run: async (a) => {
@@ -1672,6 +1687,7 @@ const TOOLS: ToolDef[] = [
           radius: preset.radius,
         },
       ];
+      let keptCustom = 0;
       if (a.transitions !== false && preset.transition) {
         const t =
           preset.transition.type === "none"
@@ -1681,6 +1697,17 @@ const TOOLS: ToolDef[] = [
                 durationInFrames: preset.transition.durationInFrames,
               };
         for (const sc of p.scenes ?? []) {
+          // 「显式设过」的判定：入场转场不是版本默认（fade 12 帧 / 未设）就当作是人为设的。
+          // 以前无条件全覆盖——先 set_transitions(zoom,8) 再套风格，入场就被换掉，
+          // 而出场 transitionOut 不受影响，于是全片「入场是风格值、出场是我设的值」。
+          const cur = (sc as { transitionIn?: { type?: string; durationInFrames?: number } | null })
+            .transitionIn;
+          const isDefault =
+            !cur || (cur.type === "fade" && (cur.durationInFrames ?? TRANSITION_DEFAULT_FRAMES) === TRANSITION_DEFAULT_FRAMES);
+          if (!isDefault && !a.overwriteTransitions) {
+            keptCustom++;
+            continue;
+          }
           ops.push({ op: "update_scene", sceneId: sc.id, patch: { transitionIn: t } });
         }
       }
@@ -1688,7 +1715,7 @@ const TOOLS: ToolDef[] = [
         method: "POST",
         body: JSON.stringify({ actor: "agent", ops }),
       });
-      return `已套用风格（${res.summary.length} 处改动）${String.fromCharCode(10)}${styleSummary(a.slug)}${String.fromCharCode(10)}注意：转场只应用到**现有**场景，之后新建的场景默认转场是 fade 12 帧——要一致就给新场景补 set_transitions 或重跑 apply_style。${String.fromCharCode(10)}下一步：save_storyboard 写分镜（见 get_guide(\"director\",\"分镜\")）`;
+      return `已套用风格（${res.summary.length} 处改动）${String.fromCharCode(10)}${styleSummary(a.slug)}${String.fromCharCode(10)}${keptCustom ? `转场：保留了 ${keptCustom} 个你显式设过的入场转场（要统一成风格值传 overwriteTransitions=true）。${String.fromCharCode(10)}` : ""}注意：转场只应用到**现有**场景，之后新建的场景默认转场是 fade 12 帧——要一致就给新场景补 set_transitions 或重跑 apply_style。${String.fromCharCode(10)}下一步：save_storyboard 写分镜（见 get_guide("director","分镜")）`;
     },
   },
   {
@@ -1823,8 +1850,12 @@ const TOOLS: ToolDef[] = [
       // 对账：out/ 里有、data/ 里没有的工程 = 多半是另一个实例/另一份数据目录。
       // 不说的话，agent 会以为工程被删了，或者对着错误的工程继续改
       let orphanNote = "";
+      let dataNote = "";
       try {
         const { ids, dataDir } = await api<{ ids: string[]; dataDir: string }>("/api/orphans");
+        // 总是显示数据目录：同一台机器上可能有两套 data/ 目录（不同 cwd 启动的实例各一份），
+        // 不显示绝对路径的话，「工程怎么不见了」根本无从判断——只能猜。
+        dataNote = `${nl}数据目录：${dataDir}${nl}（本次连的是 ${BASE}；同一台机器上如果还有别的实例/别的 cwd，工程是按各自数据目录分开存的）`;
         if (ids.length) {
           orphanNote =
             `${nl}⚠ 对账提醒：out/ 里有 ${ids.length} 个工程不在当前数据目录（${ids.slice(0, 5).join("、")}${ids.length > 5 ? "…" : ""}）。` +
@@ -1843,6 +1874,7 @@ const TOOLS: ToolDef[] = [
               `${p.id === lastProjectId ? "★" : " "} ${p.name}（id=${p.id}，${p.scenes} 场景，rev=${p.rev}）`,
           )
           .join(nl) +
+        dataNote +
         orphanNote
       );
     },
@@ -1933,9 +1965,9 @@ const TOOLS: ToolDef[] = [
               // 容量与范围必须写出来：复盘里「六档塞不进 items 上限 5」「value 传超范围被拒」都是建完才发现
               const cap =
                 f.kind === "array" && (f.minItems != null || f.maxItems != null)
-                  ? ` 容量=${f.minItems ?? 0}-${f.maxItems ?? "∞"}`
+                  ? ` minItems=${f.minItems ?? 0} maxItems=${f.maxItems ?? "∞"}`
                   : f.kind === "number" && (f.numMin != null || f.numMax != null)
-                    ? ` 范围=${f.numMin ?? "-∞"}-${f.numMax ?? "∞"}`
+                    ? ` min=${f.numMin ?? "-∞"} max=${f.numMax ?? "∞"}${f.numInt ? " int" : ""}`
                     : "";
               return `    - ${f.key} ${kind}${dv}${cap}${shapeOf(f)}：${f.label}`;
             })
@@ -5023,8 +5055,9 @@ const TOOLS: ToolDef[] = [
     name: "render_cover",
     description:
       "导出封面候选图：把某一帧渲染成 PNG，作为信息流封面或给用户挑。\n" +
-      "**不传 frame 时取首幕 80% 处**（文字入场动画到这时已落定）——抽第 0 帧经常是纯背景，封面是空的。\n" +
-      "封面经常不该等于片头第一帧：要单独设计就先改首幕文案、或另建一幕当封面再抽（brief.cover 写要求）。",
+      "**不传 frame 时取指定幕（默认首幕）的 80% 处**（文字入场动画到这时已落定）——抽第 0 帧经常是纯背景，封面是空的。\n" +
+      "最佳封面常常不在片头：数据页/结论页往往更抓人，用 fromScene 指定某一幕（id / 序号 / 名字）。\n" +
+      "封面经常不该等于片头第一帧：要单独设计就先改那幕文案、或另建一幕当封面再抽（brief.cover 写要求）。",
     shape: {
       projectId: z.string().optional().describe("要操作的工程 id，不传 = 当前默认工程（list_projects 查）"),
       frame: z
@@ -5032,7 +5065,14 @@ const TOOLS: ToolDef[] = [
         .int()
         .min(0)
         .optional()
-        .describe("用第几帧当封面；不传 = 首幕 80% 处（动画落定后，避免空白封面）"),
+        .describe("用第几帧当封面；不传 = 指定幕（默认首幕）的 80% 处（动画落定后，避免空白封面）"),
+      fromScene: z
+        .union([z.string(), z.number()])
+        .optional()
+        .describe(
+          "从哪一幕取封面：场景 id、1-based 序号、或场景名（包含即可）。不传 = 首幕。" +
+            "封面的最佳帧常常在数据页/结论页而不是片头，别默认只用第一幕",
+        ),
       formats: z
         .union([z.string(), z.array(z.string())])
         .optional()
@@ -5040,13 +5080,33 @@ const TOOLS: ToolDef[] = [
     },
     run: async (a) => {
       const p = await resolveProject(a.projectId);
-      const span = sceneSpans(p.scenes as any[])[0];
+      const spans = sceneSpans(p.scenes as any[]);
+      const scenes = (p.scenes ?? []) as { id: string; name?: string }[];
+      let idx = 0;
+      if (a.fromScene !== undefined) {
+        const key = String(a.fromScene).trim();
+        const byId = scenes.findIndex((s) => s.id === key);
+        const byNum = /^\d+$/.test(key) ? Number(key) - 1 : -1;
+        idx =
+          byId >= 0
+            ? byId
+            : byNum >= 0 && byNum < scenes.length
+              ? byNum
+              : scenes.findIndex((s) => String(s.name ?? "").includes(key));
+        if (idx < 0) {
+          throw new Error(
+            `没有匹配 fromScene="${a.fromScene}" 的场景。可用：` +
+              scenes.map((s, i) => `${i + 1}. ${s.name ?? ""}（${s.id}）`).join("；"),
+          );
+        }
+      }
+      const span = spans[idx];
       const autoFrame = span ? span.start + Math.max(0, Math.round(span.dur * 0.8)) : 0;
       const frame = a.frame ?? autoFrame;
       const autoNote =
         a.frame !== undefined
           ? ""
-          : `（未指定帧号，自动取首幕 80% 处第 ${frame} 帧：文字入场动画到这时已落定；要别的帧就传 frame）`;
+          : `（未指定帧号，自动取第 ${idx + 1} 幕「${scenes[idx]?.name ?? ""}」80% 处第 ${frame} 帧：文字入场动画到这时已落定；要别的帧就传 frame，要别幕就传 fromScene）`;
       const brief = readBrief(p.id);
       const res = await api<{ stills: { format: string; url: string }[] }>(
         `/api/projects/${p.id}/stills`,
@@ -5747,7 +5807,9 @@ const TOOLS: ToolDef[] = [
   {
     name: "add_freeform_element",
     description:
-      "往 freeform 场景追加一个元素（上限 40 个）。svg 图形、fx 氛围层（glow/noise/dust/beam…）、带 anim 关键帧动画的元素**只能走这里**——add_element 的叠加层通道不支持这些。返回分配的元素 id。常用字段：type(svg/text/shape/image/fx)、x/y(百分比)、size(短边百分比)、width/height(短边百分比，矩形单独定宽高；不传=size，所以 size:76 画横条会变成 76%×76% 的方块)、from(出现帧)、anim(关键帧，from/to 是绝对值)、viewBox(改 svg 必须一起传，否则内容被压成一个点)。",
+      "往 freeform 场景追加一个元素（上限 40 个）。svg 图形、fx 氛围层（glow/noise/dust/beam…）、带 anim 关键帧动画的元素**只能走这里**——add_element 的叠加层通道不支持这些。返回分配的元素 id。常用字段：type(svg/text/shape/image/fx)、x/y(百分比)、size(短边百分比)、width/height(短边百分比，矩形单独定宽高；不传=size，所以 size:76 画横条会变成 76%×76% 的方块)、from(出现帧)、anim(关键帧，from/to 是绝对值)、viewBox(改 svg 必须一起传，否则内容被压成一个点)。\n" +
+      "半透明有两条路且等价：元素级 opacity:0.22（会乘进 fill/stroke 的 alpha）或 fill:\"rgba(90,200,250,0.22)\"。\n" +
+      "⚠️ svg 元素：内容里自带的 fill 会盖掉外层 fill（改外层没反应就是这原因）——要能改色，svg 内容里别写 fill。",
     shape: {
       projectId: z.string().optional().describe("要操作的工程 id，不传 = 当前默认工程（list_projects 查）"),
       sceneId: z.string(),
@@ -6039,7 +6101,8 @@ const TOOLS: ToolDef[] = [
     description:
       "记录「用户已确认需求」。4 组问完、契约完整后，把 brief 总结发给用户，用户确认后调用它；没有确认过，build_storyboard 会拒绝。\n" +
       "闸口是**内容判据**而不是「必填有没有填」：段落表每段有时长+内容、镜头清单能直接排拍摄（动画片换成元素清单）、参考指到时间点、素材有责任人+截止、交付有版本列表。缺了会逐条告诉你缺什么。\n" +
-      "如果 brief 里有 assumed（你替用户拍板的字段），**必须逐条带上用户原话**：confirm_brief(assumptions=[{field, userSaid}])。\\n" +
+      "如果 brief 里有 assumed（你替用户拍板的字段），**必须带上用户原话**：confirm_brief(assumptions=[{field, userSaid}])。\n" +
+      "用户是一次性认可的（「都按你建议的来」）就传 batchAck=true + batchUserSaid=\"他那句原话\"，一条原话覆盖全部推断项。\n" +
       "只传 acknowledgedAssumptions=true 会被拒绝——布尔记不下用户说了什么，事后也查不出他同意了哪几条。",
     shape: {
       projectId: z.string().optional().describe("要操作的工程 id，不传 = 当前默认工程（list_projects 查）"),
@@ -6060,6 +6123,16 @@ const TOOLS: ToolDef[] = [
         .boolean()
         .optional()
         .describe("已废弃：只传 true 而不传 assumptions 会被拒绝（布尔记不下用户说了什么）"),
+      batchAck: z
+        .boolean()
+        .optional()
+        .describe(
+          "用户一次性认可了全部 assumed（如「都按你建议的来」）时传 true，配合 batchUserSaid 一句原话覆盖全部推断项",
+        ),
+      batchUserSaid: z
+        .string()
+        .optional()
+        .describe("批量确认时用户的原话（≥2 字）；会落盘成每条 assumed 的核对记录，事后可审计"),
     },
     run: async (a) => {
       const p = await resolveProject(a.projectId);
@@ -6068,13 +6141,21 @@ const TOOLS: ToolDef[] = [
       const brief = confirmBrief(p.id, {
         acknowledgedAssumptions: a.acknowledgedAssumptions === true,
         assumptions: a.assumptions,
+        batchAck: a.batchAck === true,
+        batchUserSaid: a.batchUserSaid,
       });
       const nl = String.fromCharCode(10);
       // 不再写「已核对」——工具无法验证，只能说「你提供了这些记录」
       const checks = brief.assumptionChecks ?? [];
+      const isBatch = a.batchAck === true && String(a.batchUserSaid ?? "").trim().length >= 2;
       const assumedNote = checks.length
-        ? `${nl}你提供的核对记录（${checks.length} 项，已落盘可审计；工具无法验证真伪）：` +
-          checks.map((c) => `${nl}  · ${c.field} ← 「${c.userSaid}」`).join("")
+        ? `${nl}你提供的核对记录（${checks.length} 项，已落盘可审计；工具无法验证真伪）` +
+          (isBatch ? `——**批量确认**：${checks.length} 项共用同一句原话` : "") +
+          "：" +
+          (isBatch
+            ? `${nl}  · 全部 ← 「${String(a.batchUserSaid).trim()}」` +
+              checks.map((c) => `${nl}  · 覆盖 ${c.field}`).join("")
+            : checks.map((c) => `${nl}  · ${c.field} ← 「${c.userSaid}」`).join(""))
         : "";
       const lock = brief.designLock ?? recomputeDesignLock(brief);
       const cov = briefCoverage(brief);
@@ -6941,6 +7022,10 @@ const TOOLS: ToolDef[] = [
       // 复盘问题 3：从「无配音」改成「要 AI 配音」时，scriptType/段落表/幕长全要重算，
       // 工具不说话，agent 只能自己推——推漏了就是成片对不上稿。
       const impact = describeBriefImpact(prevBrief, brief as Brief);
+      // 累计：本次之外、之前提过的影响也要再露一次，避免分两次写 brief 时前一段被覆盖
+      const logged = briefImpactLog.get(p.id) ?? [];
+      const earlier = logged.filter((x) => !impact.includes(x));
+      briefImpactLog.set(p.id, [...logged, ...impact.filter((x) => !logged.includes(x))]);
       const progress = briefProgress(brief as never);
       // 批量通道（不带 step）不校验必填：把还缺的步骤明说，别让 agent 以为存完就过了
       const missingSteps =
@@ -6964,8 +7049,17 @@ const TOOLS: ToolDef[] = [
         `已保存 brief（工程 ${p.id}）` +
         String.fromCharCode(10) +
         briefToText(brief as never) +
-        (impact.length
-          ? `${String.fromCharCode(10)}🧭 需求改口的影响面：${String.fromCharCode(10)}${impact.map((x) => `  · ${x}`).join(String.fromCharCode(10))}`
+        (impact.length || earlier.length
+          ? `${String.fromCharCode(10)}🧭 需求改口的影响面：${String.fromCharCode(10)}${
+              impact.length
+                ? impact.map((x) => `  · ${x}`).join(String.fromCharCode(10))
+                : `  · （本次没有新变化）`
+            }${
+              earlier.length
+                ? `${String.fromCharCode(10)}  之前这次改动里已经提醒过（同样要回头看）：${String.fromCharCode(10)}` +
+                  earlier.map((x) => `  · ${x}`).join(String.fromCharCode(10))
+                : ""
+            }`
           : "") +
         batchWarn +
         lockNote +

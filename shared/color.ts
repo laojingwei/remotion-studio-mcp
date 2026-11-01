@@ -55,6 +55,22 @@ export function withColorAlpha(color: string, alpha: number): string {
   return `rgba(${rgb.r}, ${rgb.g}, ${rgb.b}, ${Number(a.toFixed(3))})`;
 }
 
+/**
+ * 在原色 alpha 的基础上再乘一个系数（输出 rgba()）。
+ *
+ * 与 withColorAlpha 的区别：那个是**替换** alpha，这个是**叠加**。
+ * 必须区分，是因为 `fill:"rgba(240,182,108,0.25)"` 这种写法里，半透明信息
+ * 就在颜色串本身——用替换版会把 0.25 抹成 1，比不处理更糟（本来浏览器
+ * 能正确解析 rgba，被我们改成实心了）。元素级 opacity 走这里做乘法。
+ */
+export function scaleColorAlpha(color: string, factor: number): string {
+  const rgb = parseColor(color);
+  if (!rgb) return color;
+  const f = Math.max(0, Math.min(1, factor));
+  const a = Math.max(0, Math.min(1, rgb.a * f));
+  return `rgba(${rgb.r}, ${rgb.g}, ${rgb.b}, ${Number(a.toFixed(3))})`;
+}
+
 /** 给 color input 用的十六进制（丢掉 alpha） */
 export function toHex(color: string): string {
   const rgb = parseColor(color);

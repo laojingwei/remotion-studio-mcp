@@ -1026,6 +1026,9 @@ export function confirmBrief(
     acknowledgedAssumptions?: boolean;
     /** 逐条核对记录：每个 assumed 字段要给一句用户原话 */
     assumptions?: { field: string; userSaid: string }[];
+    /** 批量确认：用户一次性认可了全部 assumed（原话只录一条，覆盖所有推断项） */
+    batchAck?: boolean;
+    batchUserSaid?: string;
   },
 ): Brief {
   const b = readBrief(projectId);
@@ -1061,6 +1064,15 @@ export function confirmBrief(
   // 防「自己填完 9 步就自己盖章」：agent 标过的推断项必须带上用户原话
   const assumed = (b.assumed ?? []).map(String).filter(Boolean);
   if (assumed.length) {
+    // 批量确认通道：用户一句「都按系统推荐的来」就能过，但原话照样落盘（一条覆盖 N 项），
+    // 只是不再逼 agent 把同一句话复制 N 遍（13 个字段逐条回填同一句，纯摩擦、不增加信息量）。
+    const batchSaid = String(opts?.batchUserSaid ?? "").trim();
+    if (opts?.batchAck && batchSaid.length >= 2) {
+      opts = {
+        ...opts,
+        assumptions: assumed.map((field) => ({ field, userSaid: batchSaid })),
+      };
+    }
     const provided = (opts?.assumptions ?? []).filter((x) => x && String(x.field ?? "").trim());
     if (!provided.length) {
       throw new Error(
@@ -1069,6 +1081,8 @@ export function confirmBrief(
           `\n\n不能只传 acknowledgedAssumptions=true —— 布尔记不下用户说了什么。` +
           `把这 ${assumed.length} 条逐条问用户（「这条我按 XX 定的，对吗？」），` +
           `然后 confirm_brief(assumptions=[{field:"字段", userSaid:"他实际说的那句"}...])。\n` +
+          `用户是一次性认可的（比如「都按你建议的来」），就传 confirm_brief(batchAck=true, batchUserSaid="他这句原话")——` +
+          `一条原话覆盖全部 ${assumed.length} 项，同样落盘可审计。\n` +
           `用户要改就先 save_brief 覆盖，并从 assumed 里删掉。`,
       );
     }

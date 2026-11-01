@@ -51,7 +51,10 @@
   想细就显式 `strokeWidth:0.15`（≈1.6px）；`size` 只管线有多长
 - `image`/`video`：`src`（先 upload_asset）
 - `svg`：`svg` + `viewBox` + `fill`/`stroke`/`strokeWidth`。
-  **半透明两种写法都行**：元素级 `opacity:0.22` 会乘进 fill/stroke 的 alpha；也可直接写 `fill:"rgba(90,200,250,0.22)"`
+  **半透明两种写法都行**：元素级 `opacity:0.22` 会乘进 fill/stroke 的 alpha；也可直接写 `fill:"rgba(90,200,250,0.22)"`。
+  **⚠️ 内容里别再写 `fill`**：外层 `fill` 只是「继承值」，svg 内容自带的 `fill="#xxx"` 会盖掉它——
+  这时改外层 `fill` 完全没反应（像 bug，其实是继承被覆盖）。要能改色就写 `<circle cx="12" cy="12" r="10"/>`，
+  颜色交给外层 `fill`；确实要写死颜色的，透明度就只能靠元素级 `opacity`。
   **⚠️ 改 svg 时必须同时传 viewBox**：默认 `0 0 24 24`，内容不是 24×24 图标就会被压成一个看不见的点，而且不报错
 - `fx`：`kind`（glow/grid/noise/particles/stars/scanlines/rings/beam/dust/wave/meteor）、`color`、`density`、`speed`。
   **fx 容器是 `size`×短边 的正方形**：要铺满 16:9 全屏请 `size ≥ 200`，否则四周露硬边。

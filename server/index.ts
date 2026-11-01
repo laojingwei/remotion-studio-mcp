@@ -1488,6 +1488,9 @@ try {
 serve({ fetch: app.fetch, port: PORT }, (info) => {
   // 对外展示用 localhost（更好读）；内部探活仍走 127.0.0.1
   console.log(`\n  ▸ 服务已启动      http://localhost:${info.port}`);
+  // 数据目录单独打一行：同一台机器上多份 data/（不同 cwd 启动）时，
+  // 「工程怎么不见了」只能靠这行路径判断，不打印就完全无从下手
+  console.log(`  ▸ 数据目录        ${DATA_DIR}`);
   console.log(
     WEB_READY
       ? `  ▸ 编辑器          http://localhost:${info.port}  （已托管构建产物）\n`

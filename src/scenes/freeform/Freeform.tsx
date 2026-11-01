@@ -1,7 +1,7 @@
 import React from "react";
 import { AbsoluteFill, Img, useCurrentFrame, useVideoConfig, Video, staticFile } from "remotion";
 import { evalAnim, type FreeEl, type FreeformProps } from "../../../shared/freeform";
-import { withColorAlpha } from "../../../shared/color";
+import { scaleColorAlpha } from "../../../shared/color";
 import { editRegistry } from "../ui";
 import type { Theme } from "../../../shared/schema";
 
@@ -445,8 +445,10 @@ const OneEl = React.memo(function OneEl({ el, index, sceneId, frame, unit, theme
         viewBox={el.viewBox ?? "0 0 24 24"}
         width={wPx}
         height={el.height !== undefined ? hPx : undefined}
-        fill={el.fill ? withColorAlpha(el.fill, a.opacity ?? 1) : "none"}
-        stroke={el.stroke ? withColorAlpha(el.stroke, a.opacity ?? 1) : "none"}
+        // 半透明要乘在颜色自带的 alpha 上：fill:"rgba(…,0.25)" 不能被抹成实心，
+        // opacity:0.25 也要能压住"不透明色 + 元素级透明度"这种最常见的写法
+        fill={el.fill ? scaleColorAlpha(el.fill, a.opacity ?? 1) : "none"}
+        stroke={el.stroke ? scaleColorAlpha(el.stroke, a.opacity ?? 1) : "none"}
         strokeWidth={el.strokeWidth ?? 2}
         strokeLinecap="round"
         style={{ display: "block" }}
