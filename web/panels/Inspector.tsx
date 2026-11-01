@@ -22,11 +22,35 @@ const Field: React.FC<{
   onChange: (v: unknown) => void;
 }> = ({ field, value, onChange }) => {
   if (field.kind === "enum") {
+    const opts = field.options ?? [];
+    /**
+     * 选项多的时候分段按钮会挤爆面板（3D 预设 6 个、光线风格 5 个，
+     * 一排横着根本放不下，还会把描述文字压成一行行碎句），改成下拉。
+     * 2–4 个值仍然用分段按钮：一眼看全、一次点中，比下拉快。
+     */
+    if (opts.length >= 5) {
+      return (
+        <div className="field">
+          <label>{field.label}</label>
+          <select
+            value={String(value ?? "")}
+            style={{ width: "100%" }}
+            onChange={(e) => onChange(e.target.value)}
+          >
+            {opts.map((opt) => (
+              <option key={opt} value={opt}>
+                {optionLabel(field.key, opt)}
+              </option>
+            ))}
+          </select>
+        </div>
+      );
+    }
     return (
       <div className="field">
         <label>{field.label}</label>
         <div className="seg">
-          {(field.options ?? []).map((opt) => (
+          {opts.map((opt) => (
             <button
               key={opt}
               className={`seg-item ${value === opt ? "is-on" : ""}`}

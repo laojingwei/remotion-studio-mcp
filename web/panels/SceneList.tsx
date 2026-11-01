@@ -64,12 +64,15 @@ export const SceneList: React.FC = () => {
   } | null>(null);
   const [types, setTypes] = useState<{ type: string; name: string; summary: string; category?: string }[]>([]);
   /**
-   * 场景搜索。
+   * 两个搜索词，因为这里有两种"找东西"：
+   * - `qScene`：找**已经加进片子**的一幕（按幕名 / 版式名 / 类型 / 字幕匹配）
+   * - `qType`：找**准备新增**的版式类型（只在"新增场景"面板展开时出现）
    *
-   * 一支片子动辄二三十幕，靠滚列表找"那个讲公转的"很难。这里按**幕名 / 版式名 / 场景类型 /
-   * 字幕**匹配 —— 用户记得的多半是文案里的一句，而不是幕名。
+   * 共用一个输入框会出现"展开面板时把已有场景过滤没了"的怪事 —— 两个词分开存，
+   * 切回来时各自的输入还在。
    */
-  const [q, setQ] = useState("");
+  const [qScene, setQScene] = useState("");
+  const [qType, setQType] = useState("");
 
   useEffect(() => {
     fetchSceneTypes()
@@ -118,12 +121,14 @@ export const SceneList: React.FC = () => {
     () => ["全部", ...Array.from(new Set(pickerItems.map((t) => t.category || "其他")))],
     [pickerItems],
   );
-  const visibleTypes = useMemo(
-    () => pickerItems.filter((t) => activeCat === "全部" || (t.category || "其他") === activeCat),
-    [pickerItems, activeCat],
-  );
+  const visibleTypes = useMemo(() => {
+    const k = qType.trim().toLowerCase();
+    // 有搜索词就跨分类找：否则用户搜"图表"却因为停在"开场"分类而被告知"没有"，很莫名其妙
+    if (k) return pickerItems.filter((t) => `${t.name} ${t.summary} ${t.type}`.toLowerCase().includes(k));
+    return pickerItems.filter((t) => activeCat === "全部" || (t.category || "其他") === activeCat);
+  }, [pickerItems, activeCat, qType]);
 
-  const keyword = q.trim().toLowerCase();
+  const keyword = qScene.trim().toLowerCase();
   const matched = useMemo(() => {
     const scenes = project?.scenes ?? [];
     if (!keyword) return scenes;
@@ -177,27 +182,46 @@ export const SceneList: React.FC = () => {
         </button>
       </div>
 
-      <div className="panel-search">
-        <input
-          value={q}
-          placeholder="搜索场景：名字 / 版式 / 字幕…"
-          onChange={(e) => setQ(e.target.value)}
-          onKeyDown={(e) => {
-            if (e.key === "Escape") setQ("");
-            // 回车直接选中第一个匹配项，省一次点击
-            if (e.key === "Enter" && matched.length) select(matched[0].id);
-          }}
-        />
-      </div>
+      {pickerOpen ? null : (
+        <div className="panel-search">
+          <input
+            value={qScene}
+            placeholder="搜索场景：名字 / 版式 / 字幕…"
+            onChange={(e) => setQScene(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Escape") setQScene("");
+              // 回车直接选中第一个匹配项，省一次点击
+              if (e.key === "Enter" && matched.length) select(matched[0].id);
+            }}
+          />
+        </div>
+      )}
 
       {pickerOpen ? (
         <div className="picker">
+          <div className="picker-search">
+            <input
+              autoFocus
+              value={qType}
+              placeholder="搜索要新增的类型…"
+              onChange={(e) => setQType(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Escape") setQType("");
+                // 回车直接加第一个匹配项：找"图表"然后回车，一气呵成
+                if (e.key === "Enter" && visibleTypes.length) void add(visibleTypes[0]);
+              }}
+            />
+          </div>
           <div className="picker-cats">
             {categories.map((cat) => (
               <button
                 key={cat}
                 className={`picker-cat ${activeCat === cat ? "is-on" : ""}`}
-                onClick={() => setActiveCat(cat)}
+                onClick={() => {
+                  setActiveCat(cat);
+                  // 点分类 = "我要看这一类"，此时还挂着搜索词只会让人以为分类没生效
+                  setQType("");
+                }}
               >
                 {cat}
               </button>
@@ -239,7 +263,7 @@ export const SceneList: React.FC = () => {
       ) : null}
 
       <div className="scene-list">
-        {keyword && !matched.length ? <div className="hint" style={{ padding: "10px 4px" }}>没有匹配「{q}」的场景</div> : null}
+        {keyword && !matched.length ? <div className="hint" style={{ padding: "10px 4px" }}>没有匹配「{qScene}」的场景</div> : null}
         {matched.map((s) => {
           // 序号仍然按**全片顺序**显示：搜索只是过滤视图，不能让人以为第 2 幕变成了第 1 幕
           const i = project.scenes.findIndex((x) => x.id === s.id);

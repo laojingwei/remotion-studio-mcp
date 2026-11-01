@@ -549,13 +549,22 @@ button.primary:disabled {
   border-bottom: 1px solid var(--line);
 }
 
+/* 「新增场景」面板里的类型搜索：至少 30 个版式，滚着找同样痛苦 */
+.picker-search {
+  /* picker 是 flex 列 + overflow:hidden，这一条不固定就会被列表挤扁 */
+  flex: 0 0 auto;
+  padding: 8px 10px 4px;
+  border-bottom: 1px solid var(--line);
+}
+
 /* 场景搜索：场景多到二三十幕时，靠滚动找一幕是很痛苦的事 */
 .panel-search {
   padding: 7px 10px;
   border-bottom: 1px solid var(--line);
 }
 
-.panel-search input {
+.panel-search input,
+.picker-search input {
   width: 100%;
   box-sizing: border-box;
   background: var(--panel-2);
@@ -567,11 +576,13 @@ button.primary:disabled {
   outline: none;
 }
 
-.panel-search input:focus {
+.panel-search input:focus,
+.picker-search input:focus {
   border-color: var(--line-strong);
 }
 
-.panel-search input::placeholder {
+.panel-search input::placeholder,
+.picker-search input::placeholder {
   color: var(--muted);
 }
 
