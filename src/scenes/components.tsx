@@ -33,6 +33,7 @@ import { AuroraScene } from "./aurora/Aurora";
 import { NeonScene } from "./neon/Neon";
 import { StarsScene } from "./stars/Stars";
 import { FreeformScene } from "./freeform/Freeform";
+import { Scene3DScene } from "./scene3d/Scene3D";
 import { GlowScene } from "./glow/Glow";
 import { GrainScene } from "./grain/Grain";
 import { LightLeakScene } from "./lightleak/LightLeak";
@@ -76,6 +77,7 @@ import { LayeredScene } from "./layered/Layered";
  */
 export const SCENE_COMPONENTS: Record<string, React.FC<any>> = {
   freeform: FreeformScene,
+  scene3d: Scene3DScene,
   title: TitleScene,
   bullets: BulletsScene,
   chart: ChartScene,

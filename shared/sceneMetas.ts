@@ -1651,6 +1651,81 @@ export const layeredMeta: SceneMeta = {
   elements: [{ id: "card{n}-title", label: "卡片标题" }, { id: "card{n}-text", label: "卡片正文" }],
 };
 
+/* ────────────────────────────── 3D（Three.js） ────────────────────────────── */
+
+/**
+ * 真 3D 场景。和其余版式最大的不同：**画面由 WebGL 逐帧渲染，渲染耗时是 2D 的数倍到十几倍**。
+ * 所以默认时长给得短（4 秒）、参数刻意做得少（只留"人话"参数），
+ * 让它当"点睛"而不是"全程底"——真要全程 3D，用户会先被渲染时间劝退。
+ */
+export const scene3dMeta: SceneMeta = {
+  type: "scene3d",
+  name: "3D 场景",
+  category: "3D",
+  summary: "真 3D：几何体 + 光照 + 相机运动，做 2D 给不了的空间感（渲染慢，适合点缀）",
+  schema: z.object({
+    preset: z
+      .enum(["orbit-core", "particle-field", "grid-horizon", "explode-parts", "waveform", "globe-arc"])
+      .default("orbit-core")
+      .describe(
+        "视觉母题，按要讲的内容选：" +
+          "orbit-core=中心几何体自转+卫星环绕（万能开场、聚焦一个概念）；" +
+          "particle-field=粒子星云（发散、想象、AI/智能）；" +
+          "grid-horizon=透视网格地平线（科技感、速度、未来）；" +
+          "explode-parts=零件爆炸与聚合（讲构成/拆解/模块/流程步骤）；" +
+          "waveform=波形柱阵起伏（讲数据、趋势、声音、节奏）；" +
+          "globe-arc=球面点阵+弧线（讲全球、连接、网络、辐射范围）",
+      ),
+    look: z
+      .enum(["auto", "studio", "dramatic", "cyber", "nature"])
+      .default("auto")
+      .describe(
+        "光线风格，决定这一幕的「气质」。auto 会按预设自动挑（orbit-core/grid-horizon=cyber，" +
+          "particle-field/waveform=dramatic，explode-parts=studio，globe-arc=nature），" +
+          "同一支片里连用几个 3D 场景时默认就是错开的；" +
+          "需要明确情绪时才手动指定：studio=明亮干净产品光（讲解、看清材质）；" +
+          "dramatic=暗调暖主光+冷边光（开场、悬念、情绪）；" +
+          "cyber=冷色高对比+青色边光（科技、数据、未来感）；" +
+          "nature=天光+暖阳光（自然、生活、纪实）",
+      ),
+    hue: z
+      .enum(["primary", "accent", "secondary", "text"])
+      .default("primary")
+      .describe("主色取主题里的哪一路（跟套风格联动，不要写死色值）"),
+    spin: z
+      .number()
+      .min(0)
+      .max(90)
+      .default(12)
+      .describe("运动速度：orbit-core/explode-parts/globe-arc 是自转 度/秒；waveform 是波动的快慢；0=静止"),
+    count: z
+      .number()
+      .int()
+      .min(1)
+      .max(12)
+      .default(5)
+      .describe(
+        "密度/数量：orbit-core 是卫星数；particle-field 是粒子倍率；explode-parts 是零件数；waveform 是柱数；globe-arc 是点阵密度与弧线条数（5=各预设的推荐值）",
+      ),
+    title: z.string().default("").describe("画面下方标题（2D 叠层，3D 里不做中文文字），可留空"),
+    sub: z.string().default("").describe("副标题，可留空"),
+  }),
+  defaultProps: {
+    preset: "orbit-core",
+    look: "auto",
+    hue: "primary",
+    spin: 12,
+    count: 5,
+    title: "",
+    sub: "",
+  },
+  duration: { default: 120, min: MIN_SCENE_FRAMES, max: 108000 },
+  elements: [
+    { id: "title", label: "标题" },
+    { id: "sub", label: "副标题" },
+  ],
+};
+
 export const SCENE_METAS: SceneMeta[] = [
   freeformMeta,
   titleMeta,
@@ -1728,6 +1803,7 @@ export const SCENE_METAS: SceneMeta[] = [
   diagonalsplitMeta,
   frameinframeMeta,
   layeredMeta,
+  scene3dMeta,
 ];
 
 export const getMeta = (type: string): SceneMeta | undefined =>

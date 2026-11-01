@@ -331,9 +331,17 @@ export const Editable: React.FC<{
   }
 
   const Comp = as as React.ElementType;
-  return (
-    <Comp ref={ref} style={merged} data-edit-id={id} title={title}>
-      {children}
-    </Comp>
-  );
+  /**
+   * 用 createElement 而不是 `<Comp>`：接入 @react-three/fiber 之后，它会把全局 JSX
+   * 命名空间扩展成 three 的元素表，于是这种「动态组件 + ref」的 JSX 写法会报
+   * TS2786（'Comp' cannot be used as a JSX component）。createElement 不走 JSX 推断，
+   * 行为完全一致，且这里是运行时决定的标签，本来也不需要编译期检查。
+   */
+  return React.createElement(
+    // 这里是运行时决定的标签（字符串 "div"/"span" 或任意组件），
+    // R3F 扩展后的 JSX 类型里 ElementType 含 number 这类不可能值，只能显式放开
+    Comp as never,
+    { ref, style: merged, "data-edit-id": id, title },
+    children,
+  ) as React.ReactElement;
 };
