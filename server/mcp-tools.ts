@@ -22,7 +22,7 @@ import { readReview, markReviewRequested, markReviewConfirmed, markNeedsWork, ma
 import { listStyles, presetOf, readStyle, styleSummary } from "./styles.service";
 import { readStoryboard, saveStoryboard, storyboardToText, type Storyboard } from "./storyboard.service";
 import { ELEMENT_LIBRARY, elementFromLibrary } from "../shared/elementLibrary";
-import { getMeta } from "../shared/sceneMetas";
+import { getMeta, normalizeProps } from "../shared/sceneMetas";
 import {
   assetIdOf,
   assetToElement,
@@ -2071,7 +2071,32 @@ const TOOLS: ToolDef[] = [
           ],
         }),
       });
-      return `${fmtSummary(res.summary)}\nrev=${res.project.rev}`;
+      /*
+       * 分镜表是 build_storyboard(replace=true) 的**唯一依据**，而 update_scene 只改场景。
+       * 两者不同步时，重建会把这一轮的精修改回旧版 —— 而且悄无声息。
+       * 2026-11-02 真踩过：第 3 幕重做成「真公转 + 太阳点光」之后，分镜表里还写着
+       * 「两颗静态地球」，一旦按分镜重建就全白做。
+       */
+      let stale = "";
+      try {
+        const sb = readStoryboard(p.id);
+        const scene = (res.project.scenes as Array<{ id: string; props: Record<string, unknown> }>).find(
+          (s) => s.id === a.sceneId,
+        );
+        const shot = sb?.shots.find((h) => h.sceneId === a.sceneId);
+        if (scene && shot) {
+          const shotProps = normalizeProps(shot.type, (shot.props ?? {}) as Record<string, unknown>);
+          if (JSON.stringify(shotProps) !== JSON.stringify(scene.props)) {
+            stale =
+              `\n⚠️ 分镜表里这一幕还是旧版本（update_scene 不会改动分镜表）。` +
+              `将来 build_storyboard(replace=true) 会把它退回旧版；` +
+              `要保留这次修改，就把新 props 写回分镜表（save_storyboard 或编辑器里保存）。`;
+          }
+        }
+      } catch {
+        // 分镜表读不到就当没有，不要因为一句提醒把更新本身搞失败
+      }
+      return `${fmtSummary(res.summary)}\nrev=${res.project.rev}${stale}`;
     },
   },
   {
