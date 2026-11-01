@@ -315,7 +315,7 @@ export const elementSchema = z.object({
    * 早先这里写死 default(true)，结果所有音频元素都被静音成 0——
    * 渲染出来连音轨都不生成，而且零报错。
    */
-  muted: z.boolean().default(false).describe("是否静音；视频创建时默认 true，音频默认 false"),
+  muted: z.boolean().default(false).describe("是否静音；add_element 建视频默认有声"),
   loop: z.boolean().default(true),
   startFrom: z.number().int().min(0).default(0).describe("从素材第几帧开始播（视频/音频通用：跳过文件开头，如旁白前的空白）"),
   /**

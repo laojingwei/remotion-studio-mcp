@@ -57,6 +57,12 @@ const BASE = process.env.SERVER_URL ?? "http://127.0.0.1:4380";
 const BRK = String.fromCharCode(10);
 
 /**
+ * 转场时长默认值（帧）。此前散落 4 处各自写死 12、描述又都不声明，
+ * agent 想统一调整节奏时感知不到这个默认 —— 收敛成一处，描述统一引用。
+ */
+const TRANSITION_DEFAULT_FRAMES = 12;
+
+/**
  * 平台 UI 遮挡区（画面百分比，经验值，只用于提醒，绝不硬裁）。
  *
  * 为什么只提醒：元素出框经常是有意设计（大字标题、延伸色块、出血图）。
@@ -721,7 +727,7 @@ async function normalizeOps(
     if (name === "set_transition" || name === "set_transitions") {
       const type = String(item.type ?? "");
       if (!type) throw new Error(`${where}（${name}）缺少 type（可选 ${TRANSITION_TYPES.join(" / ")}）`);
-      const t = type === "none" ? null : { type, durationInFrames: Number(item.durationInFrames ?? 12) };
+      const t = type === "none" ? null : { type, durationInFrames: Number(item.durationInFrames ?? TRANSITION_DEFAULT_FRAMES) };
       const dir = String(item.direction ?? "in");
       const patchFor = () =>
         dir === "out"
@@ -1115,7 +1121,7 @@ const TOOLS: ToolDef[] = [
         "   ↳ 只写计划，不建场景。长片分多次提交用 append=true（50 幕一次传会超长被截断）。",
         "10. 风格帧【闸口⑦】 → build_storyboard(shot=1) 只建第 1 幕 → preview_frame 抽 1–3 帧 + **render_preview_clip 出一段 6 秒带声片段**给用户过目",
         "   ↳ 静帧只能看配色；转场、节奏、字幕可读性、BGM 大小必须看动/听声——用 render_preview_clip，几十秒出片，别等整片。",
-        "   ⚠ **判断动画好不好看必须看动**：连出 6 张静帧等于没验（那次第一轮返工就是这么来的 —— 用户说的是「动画太少」，静帧里根本看不出来）。",
+        "   ⚠ **判断动画好不好看必须看动**：连出 6 张静帧等于没验——静帧里看不出动画问题，用户一句「动画太少」就是整轮返工。",
         "   ↳ 调性不对就回第 9 步改分镜（改文案/版式很便宜，改完重建 1 幕），别硬着头皮往下铺。",
         "11. 铺开 → **build_film 一次建成整片**（幕/字幕/转场/入场动画一起给，只涨 1 个 rev）；要按已存的分镜表建就用 build_storyboard(replace=true)。全片统一的东西用 apply_to_scenes 批量套（字幕样式/贴纸/画中画），别逐幕调",
         "   ↳ 铺完立刻 render_preview_clip（不传参＝自动挑第一个转场交界）：转场叠字、BGM 压人声、字幕来不及读，这一段全能看出来。",
@@ -1131,7 +1137,7 @@ const TOOLS: ToolDef[] = [
         "15. 验收【闸口⑧】 → request_review：**请用户去编辑器把整片播一遍**（节奏 / 转场 / 字幕 / 音画同步只有整片看得出）",
         "   ↳ 通过 → confirm_review(approved=true)　要改 → confirm_review(approved=false, feedback=[...]) 改完再请他看　他自己导出 → selfRender=true",
         "16. 渲染 → render_video(dryRun) → render_video（没验收过 / 刚改过没抽帧都会被拒；用户明确说「不用看了直接渲」才 force=true + forceUserQuote=他的原话）",
-        "   ↳ 长片别用 wait 硬等（上限 240s，超过也等不到）：拿 taskId 用 **get_render_status(taskId, waitSec=25)**，状态一变立刻返回，12 分钟的片子约 30 次就够——别几秒一查（那次 95 次轮询全是这么来的）。",
+        "   ↳ 长片别用 wait 硬等（上限 240s，超过也等不到）：拿 taskId 用 **get_render_status(taskId, waitSec=25)**，状态一变立刻返回，12 分钟的片子约 30 次就够——别几秒一查，纯浪费轮次。",
         "   ↳ 渲染期间不要抽帧 / 出封面（共用同一个浏览器实例，会 delayRender 超时）：等它结束，或先 cancel_render。",
         "17. 交付 → render_cover 出封面候选给用户挑（要单独设计封面就另建一幕再抽）；再 remember / save_template",
         "",
@@ -1504,7 +1510,7 @@ const TOOLS: ToolDef[] = [
   {
     name: "list_styles",
     description:
-      "列出风格库：slug + 名称，全部都能 apply_style 一键套、能 probe_style 出真样张（少数只标「仅规则」的例外会注明）。共 40+ 种（暗色发布会/瑞士编辑/粗野排版/电影片头/像素/国潮/水墨/白板手绘…）。",
+      "列出风格库：slug + 名称，标明哪些能 apply_style 一键套 / probe_style 出真样张（标「仅规则」的只能 get_style 读规则手动改）。共 40+ 种（暗色发布会/瑞士编辑/粗野排版/电影片头/像素/国潮/水墨/白板手绘…）。",
     shape: {},
     run: async () => {
       const list = listStyles();
@@ -1533,7 +1539,7 @@ const TOOLS: ToolDef[] = [
   {
     name: "apply_style",
     description:
-      "一键套用风格：改主题（配色/字体/圆角）+ 所有场景入场转场，返回推荐版式与禁止项。风格库 43 种全部支持（个别标「仅规则」的例外会报错）。只覆盖「系统的值」，版式与文案仍按风格规则重做。",
+      "一键套用风格：改主题（配色/字体/圆角）+ 所有场景入场转场，返回推荐版式与禁止项。**只能套带预设的风格**（list_styles 里没标「仅规则」的），仅规则风格会报错。只覆盖「系统的值」，版式与文案仍按风格规则重做。",
     shape: {
       slug: z.string().describe("风格 slug"),
       transitions: z.boolean().optional().describe("是否同时应用转场，默认 true"),
@@ -1669,7 +1675,7 @@ const TOOLS: ToolDef[] = [
       return list
         .map((t: any) => {
           const kind = t.kind === "custom" ? "「我的模板」" : "内置";
-          return `${t.key} · ${t.name}（${kind}）：${t.description}\n  ${t.sceneCount} 个场景 / ${(t.durationInFrames / 30).toFixed(0)}s · 场景构成 ${t.sceneTypes.join(" → ")}`;
+          return `${t.key} · ${t.name}（${kind}）：${t.description}\n  ${t.sceneCount} 个场景 / 约 ${(t.durationInFrames / 30).toFixed(0)}s（按 30fps 折算）· 场景构成 ${t.sceneTypes.join(" → ")}`;
         })
         .join("\n");
     },
@@ -1953,7 +1959,7 @@ const TOOLS: ToolDef[] = [
   },
   {
     name: "set_scene_timing",
-    description: "单独调整某个场景的停留时长（帧）。30 帧 = 1 秒。",
+    description: "单独调整某个场景的停留时长（帧）。秒数 = 帧 / 工程 fps（默认 30fps，即 30 帧 ≈ 1 秒）。",
     shape: { sceneId: z.string(), durationInFrames: z.number(), projectId: z.string().optional() },
     run: async (a) => {
       const p = await resolveProject(a.projectId);
@@ -2040,9 +2046,9 @@ const TOOLS: ToolDef[] = [
       "典型用法：标题页想要夜景氛围 → set_scene_backdrop(sceneId, type:'bokeh', opacity:0.8)；纪录片段落要脏一点 → type:'grain', props:{vignette:0.3}。\n" +
       "层次 place：下（默认，垫在版式下，字不受影响）/ 上（浮在画面上，但在贴纸标签之下）/ 顶（盖住所有内容，字幕除外，适合颗粒·扫描线·故障）。\n" +
       "要精确插到某个元素上下就传 z（与叠加元素 scene.elements 的 z 混排，100+z）：一张光斑压住某行字、但被某个标签盖住时用它。\n" +
-      "出现区间 from / duration（帧）：不填 = 铺满整幕（默认，和以前一样）。填了就只在幕内某一段出现，**动画从出现那一刻从 0 开始**——第 2 秒才浮出光斑，不会看到漂到一半的中间态。\n" +
+      "出现区间 from / duration（帧）：不填 = 铺满整幕（默认）。填了就只在幕内某一段出现，**动画从出现那一刻从 0 开始**——第 2 秒才浮出光斑，不会看到漂到一半的中间态。\n" +
       "柔化 fadeIn / fadeOut：**不填就自动跟随这一幕的出入场转场**（区间贴幕首交给入场转场、贴幕尾交给出场转场，落在幕中间取 max(转场时长,8)），所以区间边界不会硬切。写 0 才是强制硬切；写具体帧数则覆盖自动值。\n" +
-      "快慢与次数：speed 是整层时间倍率（1=原速，2=快一倍，0.5=慢一半，只改速度不改亮度数量）；mode:'once' 只走一轮后定格 —— **只有漏光说得通**（扫一次就停、光带移出画面），光晕/散景是永续漂移、颗粒/磁带逐帧随机，对它们写 once 没有可见效果。\\n" +
+      "快慢与次数：speed 是整层时间倍率（1=原速，2=快一倍，0.5=慢一半，只改速度不改亮度数量）；mode:'once' 只走一轮后定格 —— **只有漏光说得通**（扫一次就停、光带移出画面），光晕/散景是永续漂移、颗粒/磁带逐帧随机，对它们写 once 没有可见效果。\n" +
       "限制：只有这 6 个纯氛围类型能用（打字机/数字/渐变字/乱码带正文，垫在下面会出现两套字）。一幕只能一层；传 clear:true 去掉。",
     shape: {
       projectId: z.string().optional().describe("要操作的工程 id，不传 = 当前默认工程（list_projects 查）"),
@@ -2239,7 +2245,7 @@ const TOOLS: ToolDef[] = [
     name: "reorder_freeform_elements",
     description:
       "调自由画布元素的层级（数组顺序 = 层级，靠后的盖住靠前的；没有 z-index）。\n" +
-      "典型用法：红色横线要当「删除线」穿过文字 → 先把它移到文字之后（front）。以前只能 set_scene_type 整幕重写。\n" +
+      "典型用法：红色横线要当「删除线」穿过文字 → 先把它移到文字之后（front）。\n" +
       "给 elementId（该幕 elements[].id）或 index（从 0 开始），mode=front/back/forward/backward；一批一起动传 indices。",
     shape: {
       projectId: z.string().optional().describe("要操作的工程 id，不传 = 当前默认工程（list_projects 查）"),
@@ -2385,7 +2391,7 @@ const TOOLS: ToolDef[] = [
   {
     name: "set_transition",
     description:
-      "设置场景的入场或出场转场。direction 默认 in；type 可选 none / fade / slide / wipe / zoom / blur / flip / circle / blinds / flash / glitch / diagonal；duration 建议 8-20 帧。",
+      "设置场景的入场或出场转场。direction 默认 in；type 可选 none / fade / slide / wipe / zoom / blur / flip / circle / blinds / flash / glitch / diagonal；duration 不传默认 12 帧，建议 8–20 帧。",
     shape: {
       sceneId: z.string(),
       type: z.enum(TRANSITION_TYPES),
@@ -2396,7 +2402,7 @@ const TOOLS: ToolDef[] = [
     run: async (a) => {
       const p = await resolveProject(a.projectId);
       const t =
-        a.type === "none" ? null : { type: a.type, durationInFrames: a.durationInFrames ?? 12 };
+        a.type === "none" ? null : { type: a.type, durationInFrames: a.durationInFrames ?? TRANSITION_DEFAULT_FRAMES };
       const patch = a.direction === "out" ? { transitionOut: t } : { transitionIn: t };
       const res = await api<any>(`/api/projects/${p.id}/ops`, {
         method: "POST",
@@ -2478,7 +2484,7 @@ const TOOLS: ToolDef[] = [
       }
 
       if (!a.type) throw new Error("要么给 type（统一套），要么给 items（逐幕指定）");
-      const t = a.type === "none" ? null : { type: a.type, durationInFrames: a.durationInFrames ?? 12 };
+      const t = a.type === "none" ? null : { type: a.type, durationInFrames: a.durationInFrames ?? TRANSITION_DEFAULT_FRAMES };
       const dir = a.direction ?? "in";
       const patch =
         dir === "out"
@@ -2496,7 +2502,7 @@ const TOOLS: ToolDef[] = [
         body: JSON.stringify({ actor: "agent", ops }),
       });
       const dirLabel = dir === "out" ? "出场" : dir === "both" ? "入/出场" : "入场";
-      const what = a.type === "none" ? "清除" : `${a.type} ${a.durationInFrames ?? 12} 帧`;
+      const what = a.type === "none" ? "清除" : `${a.type} ${a.durationInFrames ?? TRANSITION_DEFAULT_FRAMES} 帧`;
       return `已给 ${ids.length} 个场景设置${dirLabel}转场（${what}），rev=${res.project.rev}`;
     },
   },
@@ -3641,7 +3647,7 @@ const TOOLS: ToolDef[] = [
           `   ④ 然后才 save_storyboard(useNarrationTiming=true) → build_film`,
           "",
           `**为什么必须停**：用户没听过就排版 = 把画面锁在没确认的语音上。`,
-          `改一句台词 → 重新合成 → 幕长变 → 每一幕的元素坐标和动画帧位全部重排（事故里就是这么锁死的）。`,
+          `改一句台词 → 重新合成 → 幕长变 → 每一幕的元素坐标和动画帧位全部重排。`,
         ].join(nl);
       }
 
@@ -3990,8 +3996,7 @@ const TOOLS: ToolDef[] = [
       "记录「用户听过这一版配音」。**参数是用户原话，不是布尔值。\\n" +
       "两种配音来源都走这里：tts_narration 合成的，或 register_narration 登记的外部音频（真人录音 / 别的 TTS）。\\n" +
       "判定依据是**工程里那批旁白音频的指纹**：换文件 / 挪位置 / 改长度 / 整片重排导致绝对位置变化，指纹就变，必须重听。\\n" +
-      "为什么不要布尔：事故里 agent 把「回执成功」当「交付成功」，而真正翻车的是**用户的话被理解错**\\n" +
-      "（「可以，先合成配音试听」被当成「稿子确认完毕，可以往下走」）。",
+      "为什么不要布尔：布尔记不下「用户到底说了什么」——原话才是可对证的记录，含糊的转述会在下游被当成完全确认。",
     shape: {
       projectId: z.string().optional().describe("要操作的工程 id，不传 = 当前默认工程"),
       userSaid: z
@@ -4404,7 +4409,7 @@ const TOOLS: ToolDef[] = [
       }
       markReviewRequested(p.id);
       const nl = String.fromCharCode(10);
-      const sec = Math.round(totalDuration(p as never) / 30);
+      const sec = Math.round(totalDuration(p as never) / (p.fps || 30));
       const focus =
         a.focus?.length
           ? a.focus.join("、")
@@ -4469,7 +4474,7 @@ const TOOLS: ToolDef[] = [
       "提交渲染任务（默认把工程里所有画幅都出一版）。默认异步返回，用 get_render_status 查询；传 wait=true 会等到完成再返回（省轮询）。\n" +
       "quality 不传默认 standard；先快速看效果传 low（明显更快），正式交付用 high。\n" +
       "**渲染进度编辑器看得见**：agent 起的任务也会在编辑器顶部显示「正在渲染哪个工程 + 画幅进度」，用户不用问你。\n" +
-      "formats 里写工程没有的画幅会直接报错（以前会「成功」但一个文件都没出）。\n" +
+      "formats 里写工程没有的画幅会直接报错。\n" +
       "**渲染前用户必须在编辑器里看过片**（request_review → confirm_review）；没验收会拒绝，用户明确让你直接渲染才传 force=true，**且必须带 forceUserQuote=他的原话**（否则拒绝）。",
     shape: {
       formats: z
@@ -4504,7 +4509,7 @@ const TOOLS: ToolDef[] = [
         .optional()
         .describe(
           "用户让你跳过闸口时的**原话**（至少 5 字）。不给原话，force / forceContract 一律拒绝——" +
-            "事故里 agent 单方面传 force=true 就绕过了验收，事后查不出用户到底说不说这句话",
+            "留下用户原话，跳过验收才有据可查——agent 自己转述的「用户同意了」不算数",
         ),
       fileName: z
         .string()
@@ -4722,9 +4727,9 @@ const TOOLS: ToolDef[] = [
     name: "render_preview_clip",
     description:
       "渲一小段**带声音的动态预览**（默认 6 秒 / 半分辨率 / 含转场与 BGM），用来判断「动起来对不对」。\n" +
-      "为什么需要它：静帧看不出转场叠不叠字、动画够不够、字幕来不来得及读；整片 98 秒要渲十几分钟。中间这一层以前是空的，\n" +
+      "为什么需要它：静帧看不出转场叠不叠字、动画够不够、字幕来不来得及读；整片要渲十几分钟，预览片段几十秒就够。\n" +
       "所有动态问题都只能在最贵的阶段才发现（复盘里转场返工 4 轮、BGM 5 次全是这个原因）。\n" +
-      "默认自动挑「第一个转场交界」（最容易翻车的地方）；也可以指定 sceneIds 或帧区间。",
+      "默认自动挑「第一个转场交界」（转场问题最常暴露的地方）；也可以指定 sceneIds 或帧区间。",
     shape: {
       projectId: z.string().optional().describe("要操作的工程 id，不传 = 当前默认工程"),
       sceneIds: z.array(z.string()).optional().describe("只看这几幕（前后各多带 1 秒）"),
@@ -4933,7 +4938,7 @@ const TOOLS: ToolDef[] = [
     name: "get_render_status",
     description:
       "查询渲染任务状态。**传 waitSec 会占住最多这么多秒等状态变化**（长轮询）：状态一变立刻返回，" +
-      "所以 12 分钟的片子用 waitSec=25 约 30 次就够，而不是每 7 秒盲查一次（那次 95 次轮询里 38% 的调用量都耗在这）。\n" +
+      "所以 12 分钟的片子用 waitSec=25 约 30 次就够，而不是每几秒盲查一次（白耗轮次）。\n" +
       "不传 taskId 时：给 projectId 看该工程最近一条任务；都不给则列出全部任务。",
     shape: {
       taskId: z.string().optional().describe("任务 id（render_video 回执里给的）"),
@@ -5373,7 +5378,7 @@ const TOOLS: ToolDef[] = [
       videoSrc: z
         .string()
         .optional()
-        .describe("视频元素：/assets/xxx.mp4（先 upload_asset）；默认静音 + 循环"),
+        .describe("视频元素：/assets/xxx.mp4（先 upload_asset）；默认有声、不循环"),
       name: z.string().optional().describe("图层名，方便后续指认"),
       x: z.number().optional().describe("中心 X，画面宽度百分比，默认 50"),
       y: z.number().optional().describe("中心 Y，画面高度百分比，默认 52"),
@@ -5894,8 +5899,7 @@ const TOOLS: ToolDef[] = [
       "记录「用户已确认需求」。4 组问完、契约完整后，把 brief 总结发给用户，用户确认后调用它；没有确认过，build_storyboard 会拒绝。\n" +
       "闸口是**内容判据**而不是「必填有没有填」：段落表每段有时长+内容、镜头清单能直接排拍摄（动画片换成元素清单）、参考指到时间点、素材有责任人+截止、交付有版本列表。缺了会逐条告诉你缺什么。\n" +
       "如果 brief 里有 assumed（你替用户拍板的字段），**必须逐条带上用户原话**：confirm_brief(assumptions=[{field, userSaid}])。\\n" +
-      "只传 acknowledgedAssumptions=true 会被拒绝——布尔记不下用户说了什么，事后也查不出他同意了哪几条。\\n" +
-      "（事故复盘：16 项 agent 自己拍的板，一个 true 全过，回执还写着「已核对」。）",
+      "只传 acknowledgedAssumptions=true 会被拒绝——布尔记不下用户说了什么，事后也查不出他同意了哪几条。",
     shape: {
       projectId: z.string().optional().describe("要操作的工程 id，不传 = 当前默认工程（list_projects 查）"),
       summary: z
@@ -6403,7 +6407,7 @@ const TOOLS: ToolDef[] = [
       "问诊只问「用户能判断的东西」：形态、段落、镜头、参考、素材责任人、交付版本。动画/转场/特效/背景**不问实现类型，只收档位**（克制/标准/活泼 等），具体参数由设计锁推导。\n" +
       "用户答「你定 / 随便」时不要硬问：按形态默认值填，并把该字段写进 assumed。\\n" +
       "⚠ 但 assumed 里的每一条，**confirm_brief 时都要带上用户原话**（assumptions:[{field,userSaid}]），只传布尔会被拒——\\n" +
-      "   布尔记不下他说了什么，而事故恰恰是「可以，先合成配音试听」被记成「稿子确认完毕，可以往下走」。\\n" +
+      "   布尔记不下他说了什么：一句「可以，先试试」常被错记成「全部确认，往下走」。\\n" +
       "第 10 步「稿件」在 brief 确认之后单独走（save_script → confirm_script）。",
     shape: {
       group: z
@@ -6801,8 +6805,7 @@ const TOOLS: ToolDef[] = [
     name: "probe_param",
     description:
       "**参数最小实验**：给 1 个元素 + 1 组参数，渲 1 张图看它到底长什么样。\n" +
-      "为什么需要：maxWidth / bottom / stroke / textAlign 这些语义不直观，以前的做法是\n" +
-      "「先试一版 → 抽帧 → 不对 → 整片都带上 → 再改」，一次往返改一整片。\n" +
+      "为什么需要：maxWidth / bottom / stroke / textAlign 这些语义不直观，直接铺到整片再改要动几十幕。\n" +
       "先用它把参数摸清，再全量铺。探针写在一个叫「参数探针」的 freeform 幕里，不碰你正在做的那几幕。",
     shape: {
       projectId: z.string().optional().describe("要操作的工程 id，不传 = 当前默认工程"),
@@ -7291,8 +7294,7 @@ const TOOLS: ToolDef[] = [
     name: "build_film",
     description:
       "**一次提交整片**：给一幕幕的「类型 + 内容」，剩下的坐标、字幕、转场、入场动画由系统按规则展开成一条 apply_ops（整批原子、只涨 1 个 rev）。\n" +
-      "为什么需要它：以前建一整片要按幕数逐次 add_scene（每次带整份 elements）+ 同样多次 set_subtitle + 3 倍幕数次 set_transitions，\n" +
-      "光「把已经想好的东西写进库」就 100+ 次往返。这里一次说完。\n" +
+      "为什么需要它：逐幕 add_scene + set_subtitle + set_transitions 要几十次往返才能建成整片；这里一次说完。\n" +
       "用法：scenes 按出场顺序给；freeform 幕直接给 elements（会自动补 id、按 stagger 挂入场动画）；\n" +
       "内置版式幕给 props（按该类型 schema 校验，错了当场报第几幕哪个字段）。\n" +
       "⚠️ 别拿它当「第一版」：先 probe_style 挑风格 → build_storyboard(shot=1) 建 1 幕给用户过目 → 再 build_film 全量。",
@@ -7414,7 +7416,7 @@ const TOOLS: ToolDef[] = [
         }
 
         const tin = sc.transitionIn !== undefined ? sc.transitionIn : a.transitions
-          ? { type: a.transitions.type, durationInFrames: a.transitions.durationInFrames ?? 12 }
+          ? { type: a.transitions.type, durationInFrames: a.transitions.durationInFrames ?? TRANSITION_DEFAULT_FRAMES }
           : undefined;
         const patch: Record<string, unknown> = {};
         if (tin !== undefined) patch.transitionIn = tin;
@@ -7543,11 +7545,11 @@ const TOOLS: ToolDef[] = [
     },
   },
 
-  /* ───────────── 工具门面：按需发现与执行（其余 75+ 个工具经这两层调用） ───────────── */
+  /* ───────────── 工具门面：按需发现与执行（其余工具经这两层调用） ───────────── */
   {
     name: "tool_search",
     description:
-      "按意图搜索可用工具（常驻只暴露 4 个核心工具，其余 70+ 个从这里找）：返回工具名、完整说明、参数表。找到后用 tool_call(name, args) 执行。传 all=true 看全部工具目录（只有名字与一句话说明）。",
+      "按意图搜索可用工具（常驻只暴露 4 个核心工具，其余工具全部从这里找）：返回工具名、完整说明、参数表。找到后用 tool_call(name, args) 执行。传 all=true 看全部工具目录（只有名字与一句话说明）。",
     shape: {
       query: z.string().optional().describe("意图关键词，如：画中画 / 字幕 / 配音 / 历史 / 横屏 / 卡点"),
       all: z.boolean().optional().describe("true = 返回全部工具目录"),
@@ -7569,15 +7571,38 @@ const TOOLS: ToolDef[] = [
       const q = (a.query ?? "").trim().toLowerCase();
       if (!q) return `传 query 搜工具（如 tool_search("画中画")），或 all=true 看全量目录。`;
       const terms = q.split(/\s+/);
-      const aliasNames = new Set(terms.flatMap((t: string) => SEARCH_ALIASES[t] ?? []));
+      // 别名除了整词，还用每个词的 2-gram 查：「怎么加转场」切出「转场」就能命中别名表
+      const aliasKeys = new Set<string>();
+      for (const t of terms) {
+        aliasKeys.add(t);
+        const chars = [...t];
+        if (chars.length >= 2) {
+          for (let i = 0; i + 2 <= chars.length; i++) aliasKeys.add(chars.slice(i, i + 2).join(""));
+        }
+      }
+      const aliasNames = new Set([...aliasKeys].flatMap((t: string) => SEARCH_ALIASES[t] ?? []));
+      // 中文整句 query 没有空格分词（「改一下字幕样式」整串传进来）：整词没命中时
+      // 按 2-gram 切开再试，命中过半算相关 —— 否则搜不到 = 对 agent 来说工具不存在
+      const scoreTerm = (t: string, name: string, desc: string): number => {
+        if (name.includes(t)) return 5;
+        if (desc.includes(t)) return 3;
+        const chars = [...t];
+        if (chars.length >= 3) {
+          const grams = new Set<string>();
+          for (let i = 0; i + 2 <= chars.length; i++) grams.add(chars.slice(i, i + 2).join(""));
+          let hit = 0;
+          for (const g of grams) if (name.includes(g) || desc.includes(g)) hit++;
+          if (hit / grams.size >= 0.5) return 2;
+        }
+        return 0;
+      };
       const scored = others
         .map((d) => {
           const name = d.name.toLowerCase();
           const desc = d.description.toLowerCase();
           let score = 0;
           for (const t of terms) {
-            if (name.includes(t)) score += 5;
-            else if (desc.includes(t)) score += 3;
+            score += scoreTerm(t, name, desc);
           }
           if (aliasNames.has(d.name)) score += 6;
           return { d, score };
@@ -7970,7 +7995,21 @@ const SEARCH_ALIASES: Record<string, string[]> = {
   多版本: ["duplicate_scene"],
   模板: ["list_templates", "save_template"],
   主题: ["set_theme"],
-  封面: ["add_scene"],
+  封面: ["render_cover", "preview_frame"],
+  转场: ["set_transition", "set_transitions", "preview_frames"],
+  字幕: ["set_subtitle", "set_subtitle_style", "fix_subtitles", "export_subtitles"],
+  风格: ["list_styles", "apply_style", "probe_style", "confirm_style_probe"],
+  颜色: ["set_theme"],
+  配色: ["set_theme"],
+  样式: ["set_subtitle_style", "apply_style"],
+  渲染: ["render_video", "get_render_status", "cancel_render"],
+  预览: ["preview_frame", "preview_frames", "render_preview_clip"],
+  动态: ["render_preview_clip"],
+  分镜: ["save_storyboard", "build_storyboard", "build_film"],
+  建片: ["build_film", "build_storyboard"],
+  铺开: ["build_film", "build_storyboard"],
+  需求: ["intake", "save_brief", "confirm_brief"],
+  问诊: ["intake", "save_brief"],
   尺寸: ["set_formats"],
   比例: ["set_formats"],
   试: ["preview_frame", "preview_frames"],
