@@ -1,5 +1,6 @@
 
-# 外部工具（.other_modules）
+# 外部工具（.other_modules）：anatomy 等轴测插图
+
 
 `<项目根>/.other_modules/` 存放**别人的开源项目**。故意不进仓库（.gitignore 已忽略，
 只保留 `.gitkeep` 和 `README.md`），clone 下来是空的。
