@@ -62,10 +62,7 @@ const BRK = String.fromCharCode(10);
  * 为什么只提醒：元素出框经常是有意设计（大字标题、延伸色块、出血图）。
  * 但字幕/二维码/联系方式这类"必须被看见"的东西压进按钮区，是真事故。
  */
-/** 样张最多 3 个：多了用户挑不动，也浪费渲染 */
-function clampProbeGuard(_projectId: string, slugs: string[]): void {
-  if (slugs.length > 3) throw new Error("样张最多 3 个候选");
-}
+/** 样张最多 3 个：多了用户挑不动，也浪费渲染（probe_style 入口处已限） */
 
 /**
  * 选「画幅相关体检」按哪个画幅算（安全区 / 竖屏构图 / 字幕距底）。
@@ -1306,6 +1303,9 @@ const TOOLS: ToolDef[] = [
         })),
       };
 
+      // 记住进样张前的 rev：抽完帧立刻还原 —— 风格对比是「看图」，绝不该在工程里留下副作用
+      const revBefore = p.rev;
+
       const findOrCreate = async (
         name: string,
         type: string,
@@ -1323,6 +1323,9 @@ const TOOLS: ToolDef[] = [
         return created.createdSceneIds?.[0];
       };
 
+      let shots: { slug: string; urls: { kind: string; url: string }[] }[] = [];
+      let restoreNote = "";
+      try {
       const targets: { id: string; kind: "density" | "title" }[] = [];
       if (a.sceneId) {
         targets.push({ id: a.sceneId, kind: "density" });
@@ -1341,7 +1344,6 @@ const TOOLS: ToolDef[] = [
       }
 
       const applyTool = TOOLS.find((d) => d.name === "apply_style");
-      const shots: { slug: string; urls: { kind: string; url: string }[] }[] = [];
       for (const slug of slugs) {
         try {
           await applyTool?.run({ slug, projectId: p.id });
@@ -1370,9 +1372,22 @@ const TOOLS: ToolDef[] = [
         shots.push({ slug, urls });
       }
 
+      } finally {
+        // 无论成功还是中途报错，都把工程还原到样张前：风格对比绝不该留下副作用
+        //（此前会把每个候选风格套到整个工程、结束后停在最后一个候选上，用户不挑就一直被改着）
+        try {
+          await api(`/api/projects/${p.id}/restore/${revBefore}`, { method: "POST" });
+          restoreNote =
+            `工程已自动还原到样张前状态（rev ${revBefore}）：主题与转场没有残留改动，样张幕也一并清掉（样张图以上面链接为准）。` +
+            `用户选定后 confirm_style_probe 会正式套用该风格。`;
+        } catch (e) {
+          restoreNote =
+            `⚠️ 自动还原失败（${e instanceof Error ? e.message : String(e)}）：工程还停在最后一个候选风格上，` +
+            `请立即 restore_rev(rev=${revBefore}) 回滚。`;
+        }
+      }
+
       markProbe(p.id, slugs);
-      clampProbeGuard(p.id, slugs);
-      dirtySincePreview = false;
       const kindLabel = (k: string) => (k === "density" ? "密度页（看内容会不会空）" : "封面页（看调性）");
       const body = shots
         .map((x, i) => {
@@ -1386,6 +1401,7 @@ const TOOLS: ToolDef[] = [
         .join(nl);
       return (
         `已出 ${shots.length} 张风格样张（同一幕、不同风格）：${nl}${body}${nl}` +
+        `${nl}${restoreNote}${nl}` +
         `${nl}下一步：**把这几张图发给用户挑**，问他「哪张的感觉最接近你要的」。` +
         `${nl}选定后 confirm_style_probe(slug="...") 记下来，再 save_storyboard。` +
         `${nl}注意：每张都是套完该风格后单独抽的（各自一个文件，不会互相覆盖）；` +
@@ -2489,7 +2505,7 @@ const TOOLS: ToolDef[] = [
     description:
       `设置或调整背景音乐。src 用 /assets/xxx.mp3 或公网 URL；**volume 0-${MAX_VOLUME}（1 = 原音，>1 是放大，上限约 +14 dB）**；` +
       "fadeIn/fadeOut 单位秒；from 为起始帧、durationInFrames 为播放长度（帧）、loop 循环。" +
-      "**只传要改的字段即可**（其余沿用现有值）。ducking 做人声避让：有人说话时自动把 BGM 压下去。清除背景音乐用 clear=true。\n" +
+      "**只传要改的字段即可**（其余沿用现有值）；首次设置默认原音直出（volume=1，不淡入淡出）。ducking 做人声避让：有人说话时自动把 BGM 压下去。清除背景音乐用 clear=true。\n" +
       "放大到会削波时会在回执里警告（读了文件峰值算的），别忽略。",
     shape: {
       src: z.string().optional(),
@@ -2547,9 +2563,11 @@ const TOOLS: ToolDef[] = [
               op: "set_audio",
               audio: {
                 src,
-                volume: a.volume ?? prev?.volume ?? 0.8,
-                fadeIn: a.fadeIn ?? prev?.fadeIn ?? 0.5,
-                fadeOut: a.fadeOut ?? prev?.fadeOut ?? 0.8,
+              // 首次设置默认原音直出（1/0/0）：描述承诺「1 = 原音」，静默落 0.8 会让用户
+              // 觉得「音质变闷了」却查不到原因。已有 BGM 时沿用现有值不动。
+              volume: a.volume ?? prev?.volume ?? 1,
+              fadeIn: a.fadeIn ?? prev?.fadeIn ?? 0,
+              fadeOut: a.fadeOut ?? prev?.fadeOut ?? 0,
                 from: a.from ?? prev?.from ?? 0,
                 ...(a.durationInFrames !== undefined || prev?.durationInFrames
                   ? { durationInFrames: a.durationInFrames ?? prev?.durationInFrames }
@@ -2886,7 +2904,10 @@ const TOOLS: ToolDef[] = [
         });
         lines.push(fmtSummary(res.summary));
       } else if (a.save && !reliable) {
-        lines.push("（置信度不足，没有写入节拍网格）");
+        lines.push(
+          "⚠️ 你传了 save=true 但置信度不足：**节拍网格没有写入**（防止把不可信的 BPM 固化进工程）。" +
+            "确需落库：问用户要 BPM 后用 set_beat_grid(bpm=..., source=\"manual\") 手动建网格。",
+        );
       }
       return lines.join(nl);
     },
@@ -3632,9 +3653,10 @@ const TOOLS: ToolDef[] = [
           if (!r.sceneId) continue;
           const scene = p.scenes.find((x: any) => x.id === r.sceneId);
           if (!scene || !r.suggested) continue;
-          // 先删掉这个场景里旧的音频元素，避免重复叠加
+          // 先清掉这个场景里**本工具加过的旧旁白**（narration 标记），避免重复叠加；
+          // 用户手动添加的音效/BGM 没有 narration 标记，不能动 —— 以前无差别全删过
           for (const el of ((scene as any).elements ?? [])) {
-            if (el.kind === "audio") {
+            if (el.kind === "audio" && (el as any).narration === true) {
               ops.push({ op: "remove_element", sceneId: r.sceneId, elementId: el.id });
             }
           }
@@ -3679,7 +3701,7 @@ const TOOLS: ToolDef[] = [
         lines.push(
           a.keepSubtitles
             ? `已应用到 ${applied} 个场景：场景时长按配音对齐、音频放入（字幕按 keepSubtitles 保持原样，请自己复查断句）`
-            : `已应用到 ${applied} 个场景：场景时长按配音对齐、字幕写入、音频放入（重复应用会先清旧音频；手工拆过的字幕已被覆盖，要复查）`,
+            : `已应用到 ${applied} 个场景：场景时长按配音对齐、字幕写入、音频放入（重复应用会先清旧旁白；手工加的音效不受影响。手工拆过的字幕已被覆盖，要复查）`,
         );
       }
 
@@ -3895,6 +3917,16 @@ const TOOLS: ToolDef[] = [
         needLen.set(x.sceneId, Math.max(needLen.get(x.sceneId) ?? 0, end));
       }
       const extended: string[] = [];
+      // 元素备注上限 200 字：以前是静默截断，长台词被偷偷砍掉、编辑器里对不上稿——
+      // 超长就明确报出来，让 agent 精简或拆段，别硬塞
+      const tooLong = placed.filter((x) => String(x.seg.text ?? "").length > 200);
+      if (tooLong.length) {
+        throw new Error(
+          `这些旁白文案超过 200 字（音频元素备注上限）：第 ${tooLong.map((x) => x.idx + 1).join("、")} 段，` +
+            `最长 ${Math.max(...tooLong.map((x) => String(x.seg.text ?? "").length))} 字。` +
+            `请精简该段文字或拆成两段，再重新 register_narration`,
+        );
+      }
       const ops: Record<string, unknown>[] = [];
       for (const [sceneId, want] of needLen) {
         const sc = scenes.find((s) => String(s.id ?? "") === sceneId);
@@ -3916,7 +3948,7 @@ const TOOLS: ToolDef[] = [
           durationInFrames: x.dur,
           audioVolume: x.seg.volume ?? 1,
           name: x.seg.name ?? `旁白 ${x.idx + 1}`,
-          ...(x.seg.text ? { text: String(x.seg.text).slice(0, 200) } : {}),
+          ...(x.seg.text ? { text: String(x.seg.text) } : {}),
         },
       })));
       const res = await api<{ project: { rev: number } }>(`/api/projects/${p.id}/ops`, {
@@ -4435,6 +4467,7 @@ const TOOLS: ToolDef[] = [
     name: "render_video",
     description:
       "提交渲染任务（默认把工程里所有画幅都出一版）。默认异步返回，用 get_render_status 查询；传 wait=true 会等到完成再返回（省轮询）。\n" +
+      "quality 不传默认 standard；先快速看效果传 low（明显更快），正式交付用 high。\n" +
       "**渲染进度编辑器看得见**：agent 起的任务也会在编辑器顶部显示「正在渲染哪个工程 + 画幅进度」，用户不用问你。\n" +
       "formats 里写工程没有的画幅会直接报错（以前会「成功」但一个文件都没出）。\n" +
       "**渲染前用户必须在编辑器里看过片**（request_review → confirm_review）；没验收会拒绝，用户明确让你直接渲染才传 force=true，**且必须带 forceUserQuote=他的原话**（否则拒绝）。",
@@ -4480,6 +4513,14 @@ const TOOLS: ToolDef[] = [
           "自定义文件名前缀（不含画幅/时间戳/扩展名，会自动补上）。不传就用工程名。" +
             "工程名里的旧标签会误导交付（如叫「60s精华版」但实际 116 秒），这种情况建议显式给一个",
         ),
+      quality: z
+        .enum(["low", "standard", "high"])
+        .optional()
+        .describe("渲染质量，默认 standard。先快速看效果用 low（快好几倍），正式交付用 high"),
+      format: z
+        .enum(["mp4", "gif", "webm"])
+        .optional()
+        .describe("输出格式，默认 mp4。gif/webm 是特例需求才传"),
       projectId: z.string().optional().describe("要操作的工程 id，不传 = 当前默认工程（list_projects 查）"),
     },
     run: async (a) => {
@@ -4630,15 +4671,17 @@ const TOOLS: ToolDef[] = [
         body: JSON.stringify({ formats, quality: a.quality, format: a.format, fileName: a.fileName }),
       });
       const totalFrames = totalDuration(p as never);
-      // 以前写死 8.8 帧/秒：1968 帧估「3.7 分钟」，实测 12 分钟，差 3 倍。
-      // agent 三分钟没等到就开始轮询（95 次轮询的诱因之一）。宁长勿短，用保守值。
-      const estSec = Math.round((totalFrames / 3) * (task.formats?.length ?? 1));
+      // 估算用保守速率：本机实测渲染速率波动很大（1.5–12 帧/秒，取决于素材/特效/画幅），
+      // 以前写死 8.8 估「3.7 分钟」实测 12 分钟。宁长勿短，且回执里明说是粗估，
+      // 第一次 get_render_status 就有实测速率，以那个为准。
+      const RENDER_EST_FPS = 3;
+      const estSec = Math.round((totalFrames / RENDER_EST_FPS) * (task.formats?.length ?? 1));
       const estMin = Math.max(0.3, estSec / 60);
       const multiNote =
         (task.formats?.length ?? 0) > 1
           ? " 多个画幅是逐个渲染的，每个画幅的进度百分比独立从 0 开始（进度回到小数字 = 进入下一个画幅，不是重启）。"
           : "";
-      const head = `已提交渲染任务 taskId=${task.id}（${task.formats.join(" + ")}，共 ${totalFrames} 帧）。保守估计约 ${estMin.toFixed(1)} 分钟（按 3 帧/秒；实际常快于此）。${multiNote}`;
+      const head = `已提交渲染任务 taskId=${task.id}（${task.formats.join(" + ")}，共 ${totalFrames} 帧）。粗估约 ${estMin.toFixed(1)} 分钟（保守值，实际常快于此；以 get_render_status 的实测速率为准）。${multiNote}`;
       if (!a.wait) return `${head} 用 get_render_status(taskId=..., waitSec=25) 等它。`;
 
       const deadline = Date.now() + (a.timeoutSec ?? 240) * 1000;

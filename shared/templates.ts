@@ -1,5 +1,6 @@
 import { createSeedProject } from "./ops";
 import { getMeta } from "./sceneMetas";
+import { sceneSchema } from "./schema";
 import type { Project } from "./schema";
 import type { TransitionType } from "./transitions";
 
@@ -447,7 +448,9 @@ export function buildFromTemplate(templateKey: string, name?: string, id?: strin
   seed.scenes = tpl.scenes.map((spec) => {
     const meta = getMeta(spec.type);
     if (!meta) throw new Error(`模板 ${tpl.key} 引用了未知场景类型 ${spec.type}`);
-    return {
+    // 走一遍 sceneSchema.parse：backdrop 的 place/speed/mode 等默认值在这里补齐，
+    // 手拼对象会缺字段（typecheck 不过，运行时靠 zod 兜底是侥幸）
+    return sceneSchema.parse({
       id: `scene_${Math.random().toString(36).slice(2, 10)}`,
       type: spec.type,
       name: meta.name,
@@ -465,7 +468,7 @@ export function buildFromTemplate(templateKey: string, name?: string, id?: strin
             },
           }
         : {}),
-    };
+    });
   });
   return seed;
 }
