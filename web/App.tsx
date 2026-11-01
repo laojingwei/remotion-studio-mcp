@@ -158,6 +158,28 @@ export default function App() {
     useDoc();
   const playerRef = useRef<PlayerRef | null>(null);
 
+  /**
+   * 编辑器产物是否比源码旧。
+   *
+   * 渲染和编辑器是两条链：Remotion 每次渲染都会重新打包 src，所以"改了代码、成片立刻对"；
+   * 但编辑器吃的是 dist/web，只有 npm run build 才会更新。于是会出现
+   * **成片是对的、编辑器里还是旧画面**，而且毫无提示——看起来像渲染 bug（2026-11-01 踩过）。
+   * 这里在读一次 health，旧的就在顶栏挂一条提示。
+   */
+  const [stale, setStale] = useState(false);
+  useEffect(() => {
+    let alive = true;
+    fetch("/api/health")
+      .then((r) => r.json())
+      .then((d: { frontendStale?: boolean }) => {
+        if (alive && d.frontendStale) setStale(true);
+      })
+      .catch(() => {});
+    return () => {
+      alive = false;
+    };
+  }, []);
+
   // 左右栏宽度：拖动分隔条调整，记在 localStorage
   const [leftW, setLeftW] = useState(() => {
     const saved = Number(localStorage.getItem("rms:leftW"));
@@ -1274,6 +1296,28 @@ export default function App() {
       ) : null}
 
       <ConfirmDialog />
+      {stale ? (
+        <div
+          style={{
+            position: "fixed",
+            left: "50%",
+            top: 10,
+            transform: "translateX(-50%)",
+            zIndex: 5000,
+            padding: "8px 14px",
+            borderRadius: 8,
+            background: "rgba(255,176,64,0.14)",
+            border: "1px solid rgba(255,176,64,0.5)",
+            color: "#FFC857",
+            font: "500 12px/1.5 system-ui, sans-serif",
+            pointerEvents: "none",
+          }}
+        >
+          编辑器产物比源码旧：这里看到的可能不是最新效果。终端跑一次 <b>npm run build</b> 再刷新
+          （成片渲染不受影响）
+        </div>
+      ) : null}
+
       <GlobalDropZone />
       {/* 暂时隐藏右下角「给 agent 留言」浮窗；恢复时把顶部 import 也一起打开
       <AgentChat />

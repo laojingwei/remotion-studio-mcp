@@ -96,9 +96,56 @@ const fail = (c: any, err: unknown) => {
   return c.json({ error: message }, status);
 };
 
-app.get("/api/health", (c) =>
-  c.json({ ok: true, port: PORT, bundle: bundleState(), projects: projects.list().length }),
-);
+/**
+ * 编辑器产物是否落后于源码。
+ *
+ * 为什么要有这个：**渲染和编辑器是两条链**。Remotion 每次渲染都会自己重新打包 src，
+ * 所以改了代码立刻出片是对的；但编辑器吃的是 `dist/web`，只有 `npm run build`（或
+ * `npm start`）才会更新。于是出现"成片是对的、编辑器里还是旧画面"——而且**没有任何提示**。
+ * 2026-11-01 就这么踩了一次：DSL 的角度单位修好之后，成片的地轴是斜的、编辑器里还是横的，
+ * 看起来像渲染 bug，实际是产物旧了 3 分钟。
+ */
+function frontendStale(): { stale: boolean; builtAt: number; sourceAt: number } {
+  const distDir = path.resolve("dist/web/static");
+  const roots = ["web", "shared", "src"].map((d) => path.resolve(d));
+  let builtAt = 0;
+  try {
+    for (const f of fs.readdirSync(distDir)) {
+      builtAt = Math.max(builtAt, fs.statSync(path.join(distDir, f)).mtimeMs);
+    }
+  } catch {
+    return { stale: true, builtAt: 0, sourceAt: Date.now() };
+  }
+  let sourceAt = 0;
+  const walk = (d: string) => {
+    let entries: fs.Dirent[];
+    try {
+      entries = fs.readdirSync(d, { withFileTypes: true });
+    } catch {
+      return;
+    }
+    for (const e of entries) {
+      if (e.name === "node_modules" || e.name.startsWith(".")) continue;
+      const p = path.join(d, e.name);
+      if (e.isDirectory()) walk(p);
+      else sourceAt = Math.max(sourceAt, fs.statSync(p).mtimeMs);
+    }
+  };
+  for (const r of roots) walk(r);
+  return { stale: builtAt < sourceAt, builtAt, sourceAt };
+}
+
+app.get("/api/health", (c) => {
+  const fe = frontendStale();
+  return c.json({
+    ok: true,
+    port: PORT,
+    bundle: bundleState(),
+    projects: projects.list().length,
+    /** true = 编辑器产物比源码旧，需要 npm run build 再刷新（成片渲染不受影响） */
+    frontendStale: fe.stale,
+  });
+});
 
 /* ────────────────────────────── 场景能力 ────────────────────────────── */
 
