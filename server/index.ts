@@ -1472,9 +1472,35 @@ const WEB_DIST = path.resolve(process.cwd(), "dist", "web");
 const WEB_READY = fs.existsSync(path.join(WEB_DIST, "index.html"));
 
 if (WEB_READY) {
+  /*
+   * 缓存策略是「index.html 永不缓存、带 hash 的资源随便缓存」。
+   *
+   * 为什么 index.html 不能缓存：vite 产物的 JS 文件名带内容 hash，每次构建都会换；
+   * 但引用它的 index.html 文件名不变。index.html 一旦被浏览器缓存，就会继续引用
+   * 上一版的 hash —— 用户普通刷新永远拿不到新包，症状是"改了功能但页面没变化"。
+   * 这不是理论风险：上线的第一晚就发生过（新场景类型上了、用户侧全是黑屏），
+   * 所以这条 no-cache 不是可"优化"掉的多余配置。
+   *
+   * hash 资源反倒是越缓存越好：文件名即版本，内容变了名字一定变。
+   */
+  app.use("*", async (c, next) => {
+    await next();
+    const url = new URL(c.req.url);
+    const isHtml =
+      url.pathname === "/" ||
+      url.pathname.endsWith(".html") ||
+      // SPA 兜底路径（没有扩展名的都交回 index.html）
+      !path.extname(url.pathname);
+    if (isHtml && c.res) {
+      c.res.headers.set("Cache-Control", "no-cache, must-revalidate");
+    }
+  });
   app.use("/*", serveStatic({ root: WEB_DIST }));
   // SPA 兜底：非 API/静态资源路径一律交回前端路由
-  app.get("*", (c) => c.html(fs.readFileSync(path.join(WEB_DIST, "index.html"), "utf8")));
+  app.get("*", (c) => {
+    c.header("Cache-Control", "no-cache, must-revalidate");
+    return c.html(fs.readFileSync(path.join(WEB_DIST, "index.html"), "utf8"));
+  });
 } else {
   app.get("/", (c) =>
     c.json({
