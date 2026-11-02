@@ -2009,7 +2009,9 @@ const TOOLS: ToolDef[] = [
   },
   {
     name: "get_scene",
-    description: "获取单个场景的完整 props。",
+    description:
+      "获取单个场景的完整 props（含 id、时长、转场、backdrop、字幕样式）。sceneId 见 get_project / add_scene 回执；" +
+      "只想看全片结构用 get_project，想逐字段查某类场景可填什么用 list_scene_types。",
     shape: { sceneId: z.string(), projectId: z.string().optional() },
     run: async (a) => {
       const p = await resolveProject(a.projectId);
@@ -2058,12 +2060,22 @@ const TOOLS: ToolDef[] = [
   {
     name: "update_scene",
     description:
-      "局部更新场景：只传要改的 props 字段即可，会和现有值合并（不是整份替换）。",
+      "局部更新某一幕：props 只传要改的字段，与现有值**合并**（不是整份替换）。\n" +
+      "写法二选一：props:{title:\"新标题\"} 或扁平 {name:\"新名字\", props:{…}} 都认。\n" +
+      "**传 null = 清空该字段**：如 props:{graph:null} 把自定义场景图清掉、回到预设场景（预设/速度/数量重新生效）。\n" +
+      "字段名以 list_scene_types 的字段表为准——不认识的字段会被忽略并在回执点名。\n" +
+      "scene3d 场景给了 graph 后 preset/spin/count/hue 不参与渲染（想调那些先清 graph）。\n" +
+      "⚠️ update_scene **不会同步分镜表**：按分镜重建（build_storyboard replace=true）会把精修改回旧版——" +
+      "改完场景记得 save_storyboard 同步，或只用 build_storyboard 做初次搭建。\n" +
+      "name/durationInFrames 是场景级字段（改幕长用它们，元素时长不会跟着变）。误改可 restore_rev 回滚。",
     shape: {
-      sceneId: z.string(),
-      props: z.record(z.any()).optional(),
-      name: z.string().optional(),
-      durationInFrames: z.number().optional(),
+      sceneId: z.string().describe("要改哪一幕（get_project / add_scene 回执里的场景 id）"),
+      props: z
+        .record(z.any())
+        .optional()
+        .describe("要改的 props 字段（合并语义，见上方说明）；字段名查 list_scene_types"),
+      name: z.string().optional().describe("改这一幕的名字（时间轴上显示的）"),
+      durationInFrames: z.number().optional().describe("改这一幕的时长（帧）"),
       projectId: z.string().optional().describe("要操作的工程 id，不传 = 当前默认工程（list_projects 查）"),
     },
     run: async (a) => {
@@ -2412,7 +2424,7 @@ const TOOLS: ToolDef[] = [
         .boolean()
         .optional()
         .describe("true = 顺手清掉主轨被 move_scene 钉死的起点（画中画所在的轨道 1+ 不受影响）；不传 = 保持老行为"),
-      projectId: z.string().optional(),
+      projectId: z.string().optional().describe("要操作的工程 id，不传 = 当前默认工程（list_projects 查）"),
     },
     run: async (a) => {
       const p = await resolveProject(a.projectId);
@@ -2468,7 +2480,8 @@ const TOOLS: ToolDef[] = [
   },
   {
     name: "remove_scene",
-    description: "删除场景。",
+    description:
+      "删除一幕（连同它的元素、音频引用一起没）。sceneId 见 get_project；删错可 restore_rev 回到删除前的版本（get_history 查版本号）。",
     shape: { sceneId: z.string(), projectId: z.string().optional() },
     run: async (a) => {
       const p = await resolveProject(a.projectId);
@@ -2579,9 +2592,9 @@ const TOOLS: ToolDef[] = [
       "（已并入 set_transitions：单幕/批量/逐幕统一用它）设置场景的入场或出场转场。direction 默认 in；type 可选 none / fade / slide / wipe / zoom / blur / flip / circle / blinds / flash / glitch / diagonal；duration 不传默认 12 帧，建议 8–20 帧。",
     retiredTo: "set_transitions",
     shape: {
-      sceneId: z.string(),
-      type: z.enum(TRANSITION_TYPES),
-      durationInFrames: z.number().optional(),
+      sceneId: z.string().describe("给哪一幕设转场（get_project 里的场景 id）"),
+      type: z.enum(TRANSITION_TYPES).describe("转场类型（可选值见描述）"),
+      durationInFrames: z.number().optional().describe("转场时长（帧），不传默认 12，建议 8–20"),
       direction: z.enum(["in", "out"]).optional().describe("in=入场（默认），out=出场"),
       projectId: z.string().optional().describe("要操作的工程 id，不传 = 当前默认工程（list_projects 查）"),
     },
@@ -2691,10 +2704,13 @@ const TOOLS: ToolDef[] = [
       "**只传要改的字段即可**（其余沿用现有值）；首次设置默认原音直出（volume=1，不淡入淡出）。ducking 做人声避让：有人说话时自动把 BGM 压下去。清除背景音乐用 clear=true。\n" +
       "放大到会削波时会在回执里警告（读了文件峰值算的），别忽略。",
     shape: {
-      src: z.string().optional(),
+      src: z
+        .string()
+        .optional()
+        .describe("音频地址：/assets/xxx.mp3（先 upload_asset 上传）或公网 URL；清除背景音乐用 clear=true，不用传 src"),
       volume: z.number().min(0).max(MAX_VOLUME).optional().describe("音量：1 = 原音，可到 5（+14 dB）"),
-      fadeIn: z.number().optional(),
-      fadeOut: z.number().optional(),
+      fadeIn: z.number().optional().describe("淡入时长（秒）"),
+      fadeOut: z.number().optional().describe("淡出时长（秒）"),
       from: z.number().int().min(0).optional().describe("从第几帧开始播"),
       durationInFrames: z.number().int().min(1).optional().describe("播放长度（帧），不传=到片尾"),
       loop: z.boolean().optional().describe("是否循环"),
@@ -2711,7 +2727,7 @@ const TOOLS: ToolDef[] = [
         ])
         .optional()
         .describe("人声避让：true=开启（30%）、false=关闭、对象=细化参数。不传则保持现状"),
-      clear: z.boolean().optional(),
+      clear: z.boolean().optional().describe("true = 移除背景音乐（用了它就不需要 src）"),
       clearGainCurve: z.boolean().optional().describe("true = 清掉压缩曲线（恢复原始动态）"),
       projectId: z.string().optional().describe("要操作的工程 id，不传 = 当前默认工程（list_projects 查）"),
     },
@@ -3215,11 +3231,11 @@ const TOOLS: ToolDef[] = [
     name: "update_audio_track",
     description: "修改某条音效轨的起点 / 音量 / 淡入 / 名称。trackId 见 get_project 里的音效轨列表。",
     shape: {
-      trackId: z.string(),
-      from: z.number().int().min(0).optional(),
+      trackId: z.string().describe("要改哪条音效轨（get_project 的音效轨列表 / add_audio_track 回执）"),
+      from: z.number().int().min(0).optional().describe("从全片第几帧开始播"),
       volume: z.number().min(0).max(MAX_VOLUME).optional().describe("音量：1 = 原音，可到 5（+14 dB）"),
-      fadeIn: z.number().min(0).optional(),
-      name: z.string().optional(),
+      fadeIn: z.number().min(0).optional().describe("淡入时长（秒）"),
+      name: z.string().optional().describe("改名（方便后续指认）"),
       projectId: z.string().optional().describe("要操作的工程 id，不传 = 当前默认工程（list_projects 查）"),
     },
     run: async (a) => {
@@ -3238,7 +3254,8 @@ const TOOLS: ToolDef[] = [
   },
   {
     name: "remove_audio_track",
-    description: "删除一条音效轨（背景音乐不受影响）。",
+    description:
+      "删除一条音效轨（背景音乐不受影响）。trackId 见 get_project 里的音效轨列表 / add_audio_track 回执；删错可 restore_rev 回滚。",
     shape: { trackId: z.string(), projectId: z.string().optional() },
     run: async (a) => {
       const p = await resolveProject(a.projectId);
@@ -3352,11 +3369,11 @@ const TOOLS: ToolDef[] = [
       "改一条特效轨的起点 / 长度 / 强度 / 类型 / 颜色，或**微调参数**（params 按 key 合并，只传要改的那个）、" +
       "或**整份替换自定义关键帧**（custom）。effectId 见 get_project 里的特效轨列表。",
     shape: {
-      effectId: z.string(),
-      kind: z.enum(EFFECT_TYPES).optional(),
-      from: z.number().int().min(0).optional(),
-      durationInFrames: z.number().int().min(1).optional(),
-      intensity: z.number().min(0).max(1).optional(),
+      effectId: z.string().describe("要改哪条特效轨（get_project 里的特效轨列表）"),
+      kind: z.enum(EFFECT_TYPES).optional().describe("换特效类型（list_effect_types 查可选值）"),
+      from: z.number().int().min(0).optional().describe("从全片第几帧开始"),
+      durationInFrames: z.number().int().min(1).optional().describe("持续多少帧"),
+      intensity: z.number().min(0).max(1).optional().describe("强度 0–1，1 = 该特效的满档"),
       color: z.string().optional().describe("覆盖层颜色 hex"),
       params: z.record(z.number()).optional().describe("要改的参数（按 key 合并，不会清掉其它参数）"),
       curve: z.enum(EFFECT_CURVES).optional(),
@@ -3396,7 +3413,8 @@ const TOOLS: ToolDef[] = [
   },
   {
     name: "remove_effect",
-    description: "删除一条特效轨（画面本身不受影响）。",
+    description:
+      "删除一条特效轨（画面本身不受影响）。effectId 见 get_project 里的特效轨列表；删错可 restore_rev 回滚。",
     shape: { effectId: z.string(), projectId: z.string().optional() },
     run: async (a) => {
       const p = await resolveProject(a.projectId);
@@ -3409,7 +3427,8 @@ const TOOLS: ToolDef[] = [
   },
   {
     name: "get_history",
-    description: "查看最近的编辑历史（agent 与用户混排），用来了解用户刚做了什么。",
+    description:
+      "查看最近的编辑历史（每条含版本号 rev、谁改的、干了什么），用来了解用户刚做了什么、或找 restore_rev 回滚的目标版本。",
     shape: { projectId: z.string().optional() },
     run: async (a) => {
       const p = await resolveProject(a.projectId);
@@ -3530,9 +3549,9 @@ const TOOLS: ToolDef[] = [
 - 不想自动转义（比如文本里已经有自己的读法标记）时传 escape=false。`,
     shape: {
       text: z.string().describe("要合成的文本"),
-      voice: z.string().optional(),
-      speed: z.number().min(0.25).max(4).optional(),
-      format: z.enum(["mp3", "wav", "ogg"]).optional(),
+      voice: z.string().optional().describe("音色 id，不传用 get_tts_config 里的当前默认"),
+      speed: z.number().min(0.25).max(4).optional().describe("语速倍率：1=正常，0.8 稍慢，1.2 稍快"),
+      format: z.enum(["mp3", "wav", "ogg"]).optional().describe("音频格式，默认 mp3"),
       instruct: z.string().optional().describe("风格指令，如「用特别愤怒的语气说」"),
       escape: z
         .boolean()
@@ -3700,8 +3719,8 @@ const TOOLS: ToolDef[] = [
         .boolean()
         .optional()
         .describe("直接从分镜表的 text/sceneId 取素材（不用再重贴一遍文案）"),
-      voice: z.string().optional().describe("默认音色（段内可覆盖）"),
-      speed: z.number().min(0.25).max(4).optional(),
+      voice: z.string().optional().describe("默认音色（段内可覆盖），不传用 get_tts_config 里的当前默认"),
+      speed: z.number().min(0.25).max(4).optional().describe("语速倍率：1=正常，0.9 朗读稍慢适合科普"),
       format: z.enum(["mp3", "wav", "ogg"]).optional(),
       breathSec: z
         .number()
@@ -4414,12 +4433,15 @@ const TOOLS: ToolDef[] = [
       "\nmotion 是整体动效强度：0=静态（画面完全静止）、1=标准（默认）、2=更强（位移加大+轻微回弹+数字滚动更快）。" +
       "只影响入场位移/数字滚动/氛围光斑，不改版式与排版。用户嫌「太死板」就先试 2，嫌「晃」就调 0。",
     shape: {
-      palette: z.record(z.string()).optional(),
+      palette: z
+        .record(z.string())
+        .optional()
+        .describe("只传要改的色键：background / surface / text / textMuted / primary / secondary / accent，值是 #RRGGBB"),
       font: z
         .object({ heading: z.string().optional(), body: z.string().optional() })
         .optional()
         .describe("字体族，如 { heading: 'Georgia, serif', body: 'Inter, sans-serif' }"),
-      radius: z.number().optional(),
+      radius: z.number().optional().describe("全局圆角（短边百分比，如 2 = 2%）"),
       motion: z
         .number()
         .min(0)
@@ -5242,7 +5264,8 @@ const TOOLS: ToolDef[] = [
   },
   {
     name: "cancel_render",
-    description: "取消正在排队或渲染中的任务。已结束的任务会返回提示，不报错。",
+    description:
+      "取消正在排队或渲染中的任务。taskId 来自 render_video / render_preview_clip 的回执或 get_render_status 的任务列表。已结束的任务会返回提示，不报错。",
     shape: { taskId: z.string() },
     run: async (a) => {
       try {
@@ -5695,21 +5718,22 @@ const TOOLS: ToolDef[] = [
     name: "update_element",
     description:
       "修改场景里的自由元素：位置、尺寸、旋转、透明度、颜色/背景色、文字、图层、场景内时间、入出场特效；音频元素还能换音源、调音量。用户刚放进去的元素也能改，改完用户界面会实时更新。参数是平铺字段（直接给 opacity:0.5）。\n" +
-      "分清：内置版式场景里的元素用本工具；freeform 自由画布场景的元素用 update_freeform_element（patch 包裹式）。",
+      "分清：内置版式场景里的元素用本工具；freeform 自由画布场景的元素用 update_freeform_element（patch 包裹式）。\n" +
+      "字段含义与 add_element 的 shape 一一对应（那里有每个字段的说明），这里只列名字；只传要改的，其余不动。误改可 restore_rev 回滚。",
     shape: {
       projectId: z.string().optional().describe("要操作的工程 id，不传 = 当前默认工程（list_projects 查）"),
       sceneId: z.string().describe("元素所在场景"),
       elementId: z.string().describe("元素 id（get_project 里能看到）"),
-      name: z.string().optional(),
-      x: z.number().optional(),
-      y: z.number().optional(),
-      size: z.number().optional(),
-      rotate: z.number().optional(),
-      scale: z.number().optional(),
-      opacity: z.number().optional(),
-      z: z.number().optional(),
-      fill: z.string().optional(),
-      text: z.string().optional(),
+      name: z.string().optional().describe("图层名（改名字方便后续指认）"),
+      x: z.number().optional().describe("中心 X（画面宽度百分比，同 add_element）"),
+      y: z.number().optional().describe("中心 Y（画面高度百分比，同 add_element）"),
+      size: z.number().optional().describe("短边百分比：图形是宽度，文字是字号"),
+      rotate: z.number().optional().describe("旋转角度（度）"),
+      scale: z.number().optional().describe("整体缩放倍数"),
+      opacity: z.number().optional().describe("不透明度 0–1"),
+      z: z.number().optional().describe("层级，越大越靠前"),
+      fill: z.string().optional().describe("颜色，如 #C6F24E"),
+      text: z.string().optional().describe("文字内容（文字元素）"),
       svg: z.string().optional().describe("换矢量图形的内部标记（不同造型不用删了重加）"),
       viewBox: z.string().optional().describe("配合 svg，默认 0 0 24 24"),
       stroke: z.boolean().optional().describe("svg 用描边还是填充"),
@@ -5902,7 +5926,8 @@ const TOOLS: ToolDef[] = [
   },
   {
     name: "remove_element",
-    description: "删除场景里的自由元素。模板元素不能删，这个方法只作用于自由元素层。",
+    description:
+      "删除场景里的自由元素。elementId 见 get_project 的 elements 列表。模板/版式自带的元素删不掉（会提示）；删错可 restore_rev 回滚。",
     shape: {
       projectId: z.string().optional().describe("要操作的工程 id，不传 = 当前默认工程（list_projects 查）"),
       sceneId: z.string(),
@@ -6214,7 +6239,7 @@ const TOOLS: ToolDef[] = [
       "只读诊断：场景/时长/文案/音频/字幕/素材/画幅的潜在问题，返回清单（不改工程）。交付前或每轮修改后跑一次，按提示修。\n" +
       "画幅相关的检查（安全区 / 竖屏构图 / 字幕距底）默认按 brief 里的画幅挑；多画幅工程只查交付那一版，要查另一版传 format。",
     shape: {
-      projectId: z.string().optional(),
+      projectId: z.string().optional().describe("要体检的工程 id，不传 = 当前默认工程"),
       format: z.string().optional().describe("按哪个画幅做画幅体检（formats 里的 key）；不传按 brief.aspect，再退到工程第一个画幅"),
     },
     run: async (a) => {
