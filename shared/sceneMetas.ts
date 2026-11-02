@@ -1914,7 +1914,6 @@ export const SCENE_METAS: SceneMeta[] = [
   diagonalsplitMeta,
   frameinframeMeta,
   layeredMeta,
-  scene3dMeta,
 ];
 
 export const getMeta = (type: string): SceneMeta | undefined =>
@@ -2151,4 +2150,162 @@ export function normalizeProps(type: string, props: Record<string, unknown>) {
     }
   }
   return out;
+}
+
+/* ─────────────────────── 单类型字段全展开（给 agent 的深表） ─────────────────────── */
+
+/**
+ * 比 `FieldDesc` 更深一层的字段描述：对象展开子字段、数组展开元素形状、
+ * 判别联合展开每个变体。
+ *
+ * 为什么需要它：`describeFields` 到 `object` 就停了，`graph` 只露一行说明 ——
+ * 而 agent 真正要的是 `nodes[].geometry.type=sphere` 之后能填哪些键。
+ * 那批键以前只能靠读源码拿到，实测就是这样：agent 为了搞清 3D 场景图，
+ * 去翻了 3200 行 TS。字段表能自解释，它就不用读源码。
+ */
+export type DeepField = {
+  key: string;
+  kind: "text" | "number" | "boolean" | "enum" | "array" | "object" | "tuple" | "literal" | "union";
+  label: string;
+  required?: boolean;
+  default?: unknown;
+  options?: string[];
+  numMin?: number;
+  numMax?: number;
+  numInt?: boolean;
+  minItems?: number;
+  maxItems?: number;
+  /** object：子字段 */
+  children?: DeepField[];
+  /** array：元素形状 */
+  itemShape?: DeepField[];
+  /** tuple 的元素个数 */
+  tupleLen?: number;
+  /** 判别联合：每个变体一组字段（key = 判别值，如 sphere / box） */
+  variants?: { label: string; fields: DeepField[] }[];
+};
+
+const unwrap = (raw: z.ZodTypeAny): z.ZodTypeAny => {
+  let node = raw;
+  for (let i = 0; i < 6; i++) {
+    if (node instanceof z.ZodDefault) node = node._def.innerType;
+    else if (node instanceof z.ZodOptional) node = node._def.innerType;
+    else if (node instanceof z.ZodNullable) node = node._def.innerType;
+    else if (node instanceof z.ZodEffects) node = node._def.schema;
+    else break;
+  }
+  return node;
+};
+
+export function describeFieldsDeep(schema: z.ZodTypeAny, depth = 5): DeepField[] {
+  const node = unwrap(schema);
+  if (!(node instanceof z.ZodObject) || depth < 0) return [];
+  return Object.entries(node.shape).map(([key, raw]) => deepField(key, raw as z.ZodTypeAny, depth));
+}
+
+function deepField(key: string, raw: z.ZodTypeAny, depth: number): DeepField {
+  // 有默认值就不算必填（zod 的 ZodDefault 不是 Optional，但 agent 理解为"可以不传"才对）
+  const required = !(raw instanceof z.ZodOptional) && !(raw instanceof z.ZodDefault);
+  let def: unknown;
+  if (raw instanceof z.ZodDefault) def = raw._def.defaultValue();
+  const node = unwrap(raw);
+  const desc = raw.description ?? node.description ?? "";
+  const base = { key, label: desc, required, default: def } as DeepField;
+
+  if (node instanceof z.ZodEnum) return { ...base, kind: "enum", options: node.options as string[] };
+  if (node instanceof z.ZodLiteral) return { ...base, kind: "literal", options: [String(node.value)] };
+  if (node instanceof z.ZodNumber) {
+    const checks = (node._def.checks ?? []) as Array<{ kind: string; value?: number }>;
+    const out: DeepField = { ...base, kind: "number" };
+    for (const c of checks) {
+      if (c.kind === "min") out.numMin = c.value;
+      else if (c.kind === "max") out.numMax = c.value;
+      else if (c.kind === "int") out.numInt = true;
+    }
+    return out;
+  }
+  if (node instanceof z.ZodBoolean) return { ...base, kind: "boolean" };
+  if (node instanceof z.ZodArray) {
+    const el = unwrap(node.element as z.ZodTypeAny);
+    return {
+      ...base,
+      kind: "array",
+      itemShape: el instanceof z.ZodObject && depth > 0 ? describeFieldsDeep(el, depth - 1) : undefined,
+      minItems: node._def.minLength?.value,
+      maxItems: node._def.maxLength?.value,
+    };
+  }
+  if (node instanceof z.ZodTuple) {
+    return { ...base, kind: "tuple", tupleLen: (node._def.items as unknown[]).length };
+  }
+  if (node instanceof z.ZodDiscriminatedUnion) {
+    const variants = (node._def.options as z.ZodObject<z.ZodRawShape>[]).map((opt) => {
+      const fields = depth > 0 ? describeFieldsDeep(opt, depth - 1) : [];
+      const disk = fields.find((f) => f.kind === "literal");
+      return { label: disk?.options?.[0] ?? "?", fields: fields.filter((f) => f !== disk) };
+    });
+    return { ...base, kind: "union", variants };
+  }
+  if (node instanceof z.ZodObject) {
+    return { ...base, kind: "object", children: depth > 0 ? describeFieldsDeep(node, depth - 1) : undefined };
+  }
+  if (node instanceof z.ZodUnion || node instanceof z.ZodRecord || node instanceof z.ZodAny) {
+    return { ...base, kind: "object" };
+  }
+  return { ...base, kind: "text" };
+}
+
+/** 把 DeepField 渲染成可读的缩进字段表（get/list 工具直接用这个） */
+export function deepFieldsToText(fields: DeepField[], indent = 0): string {
+  const pad = "  ".repeat(indent);
+  const lines: string[] = [];
+  for (const f of fields) {
+    const bits: string[] = [];
+    if (f.kind === "enum") bits.push(`enum(${f.options?.join("|")})`);
+    else if (f.kind === "literal") bits.push(`固定值 ${f.options?.[0]}`);
+    else if (f.kind === "number") {
+      const range =
+        f.numMin != null && f.numMax != null
+          ? `(${f.numMin}–${f.numMax})`
+          : f.numMin != null
+            ? `(≥${f.numMin})`
+            : f.numMax != null
+              ? `(≤${f.numMax})`
+              : "";
+      bits.push(`number${range}${f.numInt ? " 整数" : ""}`);
+    } else if (f.kind === "array") {
+      const cap =
+        f.minItems != null || f.maxItems != null ? `(${f.minItems ?? 0}–${f.maxItems ?? "∞"} 项)` : "";
+      bits.push(`array${cap}`);
+    } else bits.push(f.kind === "tuple" ? `tuple[${f.tupleLen ?? 2} 个数字]` : f.kind);
+    if (f.default !== undefined && f.kind !== "object" && f.kind !== "array" && f.kind !== "union") {
+      bits.push(`默认=${JSON.stringify(f.default)}`);
+    }
+    if (f.required && f.kind !== "object") bits.push("必填");
+    lines.push(`${pad}- ${f.key} ${bits.join(" ")}${f.label && f.label !== f.key ? ` — ${f.label}` : ""}`);
+    if (f.children?.length) lines.push(deepFieldsToText(f.children, indent + 1));
+    if (f.itemShape?.length) {
+      lines.push(`${pad}  └ 元素形状：`);
+      lines.push(deepFieldsToText(f.itemShape, indent + 2));
+    }
+    if (f.variants?.length) {
+      for (const v of f.variants) {
+        lines.push(`${pad}  · ${v.label}:`);
+        lines.push(deepFieldsToText(v.fields, indent + 2));
+      }
+    }
+  }
+  return lines.join("\n");
+}
+
+/** 单个场景类型的完整字段表（含嵌套与几何体变体），工具与文档共用 */
+export function describeTypeDeep(type: string): string | null {
+  const meta = getMeta(type);
+  if (!meta) return null;
+  const d = meta.duration;
+  const head = [
+    `${type}（${meta.name}）· ${meta.summary}`,
+    `时长：默认 ${d.default} 帧，${d.min}–${d.max}`,
+  ];
+  return [...head, "", "字段：", deepFieldsToText(describeFieldsDeep(meta.schema))].join("\n");
 }

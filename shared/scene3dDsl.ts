@@ -130,21 +130,23 @@ const ring = z.object({
   outerRadius: z.number().positive().default(0.6),
 });
 
-export const geometrySchema = z.discriminatedUnion("type", [
-  box,
-  sphere,
-  cylinder,
-  cone,
-  torus,
-  torusKnot,
-  plane,
-  capsule,
-  icosahedron,
-  dodecahedron,
-  octahedron,
-  ring,
-  dashRing,
-]);
+export const geometrySchema = z
+  .discriminatedUnion("type", [
+    box,
+    sphere,
+    cylinder,
+    cone,
+    torus,
+    torusKnot,
+    plane,
+    capsule,
+    icosahedron,
+    dodecahedron,
+    octahedron,
+    ring,
+    dashRing,
+  ])
+  .describe("几何体（必填）：type 决定可用字段——sphere{radius,segments}、ring{innerRadius,outerRadius}、dashRing{radius,count,duty} 等，全表见 list_scene_types(type:\"scene3d\")");
 
 /* ────────────────────────────── 材质白名单 ────────────────────────────── */
 

@@ -139,3 +139,10 @@ test("跑马灯的默认值能被自己的 schema 接住，且编辑器可增删
   const rows = fields.find((f) => f.key === "rows")!;
   assert.equal(rows.itemKind, "string");
 });
+
+test("场景类型不能重复注册（重复会在选择器里出现两张一样的卡，list_scene_types 也会列两遍）", () => {
+  const seen = new Map<string, number>();
+  for (const m of SCENE_METAS) seen.set(m.type, (seen.get(m.type) ?? 0) + 1);
+  const dup = [...seen].filter(([, n]) => n > 1).map(([t, n]) => `${t}×${n}`);
+  assert.equal(dup.length, 0, `重复注册：${dup.join("、")}`);
+});
