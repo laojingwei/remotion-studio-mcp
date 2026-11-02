@@ -1736,7 +1736,10 @@ export const scene3dMeta: SceneMeta = {
           "键是 3D 标量：posX/posY/posZ/rotX/rotY/rotZ/scale/opacity。" +
           "父节点用 parent 引用另一个节点的 id；节点上限 48 个。" +
           "要真实光照（比如太阳照亮地球）就加 lights —— 给了它，整套预设打光会撤掉，" +
-          "明暗完全由你给的灯决定；point 光放在太阳位置最常用",
+          "明暗完全由你给的灯决定；point 光放在太阳位置最常用。" +
+          "要贴图就给节点的 material 加 map:{src:\"/assets/xxx\"}（先 upload_asset，PNG 自带透明可做镂空），" +
+          "支持 repeat/offset/rotation/center；有 map 时 color 不生效；" +
+          "icosahedron/dodecahedron/octahedron 不能贴图（UV 是碎面），要低多边形风格用 sphere+flatShading",
       ),
   }),
   defaultProps: {

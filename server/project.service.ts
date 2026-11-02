@@ -1,6 +1,7 @@
 import type { Project } from "../shared/schema";
 import { applyOps, type Op, type OpResult } from "../shared/ops";
 import { deleteProjectDir, listProjectIds, listSnapshots, projectFileTimes, readProject, readSnapshot, writeLastProjectId, writeProject } from "./store";
+import { assertTextureAssets } from "./texture-asset-check";
 
 type Listener = (event: BroadcastEvent) => void;
 
@@ -137,6 +138,8 @@ class ProjectService {
       throw err;
     }
 
+    // 贴图素材校验（存在性/格式/体积/尺寸）在写库前挡——渲染端加载失败只会静默回退，agent 看不到
+    assertTextureAssets(ops);
     const result = applyOps(current, ops);
     this.cache.set(id, result.project);
     writeProject(result.project);

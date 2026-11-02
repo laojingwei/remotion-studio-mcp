@@ -19,6 +19,7 @@ import { z } from "zod";
  */
 
 const vec3 = z.tuple([z.number(), z.number(), z.number()]);
+const vec2 = z.tuple([z.number(), z.number()]);
 const deg = z.number().describe("角度（度，不是弧度）");
 
 /* ────────────────────────────── 几何体白名单 ────────────────────────────── */
@@ -174,6 +175,33 @@ export const materialSchema = z.object({
   flatShading: z.boolean().default(false).describe("平面着色：多面体想棱角分明时开"),
   opacity: z.number().min(0).max(1).default(1),
   body: bodyTone,
+  /**
+   * 基础色贴图（外部图片）。只开这一个槽位：normalMap 要烘焙素材（agent 产不出来），
+   * alphaMap 的镂空需求用带透明通道的 PNG 贴 map 就能覆盖（渲染层自动允许 transparent）。
+   *
+   * 有 map 时 color 强制白色、body 失效 —— three 里 map 与 color 是相乘关系，
+   * body 的降饱和压暗会把整张贴图染成脏色（果冻球问题的翻版）。
+   */
+  map: z
+    .object({
+      src: z
+        .string()
+        .min(1)
+        .describe("贴图地址：/assets/xxx（先 upload_asset）、https:// 或 data:；PNG 自带透明可做镂空"),
+      repeat: z
+        .tuple([z.number().positive(), z.number().positive()])
+        .default([1, 1])
+        .describe("UV 平铺次数，[2,1] = 横向重复 2 次"),
+      offset: vec2.default([0, 0]).describe("UV 偏移，0–1 为一个完整周期"),
+      rotation: deg.default(0).describe("UV 旋转（度），绕 center 转"),
+      center: vec2.default([0.5, 0.5]).describe("UV 旋转中心，[0.5,0.5] 即贴图中心"),
+    })
+    .optional()
+    .describe(
+      "基础色贴图。贴上去之后 color 不再生效（材质按白底 × 贴图算）；" +
+        "icosahedron/dodecahedron/octahedron 的 UV 是球面投影碎面，不能贴图（会整报错），" +
+        "要低多边形风格用 sphere + flatShading + 低 segments",
+    ),
 });
 
 /* ────────────────────────────── 关键帧 ────────────────────────────── */
@@ -356,6 +384,36 @@ export function dslIssues(spec: Scene3DDsl): string[] {
         issues.push(`节点「${n.id}」有一段关键帧只有 from 没有 to，这段动画不会生效`);
       }
       if (a.at[1] < a.at[0]) issues.push(`节点「${n.id}」的关键帧 at 写成 [${a.at.join(", ")}]，end 小于 start`);
+    }
+  }
+  /**
+   * 贴图的两条结构校验（zod 表达不了的）：
+   *
+   * 1. 三个多面体的 UV 是把顶点三维坐标**球面投影**成二维得到的——贴图必然碎成
+   *    三角形、极点挤压成针尖、接缝断裂，而且**不随任何参数变好**。agent 看不到
+   *    渲染结果，只会盲试烧渲染轮次，所以必须在这里拦死，并把需求引到能做对的
+   *    路径上（sphere + flatShading + 低 segments，UV 是正经经纬展开）。
+   * 2. src 的形态白名单：站内素材是 /assets/ 前缀（staticFile 解析），http(s)/data
+   *    原样用——和 image/iso/freeform 的 resolveSrc 约定一致。相对路径和 ../
+   *    在渲染端要么 404 要么越界，提前报出来。
+   */
+  const POLY = new Set(["icosahedron", "dodecahedron", "octahedron"]);
+  for (const n of spec.nodes) {
+    const map = n.material?.map;
+    if (!map) continue;
+    if (POLY.has(n.geometry.type)) {
+      issues.push(
+        `节点「${n.id}」是 ${n.geometry.type}，它的 UV 是球面投影碎面，贴图会撕裂——` +
+          `不能贴图。要低多边形地球风格：用 sphere + flatShading + 低 segments（UV 是正规的）`,
+      );
+    }
+    const src = map.src;
+    const ok =
+      /^(https?:)?\/\//.test(src) || src.startsWith("data:") || /^\/assets\//.test(src);
+    if (!ok) {
+      issues.push(
+        `节点「${n.id}」的贴图 src「${src}」不合法（可用：/assets/xxx 先 upload_asset、https://、data:）`,
+      );
     }
   }
   return issues;

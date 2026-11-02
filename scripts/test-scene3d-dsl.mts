@@ -197,6 +197,78 @@ test("灯的 type 写错时把可选值列出来", () => {
   assert.ok(msg.includes("ambient") && msg.includes("point"), msg);
 });
 
+console.log("[scene3d dsl] 材质贴图（map）");
+
+test("map 默认值补齐：不写 repeat/offset/rotation/center 也要能跑", () => {
+  const p = normalizeProps("scene3d", {
+    graph: {
+      nodes: [
+        { id: "a", geometry: { type: "plane" }, material: { map: { src: "/assets/x.png" } } },
+      ],
+    },
+  }) as { graph: { nodes: Array<{ material: { map: Record<string, unknown> } }> } };
+  const m = p.graph.nodes[0].material.map;
+  assert.deepEqual(m.repeat, [1, 1]);
+  assert.deepEqual(m.offset, [0, 0]);
+  assert.equal(m.rotation, 0);
+  assert.deepEqual(m.center, [0.5, 0.5]);
+});
+
+test("三种合法 src 形态都放行：/assets/、https、data:", () => {
+  for (const src of ["/assets/x.png", "https://cdn.example.com/x.jpg", "data:image/png;base64,AAAA"]) {
+    const p = normalizeProps("scene3d", {
+      graph: {
+        nodes: [{ id: "a", geometry: { type: "plane" }, material: { map: { src } } }],
+      },
+    }) as { graph: { nodes: Array<{ material: { map: { src: string } } }> } };
+    assert.equal(p.graph.nodes[0].material.map.src, src);
+  }
+});
+
+test("多面体 + map 直接报错，且文案指路 sphere+flatShading", () => {
+  for (const type of ["icosahedron", "dodecahedron", "octahedron"]) {
+    const msg = errOf(
+      graphOf({
+        nodes: [{ id: "a", geometry: { type }, material: { map: { src: "/assets/x.png" } } }],
+      }),
+    );
+    assert.ok(msg.includes("sphere") && msg.includes("flatShading"), `${type}: ${msg}`);
+  }
+  // 同样的 map 放到 sphere 上必须能过——报错只拦 UV 碎的几何体，不拦贴图本身
+  const p = normalizeProps("scene3d", {
+    graph: {
+      nodes: [{ id: "a", geometry: { type: "sphere" }, material: { map: { src: "/assets/x.png" } } }],
+    },
+  });
+  assert.ok(p, "sphere + map 不应报错");
+});
+
+test("src 写成相对路径/越界路径时报错，并把可用形态列出来", () => {
+  for (const src of ["assets/x.png", "../secret.png", "./x.png"]) {
+    const msg = errOf(
+      graphOf({
+        nodes: [{ id: "a", geometry: { type: "plane" }, material: { map: { src } } }],
+      }),
+    );
+    assert.ok(msg.includes("/assets/"), `${src}: ${msg}`);
+  }
+});
+
+test("repeat 必须 > 0（0 和负数是「贴不出来」而不是「不平铺」，直接报错）", () => {
+  const msg = errOf(
+    graphOf({
+      nodes: [
+        {
+          id: "a",
+          geometry: { type: "plane" },
+          material: { map: { src: "/assets/x.png", repeat: [0, 1] } },
+        },
+      ],
+    }),
+  );
+  assert.ok(msg.length > 0, "repeat=0 应当报错");
+});
+
 console.log("");
 if (failures.length) {
   console.log(`✗ ${failures.length} 个用例失败：${failures.join("、")}`);

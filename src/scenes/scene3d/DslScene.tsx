@@ -3,6 +3,7 @@ import * as THREE from "three";
 import type { Theme } from "../../../shared/schema";
 import type { DslNode, Scene3DDsl } from "../../../shared/scene3dDsl";
 import { glowTexture, hash01, metalBody, resolveColor, shade } from "./color";
+import { useDslTexture } from "./texture";
 
 /**
  * 场景图 DSL 的渲染器（M2）。
@@ -155,25 +156,36 @@ const geometryOf = (g: DslNode["geometry"]): React.ReactElement => {
  * 这是整套东西的"画质下限"——不然 agent 写 `color: "primary"` + `metalness: 1`
  * 就必然得到一颗果冻球，而它没法从渲染结果里看出问题在哪。
  * 想要原始色值（自发光小球、纯色剪影）就传 `body: false`。
+ *
+ * **贴图规则**：map 存在时 color 强制白色、body 失效。three 里 map 与 color 是
+ * 相乘关系，body 的降饱和压暗会把整张贴图染成脏色——这是果冻球问题的翻版。
+ * metalness/roughness 照常生效（贴图金属是合理需求）。
+ * transparent 在有 map 时放宽为 true：带 alpha 通道的 PNG（镂空 Logo、剪影）
+ * 必须开 transparent 才不渲成实心块；对不透明的 JPG 无视觉影响，只是进了
+ * 透明渲染队列——节点数 ≤48 的场景里排序开销可忽略。
  */
 const materialOf = (
   node: DslNode,
   theme: Theme,
   opacity: number,
+  map?: THREE.Texture | null,
 ): React.ReactElement => {
   const m = node.material;
-  const raw = resolveColor(m?.color ?? "accent", theme);
-  const color = m?.body === false ? raw : metalBody(raw, 0.3, 0.18);
+  const hasMap = Boolean(map);
+  const raw = hasMap ? "#ffffff" : resolveColor(m?.color ?? "accent", theme);
+  const color = hasMap ? "#ffffff" : m?.body === false ? raw : metalBody(raw, 0.3, 0.18);
   const emissive = m?.emissive ? resolveColor(m.emissive, theme) : undefined;
   const op = (m?.opacity ?? 1) * opacity;
-  const transparent = op < 1;
+  const transparent = op < 1 || hasMap;
   const side =
     m?.side === "double" ? THREE.DoubleSide : m?.side === "back" ? THREE.BackSide : THREE.FrontSide;
 
   if (m?.type === "basic") {
     return (
       <meshBasicMaterial
+        key={map ? "map" : "nomap"}
         color={raw}
+        map={map ?? undefined}
         wireframe={m.wireframe}
         side={side}
         transparent={transparent}
@@ -184,7 +196,9 @@ const materialOf = (
   if (m?.type === "physical") {
     return (
       <meshPhysicalMaterial
+        key={map ? "map" : "nomap"}
         color={color}
+        map={map ?? undefined}
         metalness={m.metalness}
         roughness={m.roughness}
         transmission={m.transmission}
@@ -201,7 +215,9 @@ const materialOf = (
   }
   return (
     <meshStandardMaterial
+      key={map ? "map" : "nomap"}
       color={color}
+      map={map ?? undefined}
       metalness={m?.metalness ?? 0.4}
       roughness={m?.roughness ?? 0.35}
       emissive={emissive}
@@ -223,6 +239,8 @@ const NodeView: React.FC<{
   theme: Theme;
 }> = ({ node, childrenOf, frame, theme }) => {
   const tr = evalNode(node, frame);
+  // hook 必须无条件调用（不能挂在 if 上）：没配 map 时返回 null，材质走纯色
+  const map = useDslTexture(node.material?.map);
   const kids = childrenOf.get(node.id) ?? [];
   /*
    * **弧度**：schema 里 rotX/rotY/rotZ 写的是度（人写"23.5 度"而不是"0.41 弧度"），
@@ -235,7 +253,7 @@ const NodeView: React.FC<{
     <group position={tr.pos} rotation={rotRad} scale={tr.scale}>
       <mesh>
         {geometryOf(node.geometry)}
-        {materialOf(node, theme, tr.opacity)}
+        {materialOf(node, theme, tr.opacity, map)}
       </mesh>
       {kids.map((c) => (
         <NodeView key={c.id} node={c} childrenOf={childrenOf} frame={frame} theme={theme} />

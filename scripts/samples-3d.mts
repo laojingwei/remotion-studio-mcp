@@ -11,6 +11,8 @@ import { renderStill, selectComposition } from "@remotion/renderer";
 import { createSeedProject } from "../shared/ops.ts";
 import { getMeta, normalizeProps } from "../shared/sceneMetas.ts";
 import { DEFAULT_THEME } from "../shared/schema.ts";
+import { syncPublicToBundle } from "../server/render.service.ts";
+// 二分实验用：完整 data URL，分辨「路径 404」还是「材质接线」问题
 
 const OUT = path.resolve("docs/threejs-samples");
 const W = 1280;
@@ -254,6 +256,75 @@ const CASES: Case[] = [
   { preset: "orbit-core", props: { graph: GRAPH_MOLECULE }, tag: "24-dsl-molecule" },
   { preset: "orbit-core", props: { graph: GRAPH_MACHINE }, tag: "25-dsl-machine" },
   { preset: "orbit-core", props: { graph: GRAPH_SCULPT }, tag: "26-dsl-sculpt" },
+  /* A 路线贴图：真地球（sphere equirect UV）+ 棋盘（plane repeat wrapping）+ 云层（PNG alpha 镂空） */
+  {
+    preset: "orbit-core",
+    tag: "27-map-sphere",
+    props: {
+      graph: {
+        camera: { position: [0, 0.6, 3.4], target: [0, 0, 0], fov: 40 },
+        lights: [{ type: "directional", position: [3, 1.5, 3], intensity: 2.8 }],
+        nodes: [
+          {
+            id: "earth",
+            geometry: { type: "sphere", radius: 1.1, segments: 48 },
+            // 贴了 map，color/body 自动失效（材质按白底 × 贴图算）
+            material: {
+              map: { src: "/assets/library/earth_atmos.jpg" },
+              metalness: 0.05,
+              roughness: 0.85,
+            },
+          },
+        ],
+      },
+    },
+  },
+  {
+    preset: "orbit-core",
+    tag: "28-map-plane-repeat",
+    props: {
+      graph: {
+        camera: { position: [0, 1.4, 3.2], target: [0, 0, 0], fov: 40 },
+        lights: [{ type: "directional", position: [2, 3, 4], intensity: 2.6 }],
+        nodes: [
+          {
+            id: "floor",
+            geometry: { type: "plane", width: 4, height: 3 },
+            material: {
+              map: { src: "/assets/scene3d-map-test-checker.png", repeat: [3, 2] },
+              roughness: 0.9,
+              side: "double",
+            },
+            transform: { rotation: [-62, 0, 0] },
+          },
+        ],
+      },
+    },
+  },
+  {
+    // 云层球套在地球外：两张贴图、两个节点；云层 PNG 带 alpha，
+    // 有 map 时材质自动 transparent —— 这张图本身就是透明规则生效的证据
+    preset: "orbit-core",
+    tag: "29-map-earth-clouds",
+    props: {
+      graph: {
+        camera: { position: [0, 0.6, 3.4], target: [0, 0, 0], fov: 40 },
+        lights: [{ type: "directional", position: [3, 1.5, 3], intensity: 3 }],
+        nodes: [
+          {
+            id: "earth",
+            geometry: { type: "sphere", radius: 1.05, segments: 48 },
+            material: { map: { src: "/assets/library/earth_atmos.jpg" }, roughness: 0.85 },
+          },
+          {
+            id: "clouds",
+            geometry: { type: "sphere", radius: 1.12, segments: 48 },
+            material: { map: { src: "/assets/library/earth_clouds.png" }, roughness: 1 },
+          },
+        ],
+      },
+    },
+  },
 ];
 
 
@@ -310,6 +381,9 @@ async function main() {
   console.log(`▸ 浏览器：${browserPath ?? "（未找到，将触发下载）"} [${chromeMode}]`);
   console.log("▸ 打包中…");
   const serveUrl = await bundle({ entryPoint: path.resolve("src/index.ts") });
+  // bundle() 本身不拷 public/ —— 渲染服务那边靠 syncPublicToBundle 补，
+  // 样张这边 bundle 完也补一次，否则 scene3d 的贴图（staticFile）会 404 静默回退纯色
+  syncPublicToBundle(serveUrl);
   console.log(`✓ 打包完成 ${((Date.now() - t0) / 1000).toFixed(1)}s`);
 
   for (const c of cases) {

@@ -46,6 +46,8 @@ export const MOTION_SCENE_TYPES = new Set([
   "wave",
   "slot",
   "matrix",
+  // M3：3D 场景当氛围层（BACKDROP 里有它，MOTION 漏了同步——子集校验一直挂着）
+  "scene3d",
 ]);
 
 export const isMotionScene = (type?: string): boolean =>
