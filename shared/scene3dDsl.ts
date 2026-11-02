@@ -98,6 +98,27 @@ const octahedron = z.object({
   detail: z.number().int().min(0).max(3).default(0),
 });
 
+/**
+ * 虚线圆环：用来画行星轨道。
+ *
+ * 为什么不用 torus：torus 是实心管，画轨道会变成"甜甜圈"，而且它绕不出虚线。
+ * 这里直接生成一圈**扁平虚线段**（每段一个四边形，全部合进一个 geometry），
+ * 一次 draw call、宽度可调、天然落在 XZ 平面 —— 挂到带倾角的枢轴节点下，
+ * 环面就会自动跟行星轨道同倾角。
+ */
+const dashRing = z.object({
+  type: z.literal("dashRing"),
+  radius: z.number().positive().default(4).describe("轨道半径"),
+  width: z.number().positive().default(0.03).describe("虚线粗细（世界单位）"),
+  count: z.number().int().min(8).max(400).default(72).describe("一圈里有多少段虚线"),
+  duty: z
+    .number()
+    .min(0.05)
+    .max(0.95)
+    .default(0.55)
+    .describe("实线占每段的比例：0.5≈标准虚线，0.15≈细密点线"),
+});
+
 const ring = z.object({
   type: z.literal("ring"),
   /**
@@ -122,6 +143,7 @@ export const geometrySchema = z.discriminatedUnion("type", [
   dodecahedron,
   octahedron,
   ring,
+  dashRing,
 ]);
 
 /* ────────────────────────────── 材质白名单 ────────────────────────────── */
@@ -308,6 +330,55 @@ export const dslSchema = z.object({
         .object({ degPerSec: z.number().default(0) })
         .optional()
         .describe("绕 target 匀速环绕（度/秒），0=静止。只转相机，不动物体"),
+      /**
+       * 相机关键帧：让相机自己飞（推拉、摇移、对准某颗行星）。
+       * 与节点动画同一套语法：{ at:[起,止], from:{...}, to:{...}, ease }。
+       * 键：posX/posY/posZ = 相机位置；targetX/Y/Z = 看向的点；fov = 视场角。
+       * 同一 key 的多段必须首尾相接、不重叠（边界帧 end = 下一段 start − 1）。
+       */
+      anim: z
+        .array(
+          z.object({
+            at: z.tuple([z.number(), z.number()]),
+            from: z
+              .object({
+                posX: z.number().optional(),
+                posY: z.number().optional(),
+                posZ: z.number().optional(),
+                targetX: z.number().optional(),
+                targetY: z.number().optional(),
+                targetZ: z.number().optional(),
+                fov: z.number().optional(),
+              })
+              .optional(),
+            to: z
+              .object({
+                posX: z.number().optional(),
+                posY: z.number().optional(),
+                posZ: z.number().optional(),
+                targetX: z.number().optional(),
+                targetY: z.number().optional(),
+                targetZ: z.number().optional(),
+                fov: z.number().optional(),
+              })
+              .optional(),
+            ease: z.enum(["linear", "easeInOut", "easeOut", "easeIn"]).default("easeInOut"),
+            /**
+             * 跟随某个节点：这一段的 posX/Y/Z 与 targetX/Y/Z 全部变成**相对该节点**的偏移。
+             *
+             * 行星一直在公转，用绝对坐标写"贴在地球旁边"的镜头，过几帧地球就跑出画了。
+             * 加了 follow，相机就钉在节点上，节点动到哪儿镜头跟到哪儿；推拉环绕仍然靠
+             * 段内的 from→to。切换 follow 的帧必须让前后两段的绝对位置对齐，否则会跳。
+             */
+            follow: z
+              .string()
+              .optional()
+              .describe("跟随节点 id：本段的 pos/target 解释为相对该节点世界坐标的偏移"),
+          }),
+        )
+        .max(240)
+        .optional()
+        .describe("相机运镜关键帧（位置/看向点/视场角），用于推拉摇移与对准某颗行星"),
     })
     .optional(),
   nodes: z.array(nodeSchema).min(1).max(48).describe("节点数组，扁平结构 + parent 引用"),

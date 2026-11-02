@@ -52,6 +52,7 @@ import {
 } from "./render.service";
 import { probeMany } from "./media.service";
 import { DATA_DIR, ensureSeed, orphanOutputProjects, PUBLIC_DIR, readLastProjectId, readUiPrefs, writeProject, writeUiPrefs } from "./store";
+import { ensureDemo3D, hasDemo3DSeed, installDemo3D, isDemo3D } from "./demo3d.service";
 import { analyzeBeats } from "./audio-analysis.service";
 import { measureLoudness } from "./loudness.service";
 import { buildCompressCurve, summarizeCurve } from "../shared/audio";
@@ -74,6 +75,7 @@ import {
 // 先修链接再建目录：data/public/out 可能是迁到别的盘上的链接，断链时 ensureDirs 会建出实体目录
 for (const w of repairWorkspace()) console.warn(`[workspace] ${w}`);
 ensureSeed();
+ensureDemo3D();
 
 // 对账：out/ 里有、data/ 里没有的工程 —— 通常是另一个实例/另一份数据目录写出来的。
 // 不说话的话，agent 会以为工程被删了，或者对着错误的工程继续改（复盘问题 18）
@@ -631,8 +633,8 @@ app.put("/api/ui-prefs", async (c) => {
 app.delete("/api/projects/:id", (c) => {
   const id = c.req.param("id");
   // 示例工程只允许重置，不允许删除（否则删掉就再也回不来了）
-  if (id === "demo") {
-    return c.json({ error: "demo 是示例工程，不能删除，只能用「重置 demo」恢复" }, 400);
+  if (id === "demo" || isDemo3D(id)) {
+    return c.json({ error: `${id} 是示例工程，不能删除，只能用「重置」恢复` }, 400);
   }
   try {
     projects.remove(id);
@@ -651,6 +653,22 @@ app.post("/api/projects/demo/reset", (c) => {
   try {
     const seed = createSeedProject("demo");
     const project = projects.replace(seed);
+    return c.json({ project });
+  } catch (err) {
+    return fail(c, err);
+  }
+});
+
+/**
+ * 重置 3D 示例。素材也要一起铺回去：只恢复 project.json 的话，
+ * 用户删掉 public/assets 里的贴图后重置出来还是一堆黑球。
+ */
+app.post("/api/projects/demo3d/reset", (c) => {
+  try {
+    if (!hasDemo3DSeed()) {
+      return c.json({ error: "3D 示例的种子素材缺失（scripts/seeds/demo3d）" }, 400);
+    }
+    const project = projects.replace(installDemo3D());
     return c.json({ project });
   } catch (err) {
     return fail(c, err);

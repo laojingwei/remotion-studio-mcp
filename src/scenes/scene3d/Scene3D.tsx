@@ -2,6 +2,7 @@ import React from "react";
 import * as THREE from "three";
 import { RoomEnvironment } from "three/examples/jsm/environments/RoomEnvironment.js";
 import { ThreeCanvas } from "@remotion/three";
+import { useThree } from "@react-three/fiber";
 import { AbsoluteFill, useCurrentFrame, useVideoConfig } from "remotion";
 import type { Theme } from "../../../shared/schema";
 import { useSceneLayout } from "../../layout/useSceneLayout";
@@ -941,6 +942,28 @@ const GlobeArc: React.FC<{
 
 /* ─────────────────────────── 场景本体 ─────────────────────────── */
 
+/**
+ * 每帧把相机的 position / fov 同步到 three 相机。
+ *
+ * `<ThreeCanvas camera={{...}}>` 的 camera 只在 Canvas 建立那一刻生效；连续渲染视频时
+ * 同一个页面里的 Canvas 不会重建，相机就永远停在"这一段的第一帧"。
+ * 单帧抽图看不出来（每次都是新页面），成片里才会露馅：镜头卡住、主体飞出画面。
+ * 所以必须显式同步。
+ */
+const CameraSync: React.FC<{ pos: [number, number, number]; fov: number }> = ({ pos, fov }) => {
+  const camera = useThree((s) => s.camera);
+  React.useLayoutEffect(() => {
+    camera.position.set(pos[0], pos[1], pos[2]);
+    const pc = camera as THREE.PerspectiveCamera;
+    if (pc.fov !== fov) {
+      pc.fov = fov;
+      pc.updateProjectionMatrix();
+    }
+    camera.updateMatrixWorld();
+  }, [camera, pos[0], pos[1], pos[2], fov]);
+  return null;
+};
+
 export const Scene3DScene: React.FC<Scene3DProps> = ({
   theme,
   preset = "orbit-core",
@@ -989,7 +1012,7 @@ export const Scene3DScene: React.FC<Scene3DProps> = ({
    * DSL 的相机是"相机在 P、看向 T"，渲染时压成内容 group 的变换（见 DslScene.dslCamera）。
    * 没写 camera 时按节点外接半径反算一个能装下的距离，避免"渲出来一片空白"。
    */
-  const dslCam = graph ? dslCamera(graph, t) : null;
+  const dslCam = graph ? dslCamera(graph, t, fps) : null;
   const autoDist = graph ? dslAutoDistance(graph) : 0;
 
   const cam = graph
@@ -1100,6 +1123,7 @@ export const Scene3DScene: React.FC<Scene3DProps> = ({
         style={{ position: "absolute", inset: 0 }}
       >
         {overlay ? null : <color attach="background" args={[c.background]} />}
+        <CameraSync pos={cam.position} fov={cam.fov} />
         {preset === "grid-horizon" || preset === "waveform" ? (
           // 雾是最有效的"远处消隐"：没有它，网格/底板会在画面边缘硬切一条边
           <fog attach="fog" args={[c.background, 7, isPortrait ? 34 : 46]} />
@@ -1207,9 +1231,9 @@ export const Scene3DScene: React.FC<Scene3DProps> = ({
           style={{
             justifyContent: "flex-end",
             alignItems: "center",
-            paddingBottom: h(9),
-            // 三档而不是两档：只在最底下实、中间迅速过渡，才不会把 3D 画面糊掉一大片
-            background: `linear-gradient(to top, ${c.background}F5 0%, ${c.background}D9 26%, ${c.background}00 56%)`,
+            paddingBottom: h(6),
+            // 只在最底部留一道很窄的暗角做文字衬底；不再向上铺开（铺开会挡住 3D 星系）
+            background: `linear-gradient(to top, ${c.background}8C 0%, ${c.background}00 18%)`,
           }}
         >
           {title ? (
@@ -1222,6 +1246,7 @@ export const Scene3DScene: React.FC<Scene3DProps> = ({
                   color: c.text,
                   letterSpacing: "0.01em",
                   textAlign: "center",
+                  textShadow: "0 2px 20px rgba(0,0,0,0.85), 0 1px 4px rgba(0,0,0,0.9)",
                 }}
               >
                 {title}
@@ -1240,6 +1265,7 @@ export const Scene3DScene: React.FC<Scene3DProps> = ({
                   opacity: 0.74,
                   marginTop: h(1.2),
                   textAlign: "center",
+                  textShadow: "0 2px 14px rgba(0,0,0,0.9), 0 1px 3px rgba(0,0,0,0.9)",
                 }}
               >
                 {sub}

@@ -875,7 +875,7 @@ server/              唯一写入口 + 渲染队列 + MCP 代理
   mcp-proxy.ts      stdio 代理（工具调用转发给 HTTP 服务）
   skills/           13 篇技能指南（list_guides / get_guide 读）
 web/                 编辑器：预览 / 属性面板 / 时间轴 / 素材面板 / 详情浮窗
-scripts/             启动 / 出片 / 恢复 demo / 单测 / 端到端验证
+scripts/             启动 / 出片 / 恢复示例（demo、demo3d）/ 单测 / 端到端验证
 data/projects/<id>/  工程文件（可直接 git、可手改）+ history/ 快照 + brief.json
 data/templates/<id>/ 我的模板：template.json + 打包的素材
 data/agent-state.json  当前默认工程指针（跨进程共用，重启接上次的工程）
@@ -902,8 +902,17 @@ out/project-bundles/ 导出的工程包 zip（**不按工程删**，它是交付
 | `data/memory/`、`.workbuddy/memory/` | 本地项目笔记与记忆 |
 
 整个 `data/`、`out/`、`public/` 都不入库：它们在本机可能是**指向别处工作空间的符号链接**，
-而且里面基本都是运行时数据。首次启动时 `store.ensureDirs()` 会自动建目录并 seed 一个
-`demo` 示例工程（**不引用任何素材文件**），所以 clone 下来直接 `npm start` 就能看到东西。
+而且里面基本都是运行时数据。首次启动时 `store.ensureDirs()` 会自动建目录并 seed 两个示例工程：
+
+- `demo`：2D 基础示例（标题 / 要点 / 图表 / 引用 / 结尾），**不引用任何素材文件**；
+- `demo3d`：**3D 太阳系**，40 秒一条长镜头——从地球特写出发，拉开看见月球、推进月面，
+  再甩到木星、土星，最后拉远到海王星，结尾停在全景看行星公转。贴着真实行星半径比、
+  真实轨道倾角与自转速度，八条轨道用虚线画出。
+
+`demo3d` 离不开贴图，所以它的工程文档和十张行星贴图一起放在 `scripts/seeds/demo3d/`，
+启动时铺到 `data/projects/demo3d` 与 `public/assets/projects/demo3d`（素材缺失只会补素材，
+不会覆盖你改过的内容）。两个示例都不可删除，只能在工程菜单里「重置」；
+手工重建跑 `npx tsx scripts/restore-demo3d.mts`。
 
 ---
 

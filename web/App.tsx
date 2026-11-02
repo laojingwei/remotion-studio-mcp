@@ -853,21 +853,21 @@ export default function App() {
                 <span className="menu-meta">勾选要删的文件</span>
               </button>
 
-              {project.id === "demo" ? (
+              {project.id === "demo" || project.id === "demo3d" ? (
                 <button
                   className="menu-item"
                   onClick={() => {
                     askConfirm({
-                      title: "重置 demo 工程？",
-                      message: "示例工程会恢复成初始内容，当前对 demo 的修改会丢失（其他工程不受影响）。",
+                      title: `重置「${project.name}」？`,
+                      message: "示例工程会恢复成初始内容（3D 示例的贴图素材一起还原），当前修改会丢失，其他工程不受影响。",
                       confirmLabel: "重置",
                       onConfirm: () => {
                         setProjectMenu(false);
                         void (async () => {
                           try {
-                            await resetDemoProject();
-                            await useDoc.getState().loadProject("demo");
-                            useDoc.getState().notify("demo 已重置");
+                            await resetDemoProject(project.id);
+                            await useDoc.getState().loadProject(project.id);
+                            useDoc.getState().notify(`${project.name} 已重置`);
                           } catch (err) {
                             useDoc.getState().notify(
                               err instanceof Error ? err.message : "重置失败",
@@ -878,8 +878,8 @@ export default function App() {
                     });
                   }}
                 >
-                  <span>重置 demo 工程</span>
-                  <span className="menu-meta">示例工程不可删除</span>
+                  <span>重置示例工程</span>
+                  <span className="menu-meta">恢复初始内容，不可删除</span>
                 </button>
               ) : (
                 <button

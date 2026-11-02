@@ -90,10 +90,90 @@ export type DslCamera = {
  * `lookAt`，而那属于"命令式改动"，在跳帧渲染下很容易漏帧。把变换压到内容的 group 上，
  * 就是纯函数：同一个 frame 永远同一个姿态，也和 `orbit`（相机绕 target 转）天然等价。
  */
-export const dslCamera = (spec: Scene3DDsl, t: number): DslCamera => {
+export const dslCamera = (spec: Scene3DDsl, t: number, fps = 30): DslCamera => {
   const cam = spec.camera;
   const P = new THREE.Vector3(...(cam?.position ?? [0, 1.6, 6]));
   const T = new THREE.Vector3(...(cam?.target ?? [0, 0, 0]));
+  let fov = cam?.fov ?? 42;
+
+  /*
+   * 相机关键帧（可选）：position / target / fov 随时间插值，实现推拉、摇移、飞向某颗行星。
+   * 与节点动画同一套语义：from 不写就取当前值，to 必须有值才动手；同 key 多段不要重叠。
+   */
+  const camAnims = (cam as
+    | {
+        anim?: Array<{
+          at: [number, number];
+          from?: Record<string, number>;
+          to?: Record<string, number>;
+          ease?: string;
+          follow?: string;
+        }>;
+      }
+    | undefined)?.anim;
+  if (camAnims?.length) {
+    const frame = t * fps;
+    /*
+     * follow：把相机钉在某个节点上。
+     * 需要一个"节点在世界里的位置"求值器 —— 沿 parent 链把变换乘起来，思路和
+     * three 的 Object3D 一致（T * R * S，Euler 用默认 XYZ）。这样相机的相对偏移
+     * 不会因为行星公转而漂掉。
+     */
+    const byId = new Map(spec.nodes.map((n) => [n.id, n]));
+    const worldOf = (id: string): THREE.Vector3 => {
+      const chain: DslNode[] = [];
+      let cur: DslNode | undefined = byId.get(id);
+      let guard = 0;
+      while (cur && guard++ < 16) {
+        chain.unshift(cur);
+        cur = cur.parent ? byId.get(cur.parent) : undefined;
+      }
+      const m = new THREE.Matrix4();
+      for (const n of chain) {
+        const tr = evalNode(n, frame);
+        m.multiply(
+          new THREE.Matrix4().compose(
+            new THREE.Vector3(...tr.pos),
+            new THREE.Quaternion().setFromEuler(
+              new THREE.Euler(
+                (tr.rot[0] * Math.PI) / 180,
+                (tr.rot[1] * Math.PI) / 180,
+                (tr.rot[2] * Math.PI) / 180,
+              ),
+            ),
+            new THREE.Vector3(...tr.scale),
+          ),
+        );
+      }
+      return new THREE.Vector3().setFromMatrixPosition(m);
+    };
+    let followId: string | undefined;
+    for (const a of camAnims) {
+      const [start, end] = a.at;
+      if (frame < start || frame > end) continue;
+      const p = ease(a.ease, end > start ? (frame - start) / (end - start) : 1);
+      const lv = (key: string, cur: number) => {
+        const to = a.to?.[key];
+        if (typeof to !== "number") return cur;
+        const fr = a.from?.[key];
+        const from = typeof fr === "number" ? fr : cur;
+        return from + (to - from) * p;
+      };
+      P.set(lv("posX", P.x), lv("posY", P.y), lv("posZ", P.z));
+      T.set(lv("targetX", T.x), lv("targetY", T.y), lv("targetZ", T.z));
+      fov = lv("fov", fov);
+      // 每段都覆盖：system 段没有 follow，必须把上一段的跟随清掉，
+      // 否则绝对坐标会被再叠加一次节点位置，镜头直接飞走
+      followId = a.follow;
+    }
+    if (followId) {
+      // 段内偏移是相对量，最后统一平移到节点当前的世界位置
+      const w = worldOf(followId);
+      P.add(w);
+      T.add(w);
+    }
+  }
+
   const dir = P.clone().sub(T);
   let dist = dir.length();
   if (dist < 0.05) {
@@ -112,7 +192,7 @@ export const dslCamera = (spec: Scene3DDsl, t: number): DslCamera => {
   const gp = T.clone().negate().applyQuaternion(q);
   return {
     camPos: [0, 0, dist],
-    fov: cam?.fov ?? 42,
+    fov,
     quat: [q.x, q.y, q.z, q.w],
     groupPos: [gp.x, gp.y, gp.z],
   };
@@ -120,7 +200,39 @@ export const dslCamera = (spec: Scene3DDsl, t: number): DslCamera => {
 
 /* ─────────────────────────── 几何体 / 材质 ─────────────────────────── */
 
-const geometryOf = (g: DslNode["geometry"]): React.ReactElement => {
+/**
+ * 把一圈虚线烘成 LineSegments：每段只放两个端点。
+ *
+ * 为什么不用"扁四边形带宽度"：轨道线跨 16→160 单位的距离，用世界单位定宽度，
+ * 近看是粗棒、远看直接消失（全景时一条都看不见）。LineSegments 的线宽由硬件固定
+ * 为 1px，远近都在，正好是"轨道虚线"该有的样子。`width` 字段保留但不再参与。
+ */
+const buildDashRing = (g: {
+  radius: number;
+  width?: number;
+  count: number;
+  duty: number;
+}): THREE.BufferGeometry => {
+  const { radius: R, count, duty } = g;
+  const positions = new Float32Array(count * 6);
+  const step = (Math.PI * 2) / count;
+  for (let i = 0; i < count; i++) {
+    const a0 = i * step;
+    const a1 = a0 + step * duty;
+    const o = i * 6;
+    positions[o] = R * Math.cos(a0);
+    positions[o + 1] = 0;
+    positions[o + 2] = R * Math.sin(a0);
+    positions[o + 3] = R * Math.cos(a1);
+    positions[o + 4] = 0;
+    positions[o + 5] = R * Math.sin(a1);
+  }
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute("position", new THREE.BufferAttribute(positions, 3));
+  return geo;
+};
+
+const geometryOf = (g: DslNode["geometry"]): React.ReactElement | null => {
   switch (g.type) {
     case "box":
       return <boxGeometry args={[g.width, g.height, g.depth]} />;
@@ -146,6 +258,9 @@ const geometryOf = (g: DslNode["geometry"]): React.ReactElement => {
       return <octahedronGeometry args={[g.radius, g.detail]} />;
     case "ring":
       return <ringGeometry args={[g.innerRadius, g.outerRadius, 64]} />;
+    case "dashRing":
+      // 由 NodeView 用 useMemo 烘成 geometry（每次 render 重建会掉帧）
+      return null;
   }
 };
 
@@ -249,12 +364,28 @@ const NodeView: React.FC<{
    * 静帧里这个错看起来只是"角度有点怪"，很容易被当成审美问题放过去。
    */
   const rotRad = tr.rot.map((d) => (d * Math.PI) / 180) as [number, number, number];
+  const dashGeo = React.useMemo(
+    () => (node.geometry.type === "dashRing" ? buildDashRing(node.geometry) : null),
+    [node.geometry],
+  );
   return (
     <group position={tr.pos} rotation={rotRad} scale={tr.scale}>
-      <mesh>
-        {geometryOf(node.geometry)}
-        {materialOf(node, theme, tr.opacity, map)}
-      </mesh>
+      {dashGeo ? (
+        <lineSegments>
+          <primitive object={dashGeo} attach="geometry" />
+          <lineBasicMaterial
+            color={resolveColor(node.material?.color ?? "accent", theme)}
+            transparent
+            opacity={(node.material?.opacity ?? 1) * tr.opacity}
+            depthWrite={false}
+          />
+        </lineSegments>
+      ) : (
+        <mesh>
+          {geometryOf(node.geometry)}
+          {materialOf(node, theme, tr.opacity, map)}
+        </mesh>
+      )}
       {kids.map((c) => (
         <NodeView key={c.id} node={c} childrenOf={childrenOf} frame={frame} theme={theme} />
       ))}

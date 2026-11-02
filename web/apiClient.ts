@@ -724,9 +724,9 @@ export async function deleteOutputFiles(
   return data;
 }
 
-/** 重置示例工程（demo 不允许删除） */
-export async function resetDemoProject(): Promise<Project> {
-  const res = await fetch("/api/projects/demo/reset", { method: "POST" });
+/** 重置示例工程（demo / demo3d 不允许删除） */
+export async function resetDemoProject(projectId = "demo"): Promise<Project> {
+  const res = await fetch(`/api/projects/${encodeURIComponent(projectId)}/reset`, { method: "POST" });
   const data = await res.json();
   if (!res.ok) throw new Error(data.error ?? "重置失败");
   return data.project;

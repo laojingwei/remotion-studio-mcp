@@ -44,7 +44,6 @@ const project: Project = {
     },
     radius: 2.4,
   },
-  audio: { src: "/assets/mvmeix26-gkv3.wav", volume: 0.6, fadeIn: 1, fadeOut: 1.5 },
   scenes: [
     {
       ...mk("title", 105, {
