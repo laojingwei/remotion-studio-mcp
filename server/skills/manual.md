@@ -1,13 +1,13 @@
-# Agent 使用全书（103 个工具 = 4 常驻 + 99 按需 + 能力地图 + 铁律）
+# Agent 使用全书（107 个工具 = 4 常驻 + 103 按需 + 能力地图 + 铁律）
 
 给 agent 的完整说明书。**你不需要读源码、不需要试探参数**：这台机器能做什么、怎么组合、
-为什么没生效，全部在这页和 14 篇指南里。
+为什么没生效，全部在这页和另外 17 篇指南里（全 18 篇的索引见本文最后一节）。
 
 **工具分两层（先搞懂这个）**：
 - **常驻核心 4 个**：`start_guide`（开工入口）、`get_guide`（读指南/本书）、`tool_search`（找工具）、`tool_call`（执行工具）
-- **其余 100 个**：不在常驻列表里。用法：`tool_search("画中画")` 找到工具（返回名字/说明/参数表）→ `tool_call(name="move_scene", args={...})` 执行。
+- **其余 103 个**：不在常驻列表里。用法：`tool_search("画中画")` 找到工具（返回名字/说明/参数表）→ `tool_call(name="move_scene", args={...})` 执行。
   全量目录：`tool_search(all=true)`；某几个工具的完整文档：`tool_search(names=["add_element"])`
-- 本书的工具全表（§3）覆盖**全部** 104 个（含 4 个核心）——先查表再搜索，比盲搜快
+- 本书的工具全表（§3）按域列出全部工具（含 4 个核心）——先查表再搜索，比盲搜快
 
 **读法**：
 - 第一次接活：通读 §1 行为契约 + §2 能力地图，其余用到哪节读哪节
@@ -59,7 +59,9 @@
 | 能力域 | 能做到 | 入口 |
 |---|---|---|
 | 工程 | 多工程并存（**可列/可切换**，当前工程标 ★ 并落盘，重启接上次）、模板沉淀/套用、历史快照（50 份，可回滚任意版本）、zip 导入导出 | `list_projects` `switch_project` `create_project` `save_template` `delete_template` `get_history` `restore_rev` `export/import_project` |
-| 场景 | **76 种内置版式**（封面/文字/列表/数据/对比/流程/对话/收尾）+ **freeform 自由画布**（自排 svg/div，上限 40 个元素） | `list_scene_types` `add_scene` `update_freeform_element` |
+| 场景 | **76 个 2D 场景类型**：75 个内置版式（封面/文字/列表/数据/对比/流程/对话/收尾）+ **freeform 自由画布**（自排 svg/div，上限 40 个元素）；另有 3D 与图解两行见下 | `list_scene_types` `add_scene` `update_freeform_element` |
+| **3D 场景** | `scene3d`：**6 个预设母题**（环绕核心/粒子星云/网格地平线/零件拆解/波形柱阵/球面网络）+ **`graph` 场景图 DSL**——几何体/材质/灯光/粒子/相机运镜，最多 48 节点，能做行星公转、装置拆解、分子结构这类"具体的东西" | `add_scene(type:"scene3d")`；写法**必读** `get_guide("scene3d")`，字段全表 `list_scene_types(type:"scene3d")` |
+| **图解插图** | `iso`：等轴测技术插图（anatomy 产出），零件级细节、可按帧高亮、推近不糊 | `add_scene(type:"iso")`；画法与坑见 `get_guide("external-tools")` |
 | 元素 | 场景内图片/文本/形状/视频/音频元素，rich 外观全套（圆角/边框/阴影/滤镜/混合/裁切/字体/行高/字距/对齐/斜体/下划线） | `list_element_library` `add_element` `update_element` |
 | 动效 | 元素级关键帧动画（`anim[].from/to` 绝对值）、全片动效强度三档（0 关 / 1 标准 / 2 更强） | `update_element(anim)` `set_theme(motion)` |
 | 特效 | **11 种全屏区间特效**（闪白/扫光/震动/冲击/旋转/故障/模糊/暗角/去色/呼吸/频闪）+ custom，**支持循环**（单次时长 + 到几秒停） | `list_effect_types` `add_effect` `update_effect(loop)` |
@@ -80,7 +82,7 @@
 
 ---
 
-## 3. 工具全表（104 个，按域；含 4 个核心）
+## 3. 工具全表（按域；含 4 个核心）
 
 > 除 4 个核心工具（start_guide / get_guide / tool_search / tool_call）外，
 > 下面的工具都用 `tool_call(name, args)` 执行；参数表用 `tool_search(names=["工具名"])` 取。
@@ -163,6 +165,8 @@
 | 数字/图表页 | `stats`/`chart`/`ring` 版式自带滚动；数据只能来自用户或可靠来源 |
 | 元素动画 | `update_element(anim=[{frame,from,to}])`；弹簧手感 = 过冲关键帧（craft §4） |
 | 完全自定义画面 | `freeform` 场景（`get_guide("freeform")`），上限 40 元素，`layout_grid`/`align_elements` 辅助排版 |
+| 要 3D：太空/行星/分子/装置/空间感 | `add_scene(type:"scene3d")`。抽象氛围用 `preset`（6 个母题）；**具体物体必须写 `graph` 场景图**——`get_guide("scene3d")`（给 graph 之后 preset/spin/count/hue 全部失效，别以为没生效） |
+| 要等轴测技术插图（零件、剖面、拆解） | `get_guide("external-tools")`：anatomy 出图 → 落盘套主题 → `add_scene(type:"iso")`，可按帧高亮零件 |
 | 长片（>12 幕） | `get_guide("long-form")`：分章规划、分章配音、分章验收 |
 | 找回历史版本 | `get_history` → `restore_rev` |
 | 在多个工程之间切换 | `list_projects`（看 ★ 在哪）→ `switch_project(projectId)`；只带 id 看一眼不会改当前工程 |
@@ -221,19 +225,29 @@
 
 ---
 
-## 7. 指南索引（12 篇）
+## 7. 指南索引（全 18 篇）
+
+读法：`get_guide("名字")` 读全篇，`get_guide("名字", "小节关键字")` 只读一节。**名字只能取下表这 18 个**，报错会列出可用值。
 
 | 指南 | 解决什么 |
 |---|---|
+| `manual` | 本书：能力地图、工具全表、意图速查、铁律 |
 | `director` | 整片流程：9 步问诊、三提案、风格帧、批量搭建 |
 | `craft` | 画面质感：惊艳公式、节奏模板、连续叙事三问、签名时刻、禁止清单 |
 | `formats` | 用途→幕结构模板（10 种用途） |
+| `script` | 稿件写法：口播稿、分段、字数与语速 |
+| `content` | 文案打磨：标题写结论、数字配参照、删形容词、去 AI 味 |
+| `subtitle` | 字幕写法：一屏一句、不带标点、时间对齐 |
 | `sound` | 声音设计：BGM 选曲、戏剧曲线、混音、静音自检 |
-| `long-form` | 超 12 幕/2 分钟：分章规划与验收 |
 | `narration` | 口播写法、TTS 合成对齐、字幕 |
-| `scene-recipes` | 76 种版式逐个速查（items 数量、文案长度） |
+| `long-form` | 超 12 幕/2 分钟：分章规划与验收 |
+| `scene-recipes` | 75 个版式逐个速查（items 数量、文案长度） |
 | `freeform` | 自由画布全部写法与坑 |
+| `scene3d` | **3D 场景**：6 个预设怎么选、`graph` 场景图全字段（几何体/材质/灯光/粒子/相机）、公转与卫星、太阳系完整示例、13 个坑 |
+| `external-tools` | **图解 iso**：anatomy 出图 → 落盘 → 套主题，含 sanitize 与实跑踩到的坑 |
 | `qa` | 分阶段自检清单、常见问题速查表 |
 | `delivery` | 画幅、字幕样式、渲染、交付物清单 |
 | `memory` | remember/recall 记什么、模板沉淀 |
 | `tools-quickref` | 本书的薄入口（指向这里） |
+
+**「这些版式做不出来」的时候先想这两条**：要空间感/具体物体 → `scene3d`（`graph`）；要零件级技术插图 → `iso`。两者都不是 2D 版式的排列组合。

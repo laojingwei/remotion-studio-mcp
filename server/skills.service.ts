@@ -32,28 +32,117 @@ export function listSkills(): SkillInfo[] {
     .sort((a, b) => a.name.localeCompare(b.name));
 }
 
+/**
+ * agent 是按"能力"猜篇名的，不是按目录结构：它想找 3D 就会打 `3d` / `scene3d` / `three`，
+ * 想找图解会打 `iso` / `anatomy`。**一次猜错就断线的话，它下一步一定是去翻源码**
+ * （线上真发生过：get_guide("scene3d") 报错 → 去读了 3200 行 TS）。
+ * 所以这里先把别名和标题模糊匹配吃掉，实在匹配不上再报错，并且报错要指路。
+ */
+const ALIASES: Record<string, string> = {
+  "3d": "scene3d",
+  three: "scene3d",
+  threejs: "scene3d",
+  graph: "scene3d",
+  场景图: "scene3d",
+  三维: "scene3d",
+  立体: "scene3d",
+  iso: "external-tools",
+  anatomy: "external-tools",
+  图解: "external-tools",
+  插图: "external-tools",
+  等轴测: "external-tools",
+  自由画布: "freeform",
+  free: "freeform",
+  canvas: "freeform",
+  sub: "subtitle",
+  subtitle: "subtitle",
+  字幕: "subtitle",
+  配音: "narration",
+  tts: "narration",
+  音乐: "sound",
+  bgm: "sound",
+  稿: "script",
+  文档: "manual",
+  全书: "manual",
+  目录: "manual",
+  索引: "manual",
+};
+
+/** 能力关键词 → 该读哪篇（别名和标题都没命中时，给一句人话的指路） */
+const ROUTES: [RegExp, string, string][] = [
+  [/3d|三维|立体|太空|行星|球|装置|空间感/i, "scene3d", "3D 场景与 graph 场景图"],
+  [/iso|anatomy|图解|插图|等轴|零件|剖面/i, "external-tools", "等轴测图解（anatomy）"],
+  [/自由|排版|画布|freeform/i, "freeform", "自由画布全部写法"],
+  [/字幕|subtitle|srt/i, "subtitle", "字幕写法"],
+  [/声音|音频|bgm|音乐|混音/i, "sound", "声音设计"],
+  [/配音|旁白|口播稿/i, "narration", "旁白配音"],
+  [/质感|节奏|镜头|高级/i, "craft", "画面质感"],
+  [/分镜|流程|接单|问诊/i, "director", "整片流程"],
+  [/交付|渲染|导出/i, "delivery", "交付与渲染"],
+  [/自检|体检|检查/i, "qa", "自检清单"],
+];
+
+/** 归一化：大小写、空格、括号、标点都不参与匹配（"3D 场景" vs "3d场景" 要能对上） */
+const norm = (s: string) =>
+  s
+    .toLowerCase()
+    .replace(/[\s（）()【】\[\]·、,，。:：\-_/]/g, "")
+    .trim();
+
+/** 把 agent 写的名字解析成真实技能名；解析不出来返回建议 */
+export function resolveSkillName(input: string): { name?: string; hint?: string } {
+  const raw = String(input ?? "").trim().replace(/\.md$/i, "");
+  if (!raw) return { hint: "名字是空的" };
+  const key = norm(raw);
+  const skills = listSkills();
+  const exists = (n: string) => skills.some((s) => s.name === n);
+
+  const alias = ALIASES[key];
+  if (alias && exists(alias)) return { name: alias };
+
+  const lower = raw.toLowerCase();
+  if (NAME_RE.test(lower) && exists(lower)) return { name: lower };
+
+  // 标题模糊匹配：「3D 场景」→ scene3d（标题是「3D 场景（scene3d）」）
+  const byTitle = skills.find((s) => norm(s.title).includes(key) || key.includes(norm(s.title)));
+  if (byTitle) return { name: byTitle.name };
+
+  const route = ROUTES.find(([re]) => re.test(raw));
+  if (route) return { hint: `按「${raw}」看，你要的应该是「${route[1]}」（${route[2]}）→ get_guide("${route[1]}")` };
+
+  return { hint: "" };
+}
+
 /** 读技能全文；传 section 时只返回匹配 `## 标题` 的那一节 */
 export function readSkill(name: string, section?: string): string {
-  if (!NAME_RE.test(name)) throw new Error(`技能名不合法：${name}`);
-  const file = path.join(SKILL_DIR, `${name}.md`);
-  if (!fs.existsSync(file)) {
-    const names = listSkills().map((s) => s.name).join("、");
-    throw new Error(`没有技能「${name}」。可用：${names}`);
+  const skills = listSkills();
+  const resolved = resolveSkillName(name);
+  const file = resolved.name ? path.join(SKILL_DIR, `${resolved.name}.md`) : "";
+  if (!resolved.name || !fs.existsSync(file)) {
+    const list = skills.map((s) => `${s.name}（${s.title}）`).join("、");
+    throw new Error(
+      `没有技能「${name}」。` +
+        (resolved.hint ? `\n${resolved.hint}` : "") +
+        `\n可用（名字 + 标题）：${list}` +
+        `\n不带名字的调用方式：tool_call(name:"list_guides") 看全量清单；` +
+        `不知道该读哪篇就先 start_guide 或 get_guide("manual")。`,
+    );
   }
   const text = fs.readFileSync(file, "utf8");
   if (!section) return text;
 
-  const wanted = section.trim().toLowerCase();
+  const wanted = norm(section);
   const lines = text.split("\n");
-  const start = lines.findIndex(
-    (l) => l.startsWith("## ") && l.slice(3).toLowerCase().includes(wanted),
-  );
+  const start = lines.findIndex((l) => l.startsWith("## ") && norm(l.slice(3)).includes(wanted));
   if (start < 0) {
     const sections = lines
       .filter((l) => l.startsWith("## "))
-      .map((l) => l.slice(3))
+      .map((l) => l.slice(3).trim())
       .join("、");
-    throw new Error(`「${name}」里没有包含「${section}」的小节。可用：${sections}`);
+    throw new Error(
+      `「${resolved.name}」里没有包含「${section}」的小节。可用：${sections}` +
+        `\n也可以不带 section 读全篇：get_guide("${resolved.name}")`,
+    );
   }
   let end = lines.length;
   for (let i = start + 1; i < lines.length; i++) {

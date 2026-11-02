@@ -6,8 +6,10 @@
  * 所以这里测的不是"能不能渲"，而是"错的时候说不说得清"。
  */
 import assert from "node:assert/strict";
-import { normalizeProps } from "../shared/sceneMetas";
+import fs from "node:fs";
+import { describeTypeDeep, normalizeProps } from "../shared/sceneMetas";
 import { dslIssues } from "../shared/scene3dDsl";
+import { resolveSkillName } from "../server/skills.service";
 
 let passed = 0;
 const failures: string[] = [];
@@ -267,6 +269,47 @@ test("repeat 必须 > 0（0 和负数是「贴不出来」而不是「不平铺�
     }),
   );
   assert.ok(msg.length > 0, "repeat=0 应当报错");
+});
+
+/* ───────── 字段表与文档：agent 不读源码也能拼对 graph ───────── */
+
+test("字段表要展开到 graph 内层（nodes/lights/geometry 变体），不能只到 object", () => {
+  const t = describeTypeDeep("scene3d");
+  assert.ok(t, "scene3d 应当有字段表");
+  for (const token of ["- nodes array", "└ 元素形状", "· sphere:", "· dashRing:", "- lights array", "- particles object", "- post object", "parent text"]) {
+    assert.ok(t.includes(token), `字段表缺少「${token}」——agent 又得去翻源码了`);
+  }
+});
+
+test("有默认值的字段不能标成必填（否则 agent 会以为每个键都非给不可）", () => {
+  const t = describeTypeDeep("scene3d")!;
+  const preset = t.split("\n").find((l) => l.includes("- preset enum")) ?? "";
+  assert.ok(!preset.includes("必填"), `preset 有默认值却被标必填：${preset}`);
+  const id = t.split("\n").find((l) => l.trim().startsWith("- id text")) ?? "";
+  assert.ok(id.includes("必填"), `节点 id 没默认值，应当标必填：${id}`);
+});
+
+test("指南里的示例必须过 zod：文档不能写一份跑不通的 graph", () => {
+  const md = fs.readFileSync("server/skills/scene3d.md", "utf8");
+  const blocks = [...md.matchAll(/```json\n([\s\S]*?)```/g)]
+    .map((m) => m[1])
+    // 只挑「完整对象」的示例（片段用来说明单个字段，不单独可解析）
+    .filter((s) => s.trim().startsWith("{") && s.includes('"props"'));
+  assert.ok(blocks.length >= 2, `scene3d.md 里的完整示例太少（${blocks.length}）`);
+  for (const raw of blocks) {
+    const doc = JSON.parse(raw);
+    const p = normalizeProps(doc.type ?? "scene3d", doc.props);
+    if (p.graph) assert.equal(dslIssues(p.graph).length, 0, `示例有结构问题：${dslIssues(p.graph).join(" / ")}`);
+  }
+});
+
+test("get_guide 的别名要认得「3d」「iso」「太空」这些按能力猜的名字", () => {
+  assert.equal(resolveSkillName("3d").name, "scene3d");
+  assert.equal(resolveSkillName("3D 场景").name, "scene3d");
+  assert.equal(resolveSkillName("iso").name, "external-tools");
+  assert.equal(resolveSkillName("anatomy").name, "external-tools");
+  const miss = resolveSkillName("太空");
+  assert.ok(miss.hint?.includes("scene3d"), `没命中时应当指路到 scene3d：${miss.hint}`);
 });
 
 console.log("");

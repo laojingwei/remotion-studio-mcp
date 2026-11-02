@@ -3,7 +3,7 @@
 一份 `Project JSON`，三个消费方：**Agent 改它、用户在 Web 上拖它、Remotion 渲染它**。
 因为共用同一个数据源，agent 和用户的编辑天然互通 —— 不是后期加的功能，是架构的结果。
 
-> **版本** 1.1.0（开发线 v1.01）· **MCP 工具** 93 个（4 个常驻 + 89 个按需发现）·
+> **版本** 1.1.0（开发线 v1.01）· **MCP 工具** 107 个（4 个常驻 + 103 个按需发现）·
 > **许可** 本仓库代码 MIT，依赖里有两个非宽松（Remotion License / AGPL），见 [开源协议](#开源协议)
 
 ---
@@ -121,9 +121,9 @@ http://127.0.0.1:4380/mcp
 
 > 注意地址要带 `/mcp`：`/` 是编辑器本身的 HTTP API（REST + SSE），不是 MCP 端点。
 
-### 工具清单（103 个 = 4 常驻 + 99 按需）
+### 工具清单（107 个 = 4 常驻 + 103 按需）
 
-**门面模式**：宿主只看到 4 个常驻工具，其余 89 个用 `tool_search` 按意图现找、用 `tool_call` 执行。
+**门面模式**：宿主只看到 4 个常驻工具，其余 103 个用 `tool_search` 按意图现找、用 `tool_call` 执行。
 这样工具描述不占常驻上下文（否则光工具说明就要几万 token）。
 
 ```
@@ -172,16 +172,21 @@ get_guide(name="manual", section="…")   → 按需读指南（不常驻）
 
 ### 技能与记忆（给 agent 的经验层）
 
-技能文件在 `server/skills/*.md`，通过 `list_guides` / `get_guide(name, section?)` 按需读取——不常驻、不占工具描述，需要时只读一节。共 13 篇：
+技能文件在 `server/skills/*.md`，通过 `list_guides` / `get_guide(name, section?)` 按需读取——不常驻、不占工具描述，需要时只读一节。共 18 篇（名字认别名：`3d` → `scene3d`、`iso` → `external-tools`，猜错时返回的报错会指路）：
 
 | 技能 | 内容 |
 |---|---|
 | `manual` | **Agent 使用全书**：全工具表、能力地图、「我想…」意图速查、落地铁律（为什么没生效） |
 | `director` | 接单确认清单 + 五步流程 + 节奏默认值 + A/B 版本做法 |
 | `formats` | 用途结构库：拍什么、按什么结构讲 |
-| `scene-recipes` | 76 种版式配方（适用场景 / items 建议 / 坑） |
+| `script` | 稿件：口播稿结构与字数 |
+| `content` | 文案打磨：标题写结论、数字配参照、去 AI 味 |
+| `subtitle` | 字幕：一屏一句、不带标点、时间对齐 |
+| `scene-recipes` | 75 个版式配方（适用场景 / items 建议 / 坑） |
 | `craft` | 画面质感：签名时刻、层次、留白、动效节奏 |
 | `freeform` | 自由画布写法（`add_freeform_element` 的元素/关键帧/fx） |
+| `scene3d` | **3D 场景**：6 个预设、`graph` 全字段、公转/卫星、太阳系完整示例、13 个坑 |
+| `external-tools` | **iso 图解**：anatomy 出图 → 落盘 → 套主题 |
 | `sound` | 声音设计：BGM 选择、人声避让、响度配平、卡点 |
 | `narration` | 旁白写法 / TTS 分段 / 时长对齐公式 |
 | `long-form` | 长片章节（超 12 幕或超 2 分钟怎么撑住） |
@@ -535,7 +540,7 @@ screen = stageCenter + pan + zoom * localPoint
 
 ### 场景类型
 
-新增场景时顶部用**标签筛选**，下方是卡片网格；**鼠标悬停卡片会弹出线框预览**。当前 76 种：
+新增场景时顶部用**标签筛选**，下方是卡片网格；**鼠标悬停卡片会弹出线框预览**。当前 78 个场景类型：下表 76 个 2D 场景（含自由画布），外加 **3D 场景** 与 **图解插图**（见下一节）：
 
 | 分类 | 场景 |
 |---|---|
@@ -548,10 +553,43 @@ screen = stageCenter + pan + zoom * localPoint
 | 直播（1） | 直播预告 |
 | 电商（4） | 商品卡 / 价格表 / 倒计时 / 星级评价 |
 | 情感（2） | 大字报 / **星光页** |
-| 动效（13） | 光晕呼吸 / 胶片颗粒 / 漏光扫过 / 弹跳字 / 遮罩上翻 / 打字机 / 数字滚动 / 渐变字 / 乱码解码 / **荧光扫亮** / **冲击字** / **色带擦除** / **跑马灯** |
-| 氛围（11） | 散景光斑 / 上升火花 / 磁带故障 / 聚光扫射 / 赛博网格 / 雨幕 / 流体色块 / **五彩纸屑** / **下雪** / **烟花** / **烟雾** |
+| 动效（15） | 光晕呼吸 / 胶片颗粒 / 漏光扫过 / 弹跳字 / 遮罩上翻 / 打字机 / 数字滚动 / 渐变字 / 乱码解码 / 荧光扫亮 / 冲击字 / 色带擦除 / 跑马灯 / **波浪字** / **老虎机** |
+| 氛围（12） | 散景光斑 / 上升火花 / 磁带故障 / 聚光扫射 / 赛博网格 / 雨幕 / 流体色块 / 五彩纸屑 / 下雪 / 烟花 / 烟雾 / **字符雨** |
 
 元素素材库 **57 个**（含光晕圆 / 霓虹框 / 渐变条 / 发光星 / 光点等光效元素），悬停元素卡片会放大预览。
+
+### 3D 场景（scene3d）
+
+真 3D：three.js 渲染，几何体 + 光照 + 相机运动。**两条路**：
+
+| 想要 | 传什么 |
+|---|---|
+| 抽象氛围（核心 + 卫星环绕、粒子星云、网格地平线、零件炸开、波形柱阵、球面网络） | 只传 `preset` / `look` / `spin` / `count` |
+| 具体的东西（太阳系、分子、机器零件、产品结构） | 写 `graph` —— 自定义场景图 |
+
+`graph` 的骨架（一个发光球 + 一层星尘）：
+
+```json
+{ "type": "scene3d", "durationInFrames": 300,
+  "props": { "look": "dramatic", "graph": {
+    "camera": { "position": [0, 4, 12], "target": [0, 0, 0], "fov": 42, "orbit": { "degPerSec": 2 } },
+    "nodes": [{ "id": "core", "geometry": { "type": "sphere", "radius": 1.2 },
+                "material": { "color": "#FFB020", "emissive": "#FF8A00", "emissiveIntensity": 2.2, "body": false },
+                "anim": [{ "at": [0, 299], "to": { "rotY": 360 }, "ease": "linear" }] }],
+    "lights": [{ "type": "ambient", "color": "#26344d", "intensity": 0.2 },
+               { "type": "point", "position": [0, 0, 0], "color": "#FFF1D6", "intensity": 6, "decay": 0 }],
+    "particles": { "count": 1200, "spread": [30, 20, 30], "size": 0.1 },
+    "post": { "bloom": 1.2 } } } }
+```
+
+- **几何体白名单 13 种**：`box` `sphere` `cylinder` `cone` `torus` `torusKnot` `plane` `capsule` `icosahedron` `dodecahedron` `octahedron` `ring`（环/行星环）`dashRing`（轨道虚线）
+- **材质**：`standard`（PBR）/ `physical`（玻璃）/ `basic`（线框、剪影）；支持 `emissive` 自发光、`map` 外部贴图、`opacity`、`side`、`flatShading`
+- **`parent` 层级**：子节点继承父节点的位移/旋转 —— 行星挂在旋转的轨道环下面是"公转"，行星自己的 `rotY` 是"自转"，土星环挂在土星上跟着倾斜
+- **`lights`**：给了它就接管打光（预设的四盏方向光撤掉）。点光放在太阳位置，行星转到哪儿就照到哪儿 —— 昼夜面就对了
+- 上限：节点 48、每节点动画 8 段、灯 8 盏、粒子 6000。**中文不进 3D**，标题走 `title` / `sub` 的 2D 叠层
+
+写完整参数、套路（公转/卫星、太阳 + 昼夜面、土星环）和一个 18 节点的太阳系示例见
+[`server/skills/scene3d.md`](server/skills/scene3d.md)（agent 侧同一份：`get_guide("scene3d")`）。
 
 ### 转场
 
@@ -844,7 +882,7 @@ THIRD-PARTY-NOTICES  第三方依赖许可（含 Remotion / AGPL 的两个注意
 LICENSE              本仓库代码的 MIT 许可
 src/                 Remotion 渲染端
   layout/            useSceneLayout（多画幅唯一入口）
-  scenes/            76 种内置场景类型（src/scenes 下 70 个组件目录，含 freeform / empty）
+  scenes/            78 个场景类型（76 个 2D + scene3d + iso；src/scenes 下 70 个组件目录，含 freeform / empty）
                      + 自由元素层 Overlay.tsx
 shared/              数据契约（前后端 + agent 共用）
   schema.ts         Project / Scene / Format / Theme / OverlayElement
@@ -871,9 +909,9 @@ server/              唯一写入口 + 渲染队列 + MCP 代理
   bundle.service    工程包导入导出（project.json + assets + manifest）
   zip.ts            最小 zip 读写（写 stored，读兼容 deflate）
   render.service    bundle 缓存 + 素材同步 + 渲染队列
-  mcp-tools.ts      全部工具定义（93 个，含 4 个常驻门面）
+  mcp-tools.ts      全部工具定义（107 个，含 4 个常驻门面）
   mcp-proxy.ts      stdio 代理（工具调用转发给 HTTP 服务）
-  skills/           13 篇技能指南（list_guides / get_guide 读）
+  skills/           18 篇技能指南（list_guides / get_guide 读）
 web/                 编辑器：预览 / 属性面板 / 时间轴 / 素材面板 / 详情浮窗
 scripts/             启动 / 出片 / 恢复示例（demo、demo3d）/ 单测 / 端到端验证
 data/projects/<id>/  工程文件（可直接 git、可手改）+ history/ 快照 + brief.json

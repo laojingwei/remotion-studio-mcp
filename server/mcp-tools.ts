@@ -23,7 +23,7 @@ import { readReview, markReviewRequested, markReviewConfirmed, markNeedsWork, ma
 import { listStyles, presetOf, readStyle, styleSummary } from "./styles.service";
 import { readStoryboard, saveStoryboard, storyboardToText, type Storyboard } from "./storyboard.service";
 import { ELEMENT_LIBRARY, elementFromLibrary } from "../shared/elementLibrary";
-import { getMeta, normalizeProps } from "../shared/sceneMetas";
+import { getMeta, normalizeProps, describeTypeDeep } from "../shared/sceneMetas";
 import {
   assetIdOf,
   assetToElement,
@@ -1244,7 +1244,7 @@ const TOOLS: ToolDef[] = [
         "   ↳ 调性不对就回第 9 步改分镜（改文案/版式很便宜，改完重建 1 幕），别硬着头皮往下铺。",
         "11. 铺开 → **build_film 一次建成整片**（幕/字幕/转场/入场动画一起给，只涨 1 个 rev）；要按已存的分镜表建就用 build_storyboard(replace=true)。全片统一的东西用 apply_to_scenes 批量套（字幕样式/贴纸/画中画），别逐幕调",
         "   ↳ 铺完立刻 render_preview_clip（不传参＝自动挑第一个转场交界）：转场叠字、BGM 压人声、字幕来不及读，这一段全能看出来。",
-        "12. 精修 → update_scene / set_transform / add_element（自由画布 get_guide(\"freeform\")；质感与签名时刻 get_guide(\"craft\")）；按 subtitleSpec 调字幕",
+        "12. 精修 → update_scene / set_transform / add_element（自由画布 get_guide(\"freeform\")；**3D 场景（行星/分子/装置/空间感）用 add_scene(type=\"scene3d\") + get_guide(\"scene3d\")**；质感与签名时刻 get_guide(\"craft\")）；按 subtitleSpec 调字幕",
         "   ↳ 画面要氛围（光圈/光斑/颗粒/漏光/火花）就 set_scene_backdrop 垫在这一幕底下——**不要为氛围单独插一幕**，那会多出一段没有内容的时长",
         "   ↳ 字幕铁律：**一屏 8–16 字（最多 18）、不带标点、一屏念得完**。set_subtitle / build_storyboard / tts_narration 写入时自动拆段并回显拆分预览；老工程长字幕用 fix_subtitles(dryRun) 重拆。规则见 get_guide(\"subtitle\")",
         "   ⚠ 每改一批，**preview_frames 抽 1–2 幕看**（改完不看就往下做，是返工的最大来源）；脏着不抽帧，render / request_review 会被拒。",
@@ -1261,7 +1261,7 @@ const TOOLS: ToolDef[] = [
         "17. 交付 → render_cover 出封面候选给用户挑（要单独设计封面就另建一幕再抽）；再 remember / save_template",
         "",
         "所有指南：list_guides；只读某一节：get_guide(name, section)",
-        `工具分两层：常驻 4 个（start_guide / get_guide / tool_search / tool_call），其余 ${TOOLS.length - CORE_TOOL_NAMES.size} 个按需调用——`,
+        `工具分两层：常驻 4 个（start_guide / get_guide / tool_search / tool_call），其余 ${TOOLS.filter((d) => !CORE_TOOL_NAMES.has(d.name) && !d.retiredTo).length} 个按需调用——`,
         "  找工具：tool_search(\"画中画\")；执行：tool_call(name=\"move_scene\", args={...})；全表与铁律：get_guide(\"manual\")",
       ];
 
@@ -1327,15 +1327,27 @@ const TOOLS: ToolDef[] = [
   {
     name: "get_guide",
     description:
-      "读项目里的技能指南（按需加载，省上下文）。**先 list_guides 看有哪些，再 get_guide 取某一篇**——name 要用 list_guides 返回的名字（传别的会报\"技能名不合法\"），section 也要对上该篇实际小节（报错会列出可用小节）：工具全书 manual（能力地图/意图速查/铁律）、导演流程、稿件写法 script、内容打磨 content（标题写结论/数字配参照/删形容词/去 AI 味：翻案腔、三项排比、结尾升华、黑话、念不出来的符号）、字幕写法 subtitle（一屏一句、无标点）、画面质感 craft、用途结构 formats、声音设计 sound、长片章节、版式配方 scene-recipes、旁白配音、记忆与模板、交付验收；传 section 可只取某一节。",
+      "读项目里的技能指南（按需加载，省上下文）。**name 只能取下表这 18 个之一**（传别的会报「没有技能」并列出可用名）：" +
+      "manual（能力地图/工具全表/意图速查/铁律）、director（整片流程：问诊→分镜→搭建→验收）、" +
+      "craft（画面质感：惊艳公式/节奏/签名时刻/禁止清单）、formats（用途→幕结构）、" +
+      "script（稿件写法）、content（文案打磨：标题写结论/删形容词/去 AI 味）、subtitle（字幕：一屏一句、无标点）、" +
+      "sound（声音设计）、narration（旁白配音与对齐）、long-form（超 12 幕长片）、" +
+      "scene-recipes（75 个版式逐个速查）、freeform（自由画布全部写法与坑）、" +
+      "**scene3d（3D 场景：6 个预设怎么选 + graph 场景图全字段 + 公转/卫星 + 太阳系示例 + 13 个坑）**、" +
+      "external-tools（iso 等轴测图解：anatomy 出图→落盘→套主题）、" +
+      "qa（分阶段自检）、delivery（画幅/字幕样式/渲染/交付）、memory（记忆与模板）、tools-quickref（薄入口）。\n" +
+      "section 按标题关键字只取一节（如 get_guide(\"scene3d\",\"坑\")），对不上会列出该篇可用小节。\n" +
+      "要看全量清单（名字+标题+字符数）：tool_call(name:\"list_guides\")。\n" +
+      "**判断该读哪篇**：要做 3D/太空/行星/立体装置 → scene3d；要零件级技术插图 → external-tools；" +
+      "要非常规排版 → freeform；不知道从哪下手 → manual 或 start_guide。",
     shape: {
       name: z
         .string()
-        .describe("技能名，如 manual / director / script / content / subtitle / craft / formats / sound / freeform / long-form / scene-recipes / narration / qa / memory / delivery / tools-quickref"),
+        .describe("技能名，取上表 18 个之一，如 manual / director / scene3d / freeform / external-tools"),
       section: z
         .string()
         .optional()
-        .describe("只读某个小节（按标题关键字匹配，如「接单确认」）"),
+        .describe("只读某个小节（按标题关键字匹配，如「接单确认」「坑」）"),
     },
     run: async (a) => {
       const name = a.name.replace(/\.md$/, "");
@@ -1731,7 +1743,9 @@ const TOOLS: ToolDef[] = [
   },
   {
     name: "list_guides",
-    description: "列出所有可用的技能指南（名称、标题、字符数），配合 get_guide 使用。",
+    description:
+      "列出所有可用的技能指南（名称、标题、字符数），配合 get_guide 使用。" +
+      "常驻只暴露 4 个核心工具，所以本工具要用 tool_call(name:\"list_guides\") 调，直接按 mcp__ 前缀调会 not found。",
     shape: {},
     run: async () => {
       const skills = listSkills();
@@ -1938,58 +1952,89 @@ const TOOLS: ToolDef[] = [
   {
     name: "list_scene_types",
     description:
-      "列出所有可用的场景类型，以及每种类型的字段、含义、取值范围和默认时长。改动项目之前先调用一次；只要速览时传 summary=true。",
+      "列出场景类型及其字段、取值、默认时长。**要判断某类能不能做某事，就传 type 只查它**——返回展开到嵌套的完整字段表：数组元素的形状、几何体每个变体的字段、DSL 内层键。" +
+      "不传 type 时默认给全表（很长），summary=true 只给一句话 + 字段名。" +
+      "3D 场景与图解有专属写法指南：get_guide(\"scene3d\") / get_guide(\"external-tools\")。",
     shape: {
-      summary: z.boolean().optional().describe("只列类型 + 一句话 + 字段名（不展开字段说明，省 token）"),
+      type: z
+        .string()
+        .optional()
+        .describe("只查这一个类型（如 scene3d / freeform / iso），返回完整嵌套字段表"),
+      summary: z.boolean().optional().describe("不传 type 时生效：只列类型 + 一句话 + 字段名（省 token）"),
     },
-    run: async (a: { summary?: boolean }) => {
-      const { types } = await api<{ types: any[] }>("/api/scene-types");
-      if (a.summary) {
-        return types
-          .map(
-            (t: any) =>
-              `- ${t.type}（${t.name}）：${t.summary ?? ""} · ${t.fields
-                .map((f: any) => {
-                  if (f.kind === "array" && Array.isArray(f.itemShape) && f.itemShape.length) {
-                    return `${f.key}[{${f.itemShape.map((x: any) => x.key).join(", ")}}]`;
-                  }
-                  return f.key;
-                })
-                .join("/")}`,
-          )
-          .join(String.fromCharCode(10));
+    run: async (a: { type?: string; summary?: boolean }) => {
+      /** 有专属写法指南的类型：查完字段顺手把人送到那篇，别让 agent 自己去翻源码 */
+      const TYPE_GUIDE: Record<string, string> = {
+        scene3d: "scene3d",
+        iso: "external-tools",
+        freeform: "freeform",
+      };
+      const NL = String.fromCharCode(10);
+      if (a.type) {
+        const text = describeTypeDeep(a.type);
+        if (!text) {
+          const { types } = await api<{ types: any[] }>("/api/scene-types");
+          throw new Error(
+            `没有场景类型「${a.type}」。可用：${types.map((t: any) => t.type).join("、")}`,
+          );
+        }
+        const guide = TYPE_GUIDE[a.type];
+        return text + (guide ? `${NL}${NL}写法、示例与坑（建议先读）：get_guide("${guide}")` : "");
       }
-      return types
-        .map((t) => {
-          const shapeOf = (f: any): string => {
-            // 数组字段把元素形状打出来，省得 agent 两次 zod 报错才摸到 key
-            if (f.kind !== "array" || !Array.isArray(f.itemShape) || !f.itemShape.length) return "";
-            const keys = f.itemShape
-              .map((x: any) => `${x.key}${x.kind === "enum" ? `(${x.options.join("|")})` : ""}`)
-              .join(", ");
-            return ` 形状=[{${keys}}]`;
-          };
-          const fields = t.fields
-            .map((f: any) => {
-              const kind = f.kind === "enum" ? `(${f.options.join("|")})` : `(${f.kind})`;
-              const dv = f.default !== undefined ? ` 默认=${JSON.stringify(f.default)}` : "";
-              // 容量与范围必须写出来：复盘里「六档塞不进 items 上限 5」「value 传超范围被拒」都是建完才发现
-              const cap =
-                f.kind === "array" && (f.minItems != null || f.maxItems != null)
-                  ? ` minItems=${f.minItems ?? 0} maxItems=${f.maxItems ?? "∞"}`
-                  : f.kind === "number" && (f.numMin != null || f.numMax != null)
-                    ? ` min=${f.numMin ?? "-∞"} max=${f.numMax ?? "∞"}${f.numInt ? " int" : ""}`
-                    : "";
-              return `    - ${f.key} ${kind}${dv}${cap}${shapeOf(f)}：${f.label}`;
-            })
-            .join("\n");
-          const els = (t.elements ?? []).length
-            ? "\n  可拖动元素：" +
-              t.elements.map((e: any) => `${e.id}（${e.label}）`).join("、")
-            : "";
-          return `${t.type} · ${t.name}：${t.summary}\n  时长 ${t.duration.min}-${t.duration.max} 帧，默认 ${t.duration.default}${els}\n${fields}`;
-        })
-        .join("\n\n");
+      const { types } = await api<{ types: any[] }>("/api/scene-types");
+      const guideHint =
+        `${NL}${NL}有专属写法指南的：freeform→get_guide("freeform")、scene3d→get_guide("scene3d")、iso→get_guide("external-tools")。` +
+        `${NL}只查某一个类型的完整字段（含嵌套）：list_scene_types(type:"scene3d")。`;
+      if (a.summary) {
+        return (
+          types
+            .map(
+              (t: any) =>
+                `- ${t.type}（${t.name}）：${t.summary ?? ""} · ${t.fields
+                  .map((f: any) => {
+                    if (f.kind === "array" && Array.isArray(f.itemShape) && f.itemShape.length) {
+                      return `${f.key}[{${f.itemShape.map((x: any) => x.key).join(", ")}}]`;
+                    }
+                    return f.key;
+                  })
+                  .join("/")}`,
+            )
+            .join(NL) + guideHint
+        );
+      }
+      return (
+        types
+          .map((t) => {
+            const shapeOf = (f: any): string => {
+              // 数组字段把元素形状打出来，省得 agent 两次 zod 报错才摸到 key
+              if (f.kind !== "array" || !Array.isArray(f.itemShape) || !f.itemShape.length) return "";
+              const keys = f.itemShape
+                .map((x: any) => `${x.key}${x.kind === "enum" ? `(${x.options.join("|")})` : ""}`)
+                .join(", ");
+              return ` 形状=[{${keys}}]`;
+            };
+            const fields = t.fields
+              .map((f: any) => {
+                const kind = f.kind === "enum" ? `(${f.options.join("|")})` : `(${f.kind})`;
+                const dv = f.default !== undefined ? ` 默认=${JSON.stringify(f.default)}` : "";
+                // 容量与范围必须写出来：复盘里「六档塞不进 items 上限 5」「value 传超范围被拒」都是建完才发现
+                const cap =
+                  f.kind === "array" && (f.minItems != null || f.maxItems != null)
+                    ? ` minItems=${f.minItems ?? 0} maxItems=${f.maxItems ?? "∞"}`
+                    : f.kind === "number" && (f.numMin != null || f.numMax != null)
+                      ? ` min=${f.numMin ?? "-∞"} max=${f.numMax ?? "∞"}${f.numInt ? " int" : ""}`
+                      : "";
+                return `    - ${f.key} ${kind}${dv}${cap}${shapeOf(f)}：${f.label}`;
+              })
+              .join("\n");
+            const els = (t.elements ?? []).length
+              ? "\n  可拖动元素：" +
+                t.elements.map((e: any) => `${e.id}（${e.label}）`).join("、")
+              : "";
+            return `${t.type} · ${t.name}：${t.summary}\n  时长 ${t.duration.min}-${t.duration.max} 帧，默认 ${t.duration.default}${els}\n${fields}`;
+          })
+          .join("\n\n") + guideHint
+      );
     },
   },
   {
@@ -6913,7 +6958,7 @@ const TOOLS: ToolDef[] = [
       layoutMode: z
         .string()
         .optional()
-        .describe("版式体系：内置场景（76 种现成版式）/ 自由画布 freeform / 混合"),
+        .describe("版式体系：内置场景（75 个现成版式）/ 自由画布 freeform / 混合"),
       avoid: z.array(z.string()).optional().describe("禁止出现的词/竞品/品牌规范"),
       assetsNote: z.string().optional().describe("可用素材情况"),
       voice: z.string().optional().describe("配音：音色/语言/语速/是否要字幕"),
@@ -7994,11 +8039,15 @@ const TOOLS: ToolDef[] = [
   {
     name: "tool_search",
     description:
-      "按意图搜索可用工具（常驻只暴露 4 个核心工具，其余工具全部从这里找）：返回工具名、完整说明、参数表。找到后用 tool_call(name, args) 执行。传 all=true 看全部工具目录（只有名字与一句话说明）。",
+      "按意图搜索可用工具（常驻只暴露 4 个核心工具，其余工具全部从这里找）：返回工具名、完整说明、参数表。找到后用 tool_call(name, args) 执行。" +
+      "传 all=true 看全部工具目录（名字 + 一句话 + 参数个数，不含参数表——看中哪个再用 names 取它的完整参数表，一次可传多个）。",
     shape: {
-      query: z.string().optional().describe("意图关键词，如：画中画 / 字幕 / 配音 / 历史 / 横屏 / 卡点"),
-      all: z.boolean().optional().describe("true = 返回全部工具目录"),
-      names: z.array(z.string()).optional().describe("按名字精确取某几个工具的完整文档（含参数表）"),
+      query: z.string().optional().describe("意图关键词，如：画中画 / 字幕 / 配音 / 3D / 历史 / 横屏 / 卡点"),
+      all: z.boolean().optional().describe("true = 返回全部工具目录（名字 + 参数个数）"),
+      names: z
+        .array(z.string())
+        .optional()
+        .describe("按名字精确取某几个工具的完整文档（含参数表）——all=true 之后第二步就用它"),
     },
     run: async (a) => {
       const others = TOOLS.filter((d) => !CORE_TOOL_NAMES.has(d.name) && !d.retiredTo);
@@ -8011,7 +8060,16 @@ const TOOLS: ToolDef[] = [
         return JSON.stringify(picked.map(fullDoc));
       }
       if (a.all) {
-        return JSON.stringify(others.map((d) => ({ name: d.name, desc: firstLine(d.description) })));
+        // 目录只给名字 + 一句话 + 参数个数：参数个数是给 agent 的一个成本信号——
+        // 看到「12 参数」它就会先去 names 取全表，而不是照着直觉硬写一版再被拒。
+        // 保持纯 JSON 数组（脚本侧会 JSON.parse），"怎么看这份目录"写在工具描述里。
+        return JSON.stringify(
+          others.map((d) => ({
+            name: d.name,
+            params: Object.keys(d.shape).length,
+            desc: firstLine(d.description),
+          })),
+        );
       }
       const q = (a.query ?? "").trim().toLowerCase();
       if (!q) return `传 query 搜工具（如 tool_search("画中画")），或 all=true 看全量目录。`;
@@ -8480,6 +8538,18 @@ const SEARCH_ALIASES: Record<string, string[]> = {
   布局: ["layout_grid", "align_elements"],
   对齐: ["align_elements", "layout_grid"],
   排版: ["layout_grid", "align_elements"],
+  // 3D 与图解：agent 常用「立体/三维/太空/行星」这类词，工具名里一个都不含
+  "3d": ["add_scene", "list_scene_types", "update_scene"],
+  三维: ["add_scene", "list_scene_types", "update_scene"],
+  立体: ["add_scene", "list_scene_types"],
+  太空: ["add_scene", "list_scene_types"],
+  行星: ["add_scene", "list_scene_types"],
+  太阳系: ["add_scene", "list_scene_types"],
+  分子: ["add_scene"],
+  装置: ["add_scene"],
+  图解: ["add_scene", "upload_asset"],
+  等轴测: ["add_scene"],
+  插图: ["add_scene"],
   体检: ["check_project"],
   诊断: ["check_project"],
   自检: ["check_project"],
