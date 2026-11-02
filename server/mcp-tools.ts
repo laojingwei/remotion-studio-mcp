@@ -1327,7 +1327,7 @@ const TOOLS: ToolDef[] = [
   {
     name: "get_guide",
     description:
-      "读项目里的技能指南（按需加载，省上下文）：工具全书 manual（能力地图/意图速查/铁律）、导演流程、稿件写法 script、内容打磨 content（标题写结论/数字配参照/删形容词/去 AI 味：翻案腔、三项排比、结尾升华、黑话、念不出来的符号）、字幕写法 subtitle（一屏一句、无标点）、画面质感 craft、用途结构 formats、声音设计 sound、长片章节、版式配方、旁白配音、记忆与模板、交付验收。先用 list_guides 看有哪些，再 get_guide 取某一篇；传 section 可只取某一节。",
+      "读项目里的技能指南（按需加载，省上下文）。**先 list_guides 看有哪些，再 get_guide 取某一篇**——name 要用 list_guides 返回的名字（传别的会报\"技能名不合法\"），section 也要对上该篇实际小节（报错会列出可用小节）：工具全书 manual（能力地图/意图速查/铁律）、导演流程、稿件写法 script、内容打磨 content（标题写结论/数字配参照/删形容词/去 AI 味：翻案腔、三项排比、结尾升华、黑话、念不出来的符号）、字幕写法 subtitle（一屏一句、无标点）、画面质感 craft、用途结构 formats、声音设计 sound、长片章节、版式配方 scene-recipes、旁白配音、记忆与模板、交付验收；传 section 可只取某一节。",
     shape: {
       name: z
         .string()
@@ -1347,7 +1347,8 @@ const TOOLS: ToolDef[] = [
     description:
       "开工前的视觉锚点：按 1–3 个候选风格，各出**两张同款样张**——密度页（看内容会不会空）+ 封面页（看调性）——让用户挑。\n" +
       "这是「别一股脑开干」的防线——50 幕做完才发现方向不对，返工量是现在的几十倍。\n" +
-      "抽完把图发给用户，选中的用 confirm_style_probe 记下来；没 probe 过，build_storyboard 会拒绝。",
+      "抽完把图发给用户，选中的用 confirm_style_probe 记下来；没 probe 过，build_storyboard 会拒绝。\n" +
+      "⚠️ 冷启动第一次调用可能报浏览器连接超时——服务起来后浏览器要拉起，**重试一次通常就过**；连续两次超时才是真故障。",
     shape: {
       projectId: z.string().optional().describe("要操作的工程 id，不传 = 当前默认工程（list_projects 查）"),
       slugs: z.array(z.string()).optional().describe("1–3 个候选风格 slug（list_styles 里挑）；不传用 brief.style"),
@@ -4929,7 +4930,10 @@ const TOOLS: ToolDef[] = [
       "默认自动挑「第一个转场交界」（转场问题最常暴露的地方）；也可以指定 sceneIds 或帧区间。",
     shape: {
       projectId: z.string().optional().describe("要操作的工程 id，不传 = 当前默认工程"),
-      sceneIds: z.array(z.string()).optional().describe("只看这几幕（前后各多带 1 秒）"),
+      sceneIds: z
+        .array(z.string())
+        .optional()
+        .describe("只看这几幕（前后各多带 1 秒）。**参数名是复数、值是数组**——只看一幕也传 [sceneId]，传 sceneId 会报错"),
       range: z
         .tuple([z.number().int(), z.number().int()])
         .optional()
@@ -5042,10 +5046,22 @@ const TOOLS: ToolDef[] = [
   {
     name: "preview_frames",
     description:
-      "渲染帧为图片（1–8 帧），返回各帧 URL。改完排版抽 2–3 帧一起看。单帧给 frames:[帧号]；按场景给 sceneId+offset（不用自己算全局帧）；around=\"transitions\" 自动取每幕交界帧。",
+      "渲染帧为图片（1–8 帧），返回各帧 URL。改完排版抽 2–3 帧一起看。三种用法：\n" +
+      "① 全局帧：frames:[90,210]（不带 sceneId）；\n" +
+      "② 某一幕内部：sceneId + frames:[90,210]（**此时 frames 是该幕内的帧号**，不用换算全局）或 sceneId+offset（单帧快捷）；\n" +
+      '③ 转场交界：around="transitions" 自动取每幕交界前后几帧。\n' +
+      "⚠️ 别只抽第 0 帧——文字入场动画从 0 开始，第 0 帧经常是空背景；要等动画落定的帧（如幕内 60% 处）。",
     shape: {
-      frames: z.array(z.number()).min(1).max(8).optional().describe("要看的帧号列表（单帧就是 [帧号]；给 sceneId 时可省略）"),
-      sceneId: z.string().optional().describe("按场景预览：给场景 id + offset 就不用自己算全局帧"),
+      frames: z
+        .array(z.number())
+        .min(1)
+        .max(8)
+        .optional()
+        .describe("帧号列表（1–8 个）。给了 sceneId 就是**该幕内的帧号**，不给是全片全局帧号"),
+      sceneId: z
+        .string()
+        .optional()
+        .describe("按哪一幕预览。给了它，frames 按「该幕内帧号」换算；配合 offset 是单帧快捷方式"),
       offset: z.number().optional().describe("场景内偏移（帧），配合 sceneId，默认 0"),
       around: z
         .enum(["transitions"])
@@ -5065,8 +5081,15 @@ const TOOLS: ToolDef[] = [
         // 多轨之后起点不再等于"前序时长之和"，必须走 sceneSpans（否则画中画会预览到别处）
         const span = sceneSpans(p.scenes as any[])[idx];
         const dur = span?.dur ?? (p.scenes as any[])[idx].durationInFrames;
-        const off = Math.max(0, Math.min(dur - 1, a.offset ?? 0));
-        frames = [(span?.start ?? 0) + off];
+        const clamp = (f: number) => Math.max(0, Math.min(dur - 1, f));
+        if (a.frames?.length) {
+          // sceneId + frames = 该幕内的帧号（agent 的自然直觉，实测就是这么传的——
+          // 以前这里直接用 frames 覆盖成 [起点+offset]，传的帧被静默丢掉只回第 0 帧）
+          frames = a.frames.map((f: number) => (span?.start ?? 0) + clamp(f));
+        } else {
+          const off = Math.max(0, Math.min(dur - 1, a.offset ?? 0));
+          frames = [(span?.start ?? 0) + off];
+        }
       }
       if (a.around === "transitions") {
         // 每幕交界前后各取几帧：转场只在交界那 8–22 帧里，静态单帧永远看不到
@@ -7446,7 +7469,7 @@ const TOOLS: ToolDef[] = [
   {
     name: "build_storyboard",
     description:
-      "按分镜表建成场景：每幕 add_scene（type/props/时长/名字），口播文本写成字幕，并把 sceneId 回填分镜。replace=true 会先清掉工程现有场景。\n别一次铺满再给用户看：先 build_storyboard(shot=1) 只建第 1 幕 → preview_frame 给用户过目 → 满意再 build_storyboard(replace=true) 全量建（会重建第 1 幕，属正常）。",
+      "按分镜表建成场景：每幕 add_scene（type/props/时长/名字），口播文本写成字幕，并把 sceneId 回填分镜。replace=true 会先清掉工程现有场景。\n别一次铺满再给用户看：先 build_storyboard(shot=1) 只建第 1 幕 → preview_frame 给用户过目 → 满意再 build_storyboard(replace=true) 全量建（会重建第 1 幕，属正常）。\n⚠️ 建出来的幕转场是默认 fade 12 帧——brief 设计锁里的转场档位（如「利落」= zoom 8 帧）不会被继承，建完用 set_transitions 按设计锁补一遍，否则 check_project 会报转场违约。",
     shape: {
       projectId: z.string().optional().describe("要操作的工程 id，不传 = 当前默认工程（list_projects 查）"),
       shot: z

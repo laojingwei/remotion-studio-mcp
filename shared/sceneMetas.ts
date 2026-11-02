@@ -1327,7 +1327,7 @@ export const funnelMeta: SceneMeta = {
   type: "funnel",
   name: "转化漏斗",
   category: "数据",
-  summary: "几层横条逐层收窄，层间标转化率；曝光→进播→下单这类流程用它",
+  summary: "几层横条逐层收窄，层间标转化率；曝光→进播→下单这类流程用它。⚠️ 层间「↓xx%」是**自动算出来的**（相邻 value 相除），不是你给的数据——brief 里没有转化率依据就别用它，换 list 或 progress",
   schema: z.object({
     heading: z.string().default("").describe("顶部标题，可留空"),
     stages: z
