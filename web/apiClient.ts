@@ -76,22 +76,53 @@ export async function fetchProject(id: string): Promise<Project> {
 export const CLIENT_ID =
   (globalThis.crypto?.randomUUID?.() ?? Math.random().toString(36).slice(2)).slice(0, 12);
 
+let opSeq = 0;
+/** "没等到响应"（超时/被中断）——只有这类错误值得重试，4xx/5xx 是明确答复 */
+const isNoResponse = (err: unknown) =>
+  err instanceof DOMException && (err.name === "TimeoutError" || err.name === "AbortError");
+
 export async function postOps(
   projectId: string,
   ops: Op[],
   actor: "user" | "agent" = "user",
 ): Promise<OpResponse> {
-  const res = await fetch(`/api/projects/${projectId}/ops`, {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({ ops, actor, clientId: CLIENT_ID }),
-    // 必须有超时：写请求在客户端是**串行排队**的，一个永不返回的请求会把后面所有编辑
-    // 一起卡住（服务端事件循环被挂死时就是这样）。超时后 apply 会报错并放行队列。
-    signal: AbortSignal.timeout(20000),
-  });
-  const data = await res.json();
-  if (!res.ok) throw new Error(data.error ?? "操作失败");
-  return data;
+  /**
+   * 幂等键：一次逻辑写入 = 一个 opId，重试时不变。
+   *
+   * 为什么要它才能重试：超时有两种情况——请求根本没到，或者**到了、也写库了，但响应没回来**。
+   * 后者若是简单地重发一次，`add_element` 就会变成两个元素、`add_keyframe` 会覆盖成两次。
+   * 服务端按 opId 去重之后，重发是安全的。
+   */
+  const opId = `${CLIENT_ID}:${++opSeq}`;
+  const body = JSON.stringify({ ops, actor, clientId: CLIENT_ID, opId });
+  /**
+   * 超时 8 秒、最多试 3 次。本地写盘通常 <100ms，8 秒还没响应基本是连接被占满
+   * （同 host 6 条连接被 SSE/预览占着）或服务端在跑重活。重试能自愈掉绝大多数瞬时拥塞，
+   * 而 20 秒一次、失败就报红，用户只能看到一句看不懂的 "signal timed out"。
+   */
+  let lastErr: unknown;
+  for (let attempt = 0; attempt < 3; attempt++) {
+    if (attempt > 0) await new Promise((r) => setTimeout(r, attempt * 1200));
+    try {
+      const res = await fetch(`/api/projects/${projectId}/ops`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body,
+        // 必须有超时：写请求在客户端是**串行排队**的，一个永不返回的请求会把后面所有编辑
+        // 一起卡住（服务端事件循环被挂死时就是这样）。超时后 apply 会报错并放行队列。
+        signal: AbortSignal.timeout(8000),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error ?? "操作失败");
+      return data;
+    } catch (err) {
+      lastErr = err;
+      if (!isNoResponse(err)) throw err;
+    }
+  }
+  const e = new Error("保存超时：服务端 8 秒没有响应（已自动重试 3 次）");
+  (e as Error & { cause?: unknown }).cause = lastErr;
+  throw e;
 }
 
 export async function fetchSceneTypes() {

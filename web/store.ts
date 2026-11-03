@@ -134,8 +134,29 @@ let applyChain: Promise<void> = Promise.resolve();
 /** 编辑序号：判断"服务端返回时是不是已经有更新的本地编辑了"（见 apply） */
 let applySeq = 0;
 
-const formatBytes = (n: number) => {
-  if (n >= 1024 ** 3) return `${(n / 1024 ** 3).toFixed(2)} GB`;
+/**
+ * 写失败的提示文案。
+ *
+ * 原来直接把 `Error.message` 丢进红色提示条：超时抛的是浏览器原生的
+ * "signal timed out"，用户既不知道是什么、也不知道该干什么。
+ * 这里把最常见的超时翻成人话，并带上**是哪个操作**——否则只知道"保存失败"，
+ * 不知道刚做的那一步（改了哪个东西）没了。
+ */
+const describeApplyError = (err: unknown, ops: Op[]): string => {
+  const what = [...new Set(ops.map((o) => o.op))].slice(0, 3).join("、") || "改动";
+  const msg = err instanceof Error ? err.message : "";
+  if (/保存超时|timed out|TimeoutError|aborted|AbortError/i.test(msg)) {
+    return (
+      `保存「${what}」失败：服务端 8 秒没响应（已自动重试 3 次）。` +
+      `常见原因是后台在渲染、或浏览器连接被其它标签页/预览占满。` +
+      `这一笔改动已回滚，刷新页面后重试即可。`
+    );
+  }
+  if (/版本冲突/.test(msg)) return msg;
+  return msg ? `保存「${what}」失败：${msg}` : "操作失败";
+};
+
+const formatBytes = (n: number) => {  if (n >= 1024 ** 3) return `${(n / 1024 ** 3).toFixed(2)} GB`;
   if (n >= 1024 ** 2) return `${(n / 1024 ** 2).toFixed(1)} MB`;
   return `${Math.max(0, Math.round(n / 1024))} KB`;
 };
@@ -627,7 +648,7 @@ export const useDoc = create<State>((set, get) => ({
         if (optimisticOk && before && seq === applySeq) {
           set({ project: before });
         }
-        set({ error: err instanceof Error ? err.message : "操作失败" });
+        set({ error: describeApplyError(err, ops) });
       }
     };
     // 排队：前一笔（成功或失败）结束才发下一笔。catch 兜住链上已处理的拒绝，避免断链

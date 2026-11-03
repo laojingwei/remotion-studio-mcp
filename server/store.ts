@@ -205,53 +205,70 @@ export function pickSnapshotRevs(revs: number[], keep: number): number[] {
   return sorted.slice(sorted.length - keep);
 }
 
+/** 固定槽位文件名：rev 对 keep 取模，第 50 份之后自然盖掉最老的那一份 */
+const slotFileOf = (id: string, rev: number) =>
+  path.join(historyDirOf(id), `s${rev % SNAPSHOT_KEEP}.json`);
+
 export function listSnapshots(id: string): number[] {
   const dir = historyDirOf(id);
   if (!fs.existsSync(dir)) return [];
-  return fs
-    .readdirSync(dir)
-    .map((f) => Number(f.replace(/\.json$/, "")))
-    .filter((n) => Number.isFinite(n));
+  const out: number[] = [];
+  for (const f of fs.readdirSync(dir)) {
+    // 旧格式：直接以 rev 命名
+    const legacy = /^(\d+)\.json$/.exec(f);
+    if (legacy) {
+      out.push(Number(legacy[1]));
+      continue;
+    }
+    // 新格式：s<slot>.json，rev 写在内容里
+    if (!/^s\d+\.json$/.test(f)) continue;
+    try {
+      const data = JSON.parse(fs.readFileSync(path.join(dir, f), "utf8")) as { rev?: number };
+      if (typeof data.rev === "number") out.push(data.rev);
+    } catch {
+      /* 坏快照跳过：不能因为一份损坏的历史让整个列表 500 */
+    }
+  }
+  return out;
 }
 
+/**
+ * 落一份 rev 快照。
+ *
+ * **固定 50 个槽位轮转覆盖，永远不删文件** —— 这条是被真实事故逼出来的：
+ * 原来是"写一份、删掉最老的一份"，而本机宿主会给 Node 注入 safe-delete 拦截器
+ * （按每轮删文件数设阈值）。连续编辑几十笔之后，每次保存都撞阈值，
+ * **整个 Node 进程被卡住**：界面表现为属性改不动、所有请求排队到超时
+ * （红色提示 "signal timed out"），刷新也没用，只能重启服务。
+ *
+ * 覆盖同一个文件名只做 write，不触发任何删除策略，所以这条路彻底没有了。
+ * 代价是 `listSnapshots` 要读文件内容才知道 rev（50 个小 JSON，历史面板打开时才算）。
+ */
 export function saveSnapshot(project: Project): void {
   try {
     const dir = historyDirOf(project.id);
     fs.mkdirSync(dir, { recursive: true });
-    fs.writeFileSync(path.join(dir, `${project.rev}.json`), JSON.stringify(project), "utf8");
-
-    /**
-     * **硬上限 50 份**：rev 涨过 50 之后，每写一次就顺带删掉最老的一份。
-     *
-     * 删除一律单独 try/catch：删不掉（占满/被锁/被上层驱动拦）只是这次没清，
-     * 绝不能影响主写入，更不能让工程保存失败。
-     *
-     * 注意：本机的宿主会给 Node 注入 safe-delete 拦截器（按"每轮删文件数"设阈值），
-     * 这里每次写都删一个文件，连续编辑几十笔就可能撞到阈值并**卡住**整个进程
-     * （症状：属性改不动、刷新转圈）。所以服务必须用 `npm start` / 启动编辑器.bat 起，
-     * 它会带 `CODEBUDDY_SAFE_DELETE_ENABLED=0`（见 scripts/start.mjs）。
-     */
-    const all = listSnapshots(project.id);
-    if (all.length <= SNAPSHOT_KEEP) return;
-    const keepSet = new Set(pickSnapshotRevs(all, SNAPSHOT_KEEP));
-    for (const rev of all) {
-      if (keepSet.has(rev)) continue;
-      try {
-        fs.unlinkSync(path.join(dir, `${rev}.json`));
-      } catch {
-        /* 被占用就下次再清 */
-      }
-    }
+    fs.writeFileSync(slotFileOf(project.id, project.rev), JSON.stringify(project), "utf8");
   } catch {
     /* 快照只是锦上添花，失败不影响工程本身 */
   }
 }
 
 export function readSnapshot(id: string, rev: number): Project | null {
-  const file = path.join(historyDirOf(id), `${rev}.json`);
-  if (!fs.existsSync(file)) return null;
+  // 新槽位：内容里的 rev 必须是同一个——槽位可能已被更新的 rev 覆盖
+  const slot = slotFileOf(id, rev);
+  if (fs.existsSync(slot)) {
+    try {
+      const p = JSON.parse(fs.readFileSync(slot, "utf8")) as Project;
+      if (p.rev === rev) return p;
+    } catch {
+      /* 落到旧格式 */
+    }
+  }
+  const legacy = path.join(historyDirOf(id), `${rev}.json`);
+  if (!fs.existsSync(legacy)) return null;
   try {
-    return JSON.parse(fs.readFileSync(file, "utf8")) as Project;
+    return JSON.parse(fs.readFileSync(legacy, "utf8")) as Project;
   } catch {
     return null;
   }

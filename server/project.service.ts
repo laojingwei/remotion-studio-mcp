@@ -124,11 +124,26 @@ class ProjectService {
   }
 
   /** 应用一批操作，返回新文档；rev 冲突时抛 ConflictError */
+  /**
+   * 写请求幂等缓存：`${projectId}:${opId}` → 上一次的结果。
+   *
+   * 客户端超时后会重发同一批 ops（网络没响应 ≠ 没写进去）。没有这张表，
+   * 重发就等于把 `add_element` 再执行一遍——用户会看到"拖了一个物体，冒出两个"。
+   * 只留最近 300 条：够覆盖一次拥塞期间的重试，也不会随工程增长吃内存。
+   */
+  private opResults = new Map<string, OpResult>();
+
   apply(
     id: string,
     ops: Op[],
-    opts: { expectedRev?: number; actor?: string; clientId?: string } = {},
+    opts: { expectedRev?: number; actor?: string; clientId?: string; opId?: string } = {},
   ): OpResult {
+    const idemKey = opts.opId ? `${id}:${opts.opId}` : null;
+    if (idemKey) {
+      const hit = this.opResults.get(idemKey);
+      // 命中 = 上一次其实已经写成功了，只是响应没回到客户端：原样返回，不重复执行
+      if (hit) return hit;
+    }
     const current = this.get(id);
     if (opts.expectedRev !== undefined && opts.expectedRev !== current.rev) {
       const err = new Error(
@@ -168,6 +183,14 @@ class ProjectService {
       project: result.project,
     });
 
+    if (idemKey) {
+      this.opResults.set(idemKey, result);
+      while (this.opResults.size > 300) {
+        const oldest = this.opResults.keys().next().value;
+        if (oldest === undefined) break;
+        this.opResults.delete(oldest);
+      }
+    }
     return result;
   }
 

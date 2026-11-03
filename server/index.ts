@@ -12,6 +12,7 @@ import { createSeedProject } from "../shared/ops";
 import type { Project } from "../shared/schema";
 import { buildFromTemplate, templateList } from "../shared/templates";
 import { projects } from "./project.service";
+import type { OpResult } from "../shared/ops";
 import { templates } from "./template.service";
 import { bundleService } from "./bundle.service";
 import { cleanupOutputs, deleteOutputs, listOutputs, removeProjectOutputs } from "./outputs.service";
@@ -858,7 +859,10 @@ app.post("/api/projects/import", async (c) => {
   }
 });
 
-/** 唯一写入口：一批 op */
+/**
+ * 写请求幂等：客户端超时会重发同一批 ops（网络没响应 ≠ 没写进去），
+ * 去重表在 `ProjectService` 里按 opId 维护，路由只负责把 opId 传下去。
+ */
 app.post("/api/projects/:id/ops", async (c) => {
   try {
     const body = (await c.req.json()) as {
@@ -866,6 +870,7 @@ app.post("/api/projects/:id/ops", async (c) => {
       expectedRev?: number;
       actor?: string;
       clientId?: string;
+      opId?: string;
     };
     if (!Array.isArray(body.ops) || body.ops.length === 0) {
       return c.json({ error: "ops 不能为空" }, 400);
@@ -874,6 +879,7 @@ app.post("/api/projects/:id/ops", async (c) => {
       expectedRev: body.expectedRev,
       actor: body.actor ?? "user",
       clientId: body.clientId,
+      opId: body.opId,
     });
     // agent 或用户刚改过这个工程 → 记为"最近在用"，重启后编辑器直接回到它
     projects.touch(result.project.id);
@@ -1587,4 +1593,18 @@ serve({ fetch: app.fetch, port: PORT }, (info) => {
       ? `  ▸ 编辑器          http://localhost:${info.port}  （已托管构建产物）\n`
       : `  ▸ 编辑器          未构建，先 npm run build；或 npm run dev 用 vite 热更新\n`,
   );
+  /**
+   * 启动方式自检。
+   *
+   * 本机宿主会给 Node 注入 safe-delete 拦截器（按每轮删文件数设阈值）。用
+   * `npm run dev:server` 直接起时没有 `CODEBUDDY_SAFE_DELETE_ENABLED=0`，
+   * 一旦遇到需要连续删除的操作（删除工程、清理旧快照），整个进程可能被卡住——
+   * 症状是"界面突然改不动、所有请求超时"。这条警告是为了让人一眼看到该换启动方式。
+   */
+  if (process.env.CODEBUDDY_SAFE_DELETE_ENABLED !== "0") {
+    console.log(
+      "  ▸ 提示            CODEBUDDY_SAFE_DELETE_ENABLED 未设为 0：删除类操作可能被宿主拦截并卡住进程。" +
+        "建议用 npm start 或「启动编辑器.bat」启动。\n",
+    );
+  }
 });
