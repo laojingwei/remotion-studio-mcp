@@ -6700,5 +6700,16 @@
       }
     }
   ],
-  "updatedAt": "2026-11-03T21:44:19.250Z"
+  "updatedAt": "2026-11-03T21:50:41.513Z",
+  "audioTracks": [
+    {
+      "id": "au_9y2o0s",
+      "src": "/assets/projects/demo3d/bgm-rising-tide.mp3",
+      "name": "BGM · Rising Tide (Kevin MacLeod, CC-BY)",
+      "from": 0,
+      "volume": 0.8,
+      "fadeIn": 1.5,
+      "durationInFrames": 1410
+    }
+  ]
 }
