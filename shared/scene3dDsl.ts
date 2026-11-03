@@ -128,6 +128,13 @@ const ring = z.object({
    */
   innerRadius: z.number().min(0).default(0.35),
   outerRadius: z.number().positive().default(0.6),
+  /**
+   * 扇区（度）。**透明环套在球体外面的必配**：整环的 mesh 中心和球同心，
+   * 透明排序分不出先后，背半环会透过球体显示。拆两个半环后中心分居两侧，
+   * 排序必然"先远后近"。
+   */
+  thetaStart: z.number().optional().describe("扇区起始角（度，0=+X 逆时针）；拆半环用"),
+  thetaLength: z.number().min(0).max(360).optional().describe("扇区跨度（度）；不写=整环"),
 });
 
 export const geometrySchema = z

@@ -283,7 +283,15 @@ const geometryOf = (g: DslNode["geometry"]): React.ReactElement | null => {
     case "octahedron":
       return <octahedronGeometry args={[g.radius, g.detail]} />;
     case "ring":
-      return <ringGeometry args={[g.innerRadius, g.outerRadius, 64]} />;
+      /**
+       * thetaStart/thetaLength 把环拆成扇区：土星环这种**套在球体外面的透明环**，
+       * 整环是一个 mesh 时，它的中心和球同心，three 的透明排序分不出先后，
+       * 背半环会整个透到球体前面。拆成两个半环后中心分居球体两侧，
+       * 排序就必然"先远后近"，远半被球体深度正确挡住。
+       */
+      return g.thetaLength != null
+        ? <ringGeometry args={[g.innerRadius, g.outerRadius, 64, 1, ((g.thetaStart ?? 0) * Math.PI) / 180, (g.thetaLength * Math.PI) / 180]} />
+        : <ringGeometry args={[g.innerRadius, g.outerRadius, 64]} />;
     case "dashRing":
       // 由 NodeView 用 useMemo 烘成 geometry（每次 render 重建会掉帧）
       return null;
@@ -317,7 +325,14 @@ const materialOf = (
   const color = hasMap ? "#ffffff" : m?.body === false ? raw : metalBody(raw, 0.3, 0.18);
   const emissive = m?.emissive ? resolveColor(m.emissive, theme) : undefined;
   const op = (m?.opacity ?? 1) * opacity;
-  const transparent = op < 1 || hasMap;
+  /**
+   * transparent **只看实际不透明度**，不能把 hasMap 算进去。
+   * 贴图本身不透明（行星纹理），op=1 时走 opaque 列表先画、写深度；
+   * 曾经写成 `op < 1 || hasMap`，土星因此被塞进透明列表、排在不透明的环之后，
+   * 被环写下的深度剔掉半张脸——背半环整个"透"过球体显示（太阳系示例实测）。
+   * 真带 alpha 通道的镂空贴图将来要单独开 transparent，别在这里顺手指望。
+   */
+  const transparent = op < 1;
   /**
    * 自发光也吃同一张贴图（three 的 emissiveMap）：自发光是**直接叠加**的纯色，
    * 有 map 却不给 emissiveMap 时，太阳这种"贴图 + 高强度自发光"的球会被那层纯色
@@ -337,7 +352,7 @@ const materialOf = (
         side={side}
         transparent={transparent}
         opacity={op}
-        depthWrite={!transparent}
+        depthWrite={op >= 1}
       />
     );
   }
@@ -377,10 +392,12 @@ const materialOf = (
       transparent={transparent}
       opacity={op}
       /**
-       * 半透明物体不写深度。默认 depthWrite=true 时，0.3 透明度的土星环会把背后的
-       * 行星整块剪掉（看起来是一块实心灰饼，而不是"能透过去的环"）。
+       * depthWrite 按**实际不透明度**判断，不能按 transparent 标记：
+       * 带贴图的行星 transparent 恒为 true（map 分支自动开透明），但 opacity=1 时
+       * 它必须写深度——否则土星环的背半会整个透过球体显示出来（实测踩过）。
+       * 真正的半透明（op<1）才不写，让环能透出后面的行星。
        */
-      depthWrite={!transparent}
+      depthWrite={op >= 1}
       flatShading={m?.flatShading ?? false}
     />
   );
