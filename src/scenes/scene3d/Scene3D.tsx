@@ -1183,7 +1183,12 @@ export const Scene3DScene: React.FC<Scene3DProps> = ({
             setCssBloom(true);
           }
         }}
-        camera={{ position: cam.position, fov: cam.fov }}
+        /**
+         * near/far 显式给：太阳系这种"从贴脸机位一路拉到几千单位"的一镜到底，
+         * 默认 far=1000 会在拉远时把整个星系裁掉（画面直接变黑），
+         * 而贴脸机位又需要 near 够小。1:2e5 的比例在 24 位深度缓冲下没有可见 z-fighting。
+         */
+        camera={{ position: cam.position, fov: cam.fov, near: 0.06, far: 12000 }}
         style={{ position: "absolute", inset: 0 }}
       >
         {overlay ? null : <color attach="background" args={[c.background]} />}

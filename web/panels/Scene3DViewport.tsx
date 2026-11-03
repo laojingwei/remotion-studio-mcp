@@ -2398,7 +2398,7 @@ export const Scene3DViewport: React.FC<{
         resize={{ offsetSize: true }}
         // 和成片一致：关掉 ACES，否则底色和 2D 场景对不上（原因见 Scene3D 里的长注释）
         gl={{ antialias: true, toneMapping: THREE.NoToneMapping }}
-        camera={{ position: [0, 2.4, 9], fov: 45, near: 0.05, far: 400 }}
+        camera={{ position: [0, 2.4, 9], fov: 45, near: 0.06, far: 12000 }}
         onCreated={(state) => {
           setupEnvironment(state, graph.lights?.length ? resolved.spec.env * 0.25 : resolved.spec.env);
           /** e2e / 排查用：把 R3F 的根状态（scene、gl、材质）交出去，只在 dev 构建里挂 */

@@ -337,6 +337,7 @@ const materialOf = (
         side={side}
         transparent={transparent}
         opacity={op}
+        depthWrite={!transparent}
       />
     );
   }
@@ -357,6 +358,7 @@ const materialOf = (
         side={side}
         transparent
         opacity={op}
+        depthWrite={false}
         flatShading={m.flatShading}
       />
     );
@@ -374,6 +376,11 @@ const materialOf = (
       side={side}
       transparent={transparent}
       opacity={op}
+      /**
+       * 半透明物体不写深度。默认 depthWrite=true 时，0.3 透明度的土星环会把背后的
+       * 行星整块剪掉（看起来是一块实心灰饼，而不是"能透过去的环"）。
+       */
+      depthWrite={!transparent}
       flatShading={m?.flatShading ?? false}
     />
   );
