@@ -9,7 +9,7 @@
 | 抽象氛围：一个核心 + 卫星绕、粒子星云、网格地平线、波形柱阵 | **预设**：只传 `preset` / `look` / `spin` / `count`，一行搞定 |
 | 具体的东西：太阳系、分子、机器零件、产品结构、任何"要像那个东西" | **场景图 `graph`**：自己写节点树 |
 
-预设是六套**成品镜头**，不是模型库——它变不出"八大行星"。要具体物体只能写 `graph`。
+预设是六套**成品镜头**（另有 `blank` 空白默认值，什么都不画），不是模型库——它变不出"八大行星"。要具体物体只能写 `graph`。
 给 `graph` 之后 `preset` / `spin` / `count` / `hue` 全部失效（见文末坑 1）。
 
 ---
@@ -23,6 +23,7 @@
 
 | `preset` | 画面 | `spin` 是什么 | `count` 是什么 |
 |---|---|---|---|
+| `blank` | **空白画布（默认）**：什么都不渲染，直接给 `graph` 从零搭 | — | — |
 | `orbit-core` | 中心几何体自转 + 卫星环绕 | 自转 度/秒 | 卫星数（1–12） |
 | `particle-field` | 粒子星云，中心有核 | 自转 度/秒 | 粒子倍率 |
 | `grid-horizon` | 透视网格铺向远方 | 自转 度/秒 | 网格密度 |
@@ -79,6 +80,10 @@
 
 `anim` 同 key 的多段必须首尾相接、不重叠（边界帧 `end = 下一段 start − 1`）。
 
+**求值语义（节点 `anim` 和相机 `anim` 一致）**：段**开始前**不参与（用基础值 / 上一段的终值），
+段**结束后保持终值**——最后一段的 `to` 一直生效到幕尾。想让物体"变完再弹回去"必须写两段
+（去程 + 回程），不要指望段外自动复位。
+
 ### nodes
 
 | 字段 | 说明 |
@@ -88,7 +93,7 @@
 | `geometry` | 见下表（必填） |
 | `material` | 不写就是一层中性暗金属 |
 | `transform.position / rotation / scale / scaleXYZ` | 基础变换，`rotation` 是**度** |
-| `anim[]` | 关键帧，最多 8 段 |
+| `anim[]` | 关键帧，最多 8 段。段结束后**保持终值**（同相机 `anim` 的语义） |
 
 ### 几何体白名单（13 种，写错 type 会直接报可用值）
 
@@ -307,18 +312,41 @@
 
 ## 五、改已经建好的 3D 幕
 
-`update_scene(sceneId, props:{graph})` 就是**整份替换**——`nodes` 是数组，传新数组等于全换，不会按 id 合并。
-只是想改一颗行星的半径，也要把完整 graph 再传一遍。
+**改一个节点用 `update_graph_node`，不要重发整张图。**
 
-**别用"删了重建"来迭代**：每次 remove + add 都涨 rev、都会让分镜表里的 sceneId 失联，还会丢掉你上一轮已经调好的其他节点。
-真要小改就 `update_scene` 传完整 graph；要大改才重建。
+```
+get_graph(sceneId)                                     # 先看节点 id / 形状 / 颜色 / 父级（很省 token）
+update_graph_node(sceneId, "earth", {geometry:{radius:0.55}})   # 只改半径：segments 等其余参数原样保留
+update_graph_node(sceneId, "earth", {material:{color:"accent"}})
+update_graph_node(sceneId, "earth", {transform:{position:[4,0,0]}})
+update_graph_node(sceneId, "moon",  {parent:"earth"})   # 换父级，**世界位置不跳**
+add_graph_node(sceneId, {id:"moon", geometry:{type:"sphere",radius:0.15}, parent:"earth"})
+remove_graph_node(sceneId, "moon")                      # 默认连子节点一起删
+set_graph_scene(sceneId, {camera:{fov:50}, lights:[…], particles:{count:1200}, post:{bloom:1.4}})
+```
+
+合并语义（照"改一个控件"的直觉定的）：
+
+| 字段 | 语义 |
+|---|---|
+| `geometry` | 同 type **深合并**（改半径不动 `segments`）；`type` 变了则整份重来 |
+| `material` / `transform` | 深合并；`map:null` / `scaleXYZ:null` / `emissive:null` = 清掉这一项 |
+| `anim` | 整表替换；`null` 清空 |
+| `label` / `hidden` / `locked` | 直接设；`label:null` 清掉显示名 |
+| `parent` | 换父级并保持世界变换；父级链上有关键帧时只对齐基础变换（回执会警告） |
+
+**为什么不能整份覆盖**：人在编辑器右栏里改的就是这批 op。你 `update_scene` 传一份完整 `graph`，
+会把他刚拖好的位置/颜色一起抹掉，而他那边没有任何提示。整份替换只留给"整幕推倒重建"，
+且重建前先 `get_graph` 拿当前状态再改。
+
+**别用"删了重建"来迭代**：每次 remove + add 都涨 rev、分镜表里的 sceneId 会失联，上一轮调好的节点也白调了。
 
 ---
 
 ## 六、坑（都在实跑撞过）
 
 1. **`graph` 一给，`preset` / `spin` / `count` / `hue` 全部失效**——不是"没生效"，是设计如此。想回到预设：`update_scene(props:{graph:null})`。
-2. **`look` 留 `auto` 会按 `preset` 取值**，而给 graph 时 preset 仍是默认的 `orbit-core` → 实际用的是 `cyber` 的冷色辉光基准。想要暖调/暗调就显式写 `look`。
+2. **`look` 留 `auto` 会按 `preset` 取值**（默认 blank → cyber 的冷色辉光基准）。想要暖调/暗调就显式写 `look`。
 3. **`body` 默认 `true`，会降饱和 + 压暗**。真实星球色、纯色剪影必须 `body:false`，否则"地球是脏灰蓝"。
 4. **中文不进 3D**。3D 里没有文字能力，`title` / `sub` 是 2D 叠层；行星名字标签只能另建一幕 2D（freeform），或者在字幕里念。
 5. **多面体不能贴图**（UV 是碎面，服务端会硬报错）。要低多边形地球：`sphere` + `flatShading:true` + 低 `segments`。
@@ -330,6 +358,8 @@
 11. **颜色写语义名才能跟风格联动**（`primary` / `accent` / `secondary` / `text` / `muted`）。写死 `#RRGGBB` 之后换风格这幕不跟着变——真实物体（星球、木料、金属）该写死就写死，UI/HUD 类元素用语义名。
 12. **3D 渲染慢**：单幕控制在 6–12 秒，别一上来就 `render_video`。先 `preview_frames` 抽 2–3 帧（起点/中段/结尾）看构图，再 `render_preview_clip` 看运动。
 13. **没有 GPU 的环境会降级**（WebGL 不可用时后处理走 CSS 兜底，观感差一档）。抽帧发现辉光糊、边缘脏，先怀疑这个。
+14. **改了 `transform` 但画面没动**：该节点有关键帧，区间内基础变换被关键帧覆盖（回执会警告）。要么改 `anim`，要么清空关键帧。
+15. **`hidden:true` 会连子节点一起不渲染**（星空挡视线时藏它，但藏太阳连地球也没了）。它只是编辑器/数据层的开关，渲染直接跳过，适合"这一版先不要这个物体"。
 
 ---
 

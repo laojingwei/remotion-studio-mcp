@@ -23,6 +23,8 @@ import {
 } from "./schema";
 import { describeSceneBox, normalizeSceneBox, type SceneBox } from "./sceneBox";
 import { droppedProps, getMeta, MIN_SCENE_FRAMES, normalizeProps } from "./sceneMetas";
+import { dslIssues, dslSchema, nodeSchema, type DslNode, type Scene3DDsl } from "./scene3dDsl";
+import { hasAnimatedChain, reparentLocalTrs, type Trs } from "./scene3dTransform";
 import { effectLabel, effectSummaryText } from "./effects";
 import { TRANSITION_TYPES } from "./transitions";
 import { BACKDROP_TYPES, isBackdropType, isPeriodicBackdrop } from "./sceneKinds";
@@ -191,6 +193,60 @@ export type Op =
       indices?: number[];
       mode: ReorderMode;
     }
+  /**
+   * 改 scene3d 场景图里的**一个节点**（按 id 定位，不用重发整张图）。
+   *
+   * 为什么必须有：以前改一颗行星的颜色只能 `update_scene({props:{graph: 整份}})`，
+   * 而 graph 动辄十几个节点、上千行 JSON —— 用户刚在面板里拖完，agent 再整份写一次
+   * 就把他那一下抹掉了。按节点写回是「人和 agent 同时改同一幕」的前提。
+   *
+   * 各字段的合并语义（都按"人改一个控件"的直觉定的）：
+   * - `geometry`：**同 type 深合并**（改半径不会把 segments 重置），type 变了就整份重来；
+   * - `material` / `transform`：深合并（`map: null` / `scaleXYZ: null` 表示清掉这一项）；
+   * - `anim`：整表替换（关键帧段之间没有"合并"的合理语义），传 null 清空；
+   * - `parent`：换父级时**保持世界位置/角度/大小**（见 shared/scene3dTransform.ts）。
+   */
+  | {
+      op: "update_graph_node";
+      sceneId: string;
+      nodeId: string;
+      patch: {
+        label?: string | null;
+        hidden?: boolean;
+        locked?: boolean;
+        parent?: string | null;
+        geometry?: Record<string, unknown>;
+        material?: Record<string, unknown> | null;
+        transform?: Record<string, unknown>;
+        anim?: unknown[] | null;
+      };
+    }
+  /** 往 scene3d 场景图里加一个节点（不传 id 时自动起名 n1/n2…） */
+  | {
+      op: "add_graph_node";
+      sceneId: string;
+      node: Record<string, unknown>;
+      /** 插到数组里某个节点之后（决定渲染顺序与大纲顺序），不传则追加在末尾 */
+      afterId?: string;
+    }
+  /**
+   * 删一个节点。`withChildren` 默认 true（删父带子）——
+   * 只删父级会把子节点变成孤儿（parent 指向不存在的 id，整幕直接校验不过）。
+   */
+  | {
+      op: "remove_graph_node";
+      sceneId: string;
+      nodeId: string;
+      withChildren?: boolean;
+    }
+  /** 相机（位置/看向/fov/环绕）。整个 camera 传 null = 交还给自动取景 */
+  | { op: "set_graph_camera"; sceneId: string; camera: Record<string, unknown> | null }
+  /** 自定义光源整组替换（上限 8 盏）；null 或 [] = 撤掉自定义光，回到 look 的默认打光 */
+  | { op: "set_graph_lights"; sceneId: string; lights: unknown[] | null }
+  /** 粒子层（星空/尘埃）。null = 关掉 */
+  | { op: "set_graph_particles"; sceneId: string; particles: Record<string, unknown> | null }
+  /** 后期（辉光）。null = 回到 look 的默认值 */
+  | { op: "set_graph_post"; sceneId: string; post: Record<string, unknown> | null }
   | {
       op: "reorder_scenes";
       sceneIds: string[];
@@ -450,6 +506,13 @@ export const OP_FIELDS: Record<string, readonly string[]> = {
   add_freeform_element: ["op", "sceneId", "element"],
   remove_freeform_element: ["op", "sceneId", "elementId", "index"],
   reorder_freeform_elements: ["op", "sceneId", "elementId", "index", "indices", "mode"],
+  update_graph_node: ["op", "sceneId", "nodeId", "patch"],
+  add_graph_node: ["op", "sceneId", "node", "afterId"],
+  remove_graph_node: ["op", "sceneId", "nodeId", "withChildren"],
+  set_graph_camera: ["op", "sceneId", "camera"],
+  set_graph_lights: ["op", "sceneId", "lights"],
+  set_graph_particles: ["op", "sceneId", "particles"],
+  set_graph_post: ["op", "sceneId", "post"],
   reorder_scenes: ["op", "sceneIds", "reflow"],
   compact_main_track: ["op"],
   remove_scene: ["op", "sceneId"],
@@ -656,6 +719,117 @@ function idsOf(p: Project): { scenes: Set<string>; elements: Set<string> } {
     }
   }
   return { scenes, elements };
+}
+
+/* ──────────────── scene3d 场景图的局部写回（update_graph_node 一族） ──────────────── */
+
+type GraphDoc = Scene3DDsl;
+
+const r4 = (n: number) => Math.round(n * 1e4) / 1e4;
+const r3 = (n: number) => Math.round(n * 1e3) / 1e3;
+
+const isPlainObject = (v: unknown): v is Record<string, unknown> =>
+  Boolean(v) && typeof v === "object" && !Array.isArray(v);
+
+/**
+ * 深合并，`null` 表示**删掉这个键**。
+ *
+ * 用 null 而不是 undefined 是因为 op 走的是 JSON：JSON 里 `undefined` 会被整个丢掉，
+ * 于是「清空这一项」根本表达不出来（老实现里 `scaleXYZ: undefined` 就是静默无效）。
+ */
+function deepMerge(base: Record<string, unknown>, patch: Record<string, unknown>): Record<string, unknown> {
+  const out: Record<string, unknown> = { ...base };
+  for (const [k, v] of Object.entries(patch)) {
+    if (v === null) delete out[k];
+    else if (isPlainObject(v) && isPlainObject(out[k])) out[k] = deepMerge(out[k] as Record<string, unknown>, v);
+    else out[k] = v;
+  }
+  return out;
+}
+
+/** 这一幕的 graph；没有就报一条「怎么才有」的话，而不是一句 undefined 崩掉 */
+function graphOf(scene: Scene, opName: string): GraphDoc {
+  if (scene.type !== "scene3d") {
+    throw new Error(
+      `「${scene.name}」是 ${scene.type} 版式，没有 3D 场景图。` +
+        `${opName} 只对 scene3d 生效（要 3D 请先把这一幕换成 scene3d）`,
+    );
+  }
+  const g = (scene.props as { graph?: GraphDoc } | undefined)?.graph;
+  if (!g) {
+    throw new Error(
+      `「${scene.name}」用的是预置场景（没有 graph），没有节点可改。` +
+        `先 update_scene(sceneId, props:{graph:{nodes:[…]}}) 搭出场景图，` +
+        `或者 get_guide("scene3d") 看最小骨架`,
+    );
+  }
+  return structuredClone(g);
+}
+
+/** 校验并落库。任何不合法都在**写进去之前**报出来，不留半成品场景 */
+function saveGraph(scene: Scene, graph: GraphDoc, opName: string): GraphDoc {
+  const parsed = dslSchema.safeParse(graph);
+  if (!parsed.success) {
+    const errs = parsed.error.issues.slice(0, 4).map((i) => describeIssue(i as unknown as Record<string, unknown>));
+    throw new Error(`${opName} 改完的场景图不合法（**没有写入**，画面保持原样）：\n- ${errs.join("\n- ")}`);
+  }
+  const issues = dslIssues(parsed.data);
+  if (issues.length) {
+    throw new Error(`${opName} 改完的场景图有结构问题（**没有写入**）：\n- ${issues.slice(0, 4).join("\n- ")}`);
+  }
+  // 返回**归一化后**的图：调用方要用它写回执（未归一化的对象缺 schema 默认值，
+  // 回执里就会出现 "fov undefined"、"size undefined" 这种半句话）
+  const props = normalizeProps("scene3d", {
+    ...(scene.props as Record<string, unknown>),
+    graph: parsed.data,
+  });
+  scene.props = props as never;
+  return (props as { graph: GraphDoc }).graph;
+}
+
+const nodeIdsOf = (graph: GraphDoc) => graph.nodes.map((n) => n.id).join("、");
+
+function mustFindNode(graph: GraphDoc, nodeId: string, opName: string): DslNode {
+  const node = graph.nodes.find((n) => n.id === nodeId);
+  if (node) return node;
+  throw new Error(
+    `${opName}：场景图里没有节点「${nodeId}」。现有节点（${graph.nodes.length} 个）：` +
+      `${nodeIdsOf(graph)}。要新建用 add_graph_node；要看全貌用 get_graph`,
+  );
+}
+
+/** 自动节点 id：n1、n2…（跳过已被占用的） */
+function autoNodeId(graph: GraphDoc): string {
+  const used = new Set(graph.nodes.map((n) => n.id));
+  for (let i = 1; i <= 999; i++) if (!used.has(`n${i}`)) return `n${i}`;
+  return `n${Date.now().toString(36)}`;
+}
+
+/** 节点的全部后代 id（删父带子用） */
+function descendantIds(graph: GraphDoc, id: string): string[] {
+  const out: string[] = [];
+  const walk = (parent: string) => {
+    for (const n of graph.nodes) {
+      if (n.parent !== parent) continue;
+      out.push(n.id);
+      walk(n.id);
+    }
+  };
+  walk(id);
+  return out;
+}
+
+/** TRS → transform 字段：三轴一致就写 scale，否则写 scaleXYZ（渲染层只认这两个之一） */
+function transformFromTrs(trs: Trs): Record<string, unknown> {
+  const [x, y, z] = trs.scale;
+  const uniform = Math.abs(x - y) < 1e-4 && Math.abs(y - z) < 1e-4;
+  const out: Record<string, unknown> = {
+    position: trs.position.map(r4),
+    rotation: trs.rotation.map(r3),
+  };
+  if (uniform) out.scale = Math.max(1e-4, r4(Math.abs(x)));
+  else out.scaleXYZ = [Math.max(1e-4, r4(Math.abs(x))), Math.max(1e-4, r4(Math.abs(y))), Math.max(1e-4, r4(Math.abs(z)))];
+  return out;
 }
 
 export function applyOps(project: Project, ops: Op[]): OpResult {
@@ -1540,6 +1714,303 @@ export function applyOps(project: Project, ops: Op[]): OpResult {
             ? `主轨恢复连续排布（${cleared} 幕的自定义起点被清掉，从第 0 帧开始）`
             : "主轨本来就是连续的",
         );
+        break;
+      }
+
+      /* ── scene3d 场景图：按节点写回 ── */
+      case "update_graph_node": {
+        const scene = mustFind(next, op.sceneId);
+        const graph = graphOf(scene, "update_graph_node");
+        const node = mustFindNode(graph, op.nodeId, "update_graph_node");
+        const patch = (op.patch ?? {}) as Record<string, unknown>;
+        const allowed = ["label", "hidden", "locked", "parent", "geometry", "material", "transform", "anim"];
+        const unknown = Object.keys(patch).filter((k) => !allowed.includes(k));
+        if (unknown.length) {
+          throw new Error(
+            `update_graph_node 的 patch 有不认识的字段：${unknown.join("、")}。` +
+              `可用：${allowed.join("、")}（要改场景级的东西用 set_graph_camera / set_graph_lights / …）`,
+          );
+        }
+        const changed: string[] = [];
+        const name = node.label ? `${node.id}（${node.label}）` : node.id;
+
+        if ("parent" in patch) {
+          const nextParent =
+            patch.parent === null || patch.parent === "" ? undefined : String(patch.parent);
+          if (nextParent === node.parent) {
+            // 同父级：什么都不用做（不算改动，避免"点了一下没变化却多一步撤销"）
+          } else {
+            if (nextParent) {
+              if (!graph.nodes.some((n) => n.id === nextParent)) {
+                throw new Error(
+                  `update_graph_node：新父级「${nextParent}」不存在。现有节点：${nodeIdsOf(graph)}`,
+                );
+              }
+              // 挂到自己的子孙下面必定成环（A→B→A），dslIssues 会报，但这里给出人话
+              let cur: DslNode | undefined = graph.nodes.find((n) => n.id === nextParent);
+              let guard = 0;
+              while (cur && guard++ <= graph.nodes.length) {
+                if (cur.id === node.id) {
+                  throw new Error(
+                    `update_graph_node：不能把「${node.id}」挂到它自己的子孙「${nextParent}」下面（会成环）`,
+                  );
+                }
+                cur = cur.parent ? graph.nodes.find((n) => n.id === cur!.parent) : undefined;
+              }
+            }
+            if (hasAnimatedChain(graph.nodes, node.id) || (nextParent && hasAnimatedChain(graph.nodes, nextParent))) {
+              summary.push(
+                `⚠️「${name}」这条父级链上有关键帧：换父级只对齐了**基础变换**，` +
+                  `关键帧里的位置是绝对值，动画一开始仍会把它带到原来的轨迹上`,
+              );
+            }
+            const trs = reparentLocalTrs(graph.nodes, node.id, nextParent);
+            if (nextParent) node.parent = nextParent;
+            else delete node.parent;
+            // 保持世界变换：不这么做，行星会在改父级的瞬间飞出轨道
+            if (trs) node.transform = transformFromTrs(trs) as never;
+            changed.push(nextParent ? `挂到「${nextParent}」下（位置不变）` : "提到根层级（位置不变）");
+          }
+        }
+
+        if (isPlainObject(patch.geometry)) {
+          const cur = node.geometry as unknown as Record<string, unknown>;
+          const g = patch.geometry;
+          if (typeof g.type === "string" && g.type !== cur.type) {
+            // 换形状：整份替换（旧形状的 radius/segments 对新形状没有意义）
+            node.geometry = g as never;
+            changed.push(`几何体换成 ${g.type}`);
+          } else {
+            node.geometry = deepMerge(cur, g) as never;
+            changed.push("几何体");
+          }
+        }
+
+        if ("material" in patch) {
+          if (patch.material === null) {
+            delete (node as { material?: unknown }).material;
+            changed.push("清掉材质（回到默认暗金属）");
+          } else if (isPlainObject(patch.material)) {
+            node.material = deepMerge((node.material ?? {}) as Record<string, unknown>, patch.material) as never;
+            changed.push("材质");
+          } else {
+            throw new Error("update_graph_node：patch.material 必须是对象或 null");
+          }
+        }
+
+        if ("transform" in patch) {
+          if (!isPlainObject(patch.transform)) {
+            throw new Error("update_graph_node：patch.transform 必须是对象（如 {position:[1,0,0]}）");
+          }
+          node.transform = deepMerge((node.transform ?? {}) as Record<string, unknown>, patch.transform) as never;
+          changed.push("变换");
+          // 最容易被当成"编辑器坏了"的一条：区间内关键帧会**完全覆盖**基础变换
+          const covered = (node.anim ?? []).some(
+            (a) =>
+              a.to &&
+              (["posX", "posY", "posZ", "rotX", "rotY", "rotZ", "scale"] as const).some(
+                (k) => typeof a.to?.[k] === "number",
+              ),
+          );
+          if (covered) {
+            summary.push(
+              `⚠️「${name}」有关键帧，第 ${(node.anim ?? []).map((a) => `${a.at[0]}-${a.at[1]}`).join("、")} 帧内` +
+                `基础变换会被关键帧覆盖——当前位置改了但动画区间里看不到变化，要改动画请改 anim`,
+            );
+          }
+        }
+
+        if ("anim" in patch) {
+          if (patch.anim === null) {
+            delete (node as { anim?: unknown }).anim;
+            changed.push("清掉关键帧");
+          } else if (Array.isArray(patch.anim)) {
+            node.anim = patch.anim as never;
+            changed.push(`关键帧（${patch.anim.length} 段）`);
+          } else {
+            throw new Error("update_graph_node：patch.anim 必须是数组或 null");
+          }
+        }
+
+        if ("label" in patch) {
+          const v = patch.label;
+          if (v === null || v === "") {
+            delete (node as { label?: string }).label;
+            changed.push("清掉显示名");
+          } else if (typeof v === "string") {
+            node.label = v.trim();
+            changed.push(`显示名「${node.label}」`);
+          } else {
+            throw new Error("update_graph_node：patch.label 必须是字符串或 null");
+          }
+        }
+        for (const flag of ["hidden", "locked"] as const) {
+          if (!(flag in patch)) continue;
+          const v = patch[flag];
+          if (typeof v !== "boolean") throw new Error(`update_graph_node：patch.${flag} 必须是 true/false`);
+          if (v) (node as Record<string, unknown>)[flag] = true;
+          else delete (node as Record<string, unknown>)[flag];
+          changed.push(`${flag === "hidden" ? (v ? "隐藏" : "显示") : v ? "锁定" : "解锁"}`);
+        }
+
+        if (!changed.length) {
+          summary.push(`「${scene.name}」节点「${name}」没有需要改的东西（patch 为空或与原值相同）`);
+          break;
+        }
+        saveGraph(scene, graph, "update_graph_node");
+        summary.push(`「${scene.name}」节点「${name}」：${changed.join("、")}`);
+        break;
+      }
+
+      case "add_graph_node": {
+        const scene = mustFind(next, op.sceneId);
+        const graph = graphOf(scene, "add_graph_node");
+        if (!isPlainObject(op.node)) throw new Error("add_graph_node：node 必须是对象（至少给 geometry）");
+        if (graph.nodes.length >= 48) {
+          throw new Error(`add_graph_node：节点已到上限 48 个（「${scene.name}」）。先删掉不用的节点`);
+        }
+        const nodeIn: Record<string, unknown> = { ...op.node };
+        const known = new Set(Object.keys(nodeSchema.shape));
+        const unknown = Object.keys(nodeIn).filter((k) => !known.has(k));
+        if (unknown.length) {
+          throw new Error(
+            `add_graph_node：node 有不认识的字段：${unknown.join("、")}。可用：${[...known].join("、")}`,
+          );
+        }
+        const id = typeof nodeIn.id === "string" && nodeIn.id.trim() ? nodeIn.id.trim() : autoNodeId(graph);
+        nodeIn.id = id;
+        if (graph.nodes.some((n) => n.id === id)) {
+          throw new Error(`add_graph_node：节点 id「${id}」已存在。现有节点：${nodeIdsOf(graph)}`);
+        }
+        if (typeof nodeIn.parent === "string" && !graph.nodes.some((n) => n.id === nodeIn.parent)) {
+          throw new Error(
+            `add_graph_node：parent「${nodeIn.parent}」不存在。现有节点：${nodeIdsOf(graph)}`,
+          );
+        }
+        let at = graph.nodes.length;
+        if (op.afterId) {
+          const i = graph.nodes.findIndex((n) => n.id === op.afterId);
+          if (i < 0) throw new Error(`add_graph_node：afterId「${op.afterId}」不存在。现有节点：${nodeIdsOf(graph)}`);
+          at = i + 1;
+        }
+        graph.nodes.splice(at, 0, nodeIn as unknown as DslNode);
+        saveGraph(scene, graph, "add_graph_node");
+        const g = nodeIn.geometry as { type?: string } | undefined;
+        summary.push(
+          `「${scene.name}」加了节点「${id}」（${g?.type ?? "?"}${nodeIn.parent ? `，挂在 ${nodeIn.parent} 下` : ""}）`,
+        );
+        break;
+      }
+
+      case "remove_graph_node": {
+        const scene = mustFind(next, op.sceneId);
+        const graph = graphOf(scene, "remove_graph_node");
+        const node = mustFindNode(graph, op.nodeId, "remove_graph_node");
+        const kids = descendantIds(graph, node.id);
+        if (op.withChildren === false && kids.length) {
+          // 不静默把子节点提上来：局部坐标会被新父级再乘一次，位置当场跳
+          throw new Error(
+            `remove_graph_node：「${node.id}」下面还有 ${kids.length} 个子节点（${kids.join("、")}）。` +
+              `一起删传 withChildren:true；要留它们，先 update_graph_node 把子节点换到别的父级下`,
+          );
+        }
+        const drop = new Set([node.id, ...(op.withChildren === false ? [] : kids)]);
+        if (graph.nodes.length - drop.size < 1) {
+          throw new Error(`remove_graph_node：场景图至少要留一个节点（现在共 ${graph.nodes.length} 个）`);
+        }
+        graph.nodes = graph.nodes.filter((n) => !drop.has(n.id));
+        saveGraph(scene, graph, "remove_graph_node");
+        summary.push(
+          `「${scene.name}」删了节点「${node.label ?? node.id}」` + (kids.length ? `及其 ${kids.length} 个子节点` : ""),
+        );
+        break;
+      }
+
+      case "set_graph_camera": {
+        const scene = mustFind(next, op.sceneId);
+        const graph = graphOf(scene, "set_graph_camera");
+        if (op.camera === null) {
+          delete graph.camera;
+          saveGraph(scene, graph, "set_graph_camera");
+          summary.push(`「${scene.name}」相机交还给自动取景`);
+          break;
+        }
+        if (!isPlainObject(op.camera)) throw new Error("set_graph_camera：camera 必须是对象或 null");
+        const cam = deepMerge(
+          (graph.camera ?? {}) as Record<string, unknown>,
+          op.camera,
+        ) as unknown as NonNullable<Scene3DDsl["camera"]>;
+        graph.camera = cam;
+        const savedCam = saveGraph(scene, graph, "set_graph_camera").camera!;
+        summary.push(
+          `「${scene.name}」相机：位置 [${savedCam.position.join(", ")}] → 看向 [${savedCam.target.join(", ")}]` +
+            `，fov ${savedCam.fov}` +
+            (savedCam.orbit?.degPerSec ? `，环绕 ${savedCam.orbit.degPerSec}°/s` : ""),
+        );
+        break;
+      }
+
+      case "set_graph_lights": {
+        const scene = mustFind(next, op.sceneId);
+        const graph = graphOf(scene, "set_graph_lights");
+        if (op.lights === null || (Array.isArray(op.lights) && op.lights.length === 0)) {
+          delete graph.lights;
+          saveGraph(scene, graph, "set_graph_lights");
+          summary.push(`「${scene.name}」撤掉自定义光源，回到 look 的默认打光`);
+          break;
+        }
+        if (!Array.isArray(op.lights)) throw new Error("set_graph_lights：lights 必须是数组或 null");
+        if (op.lights.length > 8) {
+          throw new Error(`set_graph_lights：光源最多 8 盏（收到 ${op.lights.length} 盏）`);
+        }
+        const lights = op.lights as unknown as NonNullable<Scene3DDsl["lights"]>;
+        graph.lights = lights;
+        const savedLights = saveGraph(scene, graph, "set_graph_lights").lights ?? [];
+        summary.push(
+          `「${scene.name}」光源：${savedLights
+            .map((l) => `${l.type}@[${l.position.join(", ")}] i=${l.intensity}`)
+            .join("；")}`,
+        );
+        break;
+      }
+
+      case "set_graph_particles": {
+        const scene = mustFind(next, op.sceneId);
+        const graph = graphOf(scene, "set_graph_particles");
+        if (op.particles === null) {
+          delete graph.particles;
+          saveGraph(scene, graph, "set_graph_particles");
+          summary.push(`「${scene.name}」关掉粒子层`);
+          break;
+        }
+        if (!isPlainObject(op.particles)) throw new Error("set_graph_particles：particles 必须是对象或 null");
+        const parts = deepMerge(
+          (graph.particles ?? {}) as Record<string, unknown>,
+          op.particles,
+        ) as unknown as NonNullable<Scene3DDsl["particles"]>;
+        graph.particles = parts;
+        const savedParts = saveGraph(scene, graph, "set_graph_particles").particles!;
+        summary.push(`「${scene.name}」粒子：${savedParts.count} 个，size ${savedParts.size}`);
+        break;
+      }
+
+      case "set_graph_post": {
+        const scene = mustFind(next, op.sceneId);
+        const graph = graphOf(scene, "set_graph_post");
+        if (op.post === null) {
+          delete graph.post;
+          saveGraph(scene, graph, "set_graph_post");
+          summary.push(`「${scene.name}」辉光回到 look 默认值`);
+          break;
+        }
+        if (!isPlainObject(op.post)) throw new Error("set_graph_post：post 必须是对象或 null");
+        const post = deepMerge(
+          (graph.post ?? {}) as Record<string, unknown>,
+          op.post,
+        ) as unknown as NonNullable<Scene3DDsl["post"]>;
+        graph.post = post;
+        const savedPost = saveGraph(scene, graph, "set_graph_post").post!;
+        summary.push(`「${scene.name}」辉光强度 ×${savedPost.bloom}`);
         break;
       }
 

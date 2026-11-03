@@ -1,6 +1,6 @@
 import { create } from "zustand";
 import type { Project } from "@shared/schema";
-import type { Op } from "@shared/ops";
+import { applyOps, type Op } from "@shared/ops";
 import type { CustomAsset } from "@shared/assetLibrary";
 import type { TemplateInfo } from "./apiClient";
 import {
@@ -131,6 +131,8 @@ let agentTimer: ReturnType<typeof setTimeout> | undefined;
 let es: EventSource | null = null;
 /** 写请求串行队列（见 apply 里的说明）：保证同一工程同一时刻只有一笔 op 在飞 */
 let applyChain: Promise<void> = Promise.resolve();
+/** 编辑序号：判断"服务端返回时是不是已经有更新的本地编辑了"（见 apply） */
+let applySeq = 0;
 
 const formatBytes = (n: number) => {
   if (n >= 1024 ** 3) return `${(n / 1024 ** 3).toFixed(2)} GB`;
@@ -573,22 +575,58 @@ export const useDoc = create<State>((set, get) => ({
      * 典型症状就是「动一个元素，另一个退回原处」。本机延迟只有几毫秒，排队几乎无感。
      */
     const projectIdAtCall = get().project?.id;
+    const record = opts?.snapshot !== false;
+    const seq = ++applySeq;
+
+    /**
+     * **先本地应用，再发请求**（乐观更新）。
+     *
+     * 以前是"发请求 → 等服务端返回 → set"。串行队列保证了写库不乱序，但**界面**要等一个往返：
+     * 这段时间里的连续调整读到的还是旧状态。3D 那边一次改值要重算整颗关键帧（所有通道），
+     * 于是"先改 X 再改 Y"时第二笔用的是没改过 X 的旧数据 —— 表现就是**每调一下就把上一步冲掉**。
+     *
+     * 本地这一遍用服务端同一份 `applyOps`（纯函数），结果必然一致；请求返回后只做最后校正。
+     */
+    const before = get().project;
+    let optimisticOk = false;
+    if (before) {
+      try {
+        const local = applyOps(before, ops);
+        optimisticOk = true;
+        set({
+          project: local.project,
+          past: record ? [...get().past, snapshotOf(before)].slice(-40) : get().past,
+          // 新的编辑动作会截断重做链，和所有编辑器的惯例一致
+          future: record ? [] : get().future,
+          selectedId: local.createdSceneIds[0] ?? get().selectedId,
+        });
+      } catch {
+        /* 本地算不动（未知 op 字段等）：退回老路，等服务端给结果 */
+      }
+    }
+
     const run = async () => {
       const project = get().project;
       // 排队期间可能已经切换工程：这批 ops 是按老工程算的，绝不能写到新工程上
       if (!project || project.id !== projectIdAtCall) return;
       try {
         const res = await postOps(project.id, ops, "user");
-        // snapshot:false 是撤销/重做自己发出的回滚，不能污染历史
-        const record = opts?.snapshot !== false;
-        set({
-          project: res.project,
-          past: record ? [...get().past, snapshotOf(project)].slice(-40) : get().past,
-          // 新的编辑动作会截断重做链，和所有编辑器的惯例一致
-          future: record ? [] : get().future,
-          selectedId: res.createdSceneIds[0] ?? get().selectedId,
-        });
+        /**
+         * 只有"这是最后一笔"时才用服务端结果覆盖。
+         * 中途返回的响应属于更早的状态，覆盖上去会把后面已经乐观落地的编辑冲掉
+         * （那就是用户说的"回退上一步"）。
+         */
+        if (seq === applySeq) {
+          set({
+            project: res.project,
+            selectedId: res.createdSceneIds[0] ?? get().selectedId,
+          });
+        }
       } catch (err) {
+        // 乐观更新失败了：退回这一笔之前的状态，别让界面停在一个服务端没有的版本上
+        if (optimisticOk && before && seq === applySeq) {
+          set({ project: before });
+        }
         set({ error: err instanceof Error ? err.message : "操作失败" });
       }
     };

@@ -262,6 +262,16 @@ export const animSchema = z.object({
 
 export const nodeSchema = z.object({
   id: z.string().min(1).describe("节点 id，同一场景内唯一；子节点用 parent 引用它"),
+  /**
+   * 人给节点起的名字。
+   *
+   * 为什么必须有：编辑器的大纲里如果没有它，一屏全是 `n_3f2a`、`earth-group`
+   * 这类 id，用户没法在十几个节点里认出"哪颗是土星"——点错三次之后就再也不想开这个面板了。
+   * 渲染不读它，纯给人看（agent 写 graph 时顺手写上，人接手时省一半时间）。
+   */
+  label: z.string().optional().describe("节点显示名（大纲里显示，方便人认；不影响渲染）"),
+  hidden: z.boolean().optional().describe("true = 连同子树不渲染（编辑器临时隐藏，数据仍在）"),
+  locked: z.boolean().optional().describe("true = 编辑器里锁住，防误拖误删（渲染照常）"),
   parent: z.string().optional().describe("父节点 id（做卫星、层级旋转用）。扁平数组 + parent 引用，不用嵌套"),
   geometry: geometrySchema,
   material: materialSchema.optional().describe("不写就是一层中性暗金属"),

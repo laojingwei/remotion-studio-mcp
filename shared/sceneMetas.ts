@@ -13,7 +13,7 @@ import { freeformPropsSchema } from "./freeform";
  * 拖到 40 帧松手，落库时被 clamp 回 60 —— 表现出来就是"缩到某个长度会自己弹回去"。
  * 两端现在共用这个常量，手柄拖到哪，落库就是哪。
  */
-import { dslIssues, dslSchema, type Scene3DDsl } from "./scene3dDsl";
+import { dslIssues, dslSchema, geometrySchema, materialSchema, type Scene3DDsl } from "./scene3dDsl";
 
 export const MIN_SCENE_FRAMES = 15;
 
@@ -1675,10 +1675,11 @@ export const scene3dMeta: SceneMeta = {
   summary: "真 3D：几何体 + 光照 + 相机运动，做 2D 给不了的空间感（渲染慢，适合点缀）",
   schema: z.object({
     preset: z
-      .enum(["orbit-core", "particle-field", "grid-horizon", "explode-parts", "waveform", "globe-arc"])
-      .default("orbit-core")
+      .enum(["blank", "orbit-core", "particle-field", "grid-horizon", "explode-parts", "waveform", "globe-arc"])
+      .default("blank")
       .describe(
-        "视觉母题，按要讲的内容选：" +
+        "视觉母题，按要讲的内容选；**默认 blank=空白画布**（什么都不渲染，适合直接给 graph 从零搭；" +
+          "要预置画面时必须显式传 preset）：" +
           "orbit-core=中心几何体自转+卫星环绕（万能开场、聚焦一个概念）；" +
           "particle-field=粒子星云（发散、想象、AI/智能）；" +
           "grid-horizon=透视网格地平线（科技感、速度、未来）；" +
@@ -1743,7 +1744,8 @@ export const scene3dMeta: SceneMeta = {
       ),
   }),
   defaultProps: {
-    preset: "orbit-core",
+    // 默认空白：新增 3D 幕别硬塞一个预设画面（要预置观感时显式传 preset）
+    preset: "blank",
     look: "auto",
     hue: "primary",
     spin: 12,
@@ -1940,6 +1942,7 @@ export const metaList = () =>
  */
 const OPTION_LABELS: Record<string, Record<string, string>> = {
   preset: {
+    blank: "空白（无预设）",
     "orbit-core": "环绕核心",
     "particle-field": "粒子星云",
     "grid-horizon": "网格地平线",
@@ -2308,4 +2311,24 @@ export function describeTypeDeep(type: string): string | null {
     `时长：默认 ${d.default} 帧，${d.min}–${d.max}`,
   ];
   return [...head, "", "字段：", deepFieldsToText(describeFieldsDeep(meta.schema))].join("\n");
+}
+
+/* ──────────────── 3D 编辑面板用的字段表（从 schema 现算，不手抄） ──────────────── */
+
+/**
+ * 几何体白名单展开成 `{ label, fields }` 列表，供编辑器渲染"按形状给参数"的控件。
+ *
+ * 为什么放在这里而不是面板里：`describeFieldsDeep` 在 sceneMetas，而 scene3dDsl
+ * 反过来被 sceneMetas 依赖 —— 在面板里现算就得再引一次 zod 和判别联合的细节。
+ * 在这里算一次，面板只管渲染：**加一个几何体不用改任何 UI 代码**。
+ */
+export const GEOMETRY_VARIANTS: { label: string; fields: DeepField[] }[] =
+  describeFieldsDeep(z.object({ geometry: geometrySchema }))[0]?.variants ?? [];
+
+/** 材质字段表（含 number 的 min/max 与 enum 选项），面板据此渲染控件 */
+export const MATERIAL_FIELDS: DeepField[] = describeFieldsDeep(materialSchema);
+
+/** 单个几何体变体的字段（不含 type 本身，它由下拉决定） */
+export function geometryFieldsOf(type: string): DeepField[] {
+  return GEOMETRY_VARIANTS.find((v) => v.label === type)?.fields ?? [];
 }

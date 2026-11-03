@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { Player, type PlayerRef } from "@remotion/player";
+import { Scene3DViewport } from "./Scene3DViewport";
 import { Video } from "../../src/Video";
 import { totalDuration, sceneOffsets, sceneSpans, type OverlayElement, type Transform } from "@shared/schema";
 import { normalizeSceneBox, type SceneBox } from "@shared/sceneBox";
@@ -156,6 +157,11 @@ export const Preview: React.FC<Props> = ({ playerRef }) => {
       return false;
     }
   });
+  /**
+   * 3D 编辑视口开关。切进去**不挂 Player**（省一份 GPU 渲染），视口自带播放头；
+   * 只有"选中的幕是带 graph 的 scene3d"时才可用（预置场景没有节点可编辑）。
+   */
+  const [view3d, setView3d] = useState(false);
 
   // 滚轮监听是原生的，读不到最新 state，只能靠 ref
   const zoomRef = useRef(1);
@@ -216,6 +222,9 @@ export const Preview: React.FC<Props> = ({ playerRef }) => {
     const el = stageRef.current;
     if (!el) return;
     const onWheel = (e: WheelEvent) => {
+      // 3D 视口内部：滚轮归 OrbitControls（推拉 3D 相机），不能缩放舞台窗口——
+      // 不让路的话窗口 transform 会跟着滚轮一起放大，看起来就像"缩的是窗口不是画布"
+      if (e.target instanceof Element && e.target.closest(".vp3d")) return;
       e.preventDefault();
       const r = el.getBoundingClientRect();
       const cx = r.left + r.width / 2;
@@ -265,6 +274,8 @@ export const Preview: React.FC<Props> = ({ playerRef }) => {
     };
 
     const down = (e: PointerEvent) => {
+      // 3D 视口内部：鼠标交互全部归 3D 相机（左键转视角/中键推拉/右键平移），舞台不平移
+      if (e.target instanceof Element && e.target.closest(".vp3d")) return;
       // Shift / Ctrl / Cmd 拖动留给框选（EditOverlay），这里只认空白拖、Alt+左键和中键
       const blankLeft = e.button === 0 && !e.shiftKey && !e.metaKey && !e.ctrlKey && isBlank(e.target);
       if (e.button !== 1 && !(e.button === 0 && e.altKey) && !blankLeft) return;
@@ -401,7 +412,9 @@ export const Preview: React.FC<Props> = ({ playerRef }) => {
       };
       const delta = nudge[e.key];
       if (delta) {
-        if (!sel.length) return;
+        // 只有画布上有几何位置的东西才能被方向键推动：3D 节点选中（`g:` 前缀）没有 2D 盒子，
+        // 放过去会往 scene.transforms 里写一条 `g:earth` 的垃圾平移
+        if (!sel.some((id) => id.startsWith("ov:") || id.startsWith("fc:"))) return;
         e.preventDefault();
         nudgeSelection(delta[0], delta[1]);
       }
@@ -422,6 +435,7 @@ export const Preview: React.FC<Props> = ({ playerRef }) => {
   // 换场景就清空选择，避免操作作用到上一个场景的元素
   useEffect(() => {
     setSelection([]);
+    setView3d(false);
   }, [selectedId]);
 
   // 元素被删掉（自己删、agent 删）之后，把失效的 id 从选中集里摘掉
@@ -521,6 +535,14 @@ export const Preview: React.FC<Props> = ({ playerRef }) => {
   const height = Math.round(fmt.height * fit);
 
   const scene = project.scenes.find((s) => s.id === selectedId);
+  /** 当前幕在项目时间线上的起点帧：3D 视口把全局播放头换算成幕内帧要用 */
+  const sceneStart = useMemo(() => {
+    if (!scene) return 0;
+    const idx = project.scenes.findIndex((s) => s.id === scene.id);
+    return idx < 0 ? 0 : (sceneOffsets(project.scenes)[idx] ?? 0);
+  }, [project, scene]);
+  /** 所有 scene3d 幕都能进 3D 编辑；预置场景在视口里给"换成可编辑场景图"的入口 */
+  const can3d = scene?.type === "scene3d";
   const activeTarget = selection.length === 1 ? selection[0] : null;
   const isOverlay = (id: string) => id.startsWith("ov:");
   const overlayOf = (id: string) => scene?.elements?.find((e) => e.id === id.slice(3));
@@ -799,7 +821,7 @@ export const Preview: React.FC<Props> = ({ playerRef }) => {
   const nudgeSelection = (dx: number, dy: number) => {
     if (!selectedId || !selection.length) return;
     const map: Record<string, Transform> = {};
-    for (const id of selection) {
+    for (const id of selection.filter((x) => x.startsWith("ov:") || x.startsWith("fc:"))) {
       const t = tf(id);
       map[id] = { ...t, x: Math.min(100, Math.max(0, t.x + dx)), y: Math.min(100, Math.max(0, t.y + dy)) };
     }
@@ -1160,10 +1182,56 @@ export const Preview: React.FC<Props> = ({ playerRef }) => {
         void addElementAt(libId, x, y);
       }}
     >
+      {/* 3D 幕才给这个开关：成片画面 / 可编辑视口 */}
+      {can3d ? (
+        <div className="stage-mode">
+          <button className={`seg-item ${view3d ? "" : "is-on"}`} onClick={() => setView3d(false)}>
+            成片画面
+          </button>
+          <button className={`seg-item ${view3d ? "is-on" : ""}`} onClick={() => setView3d(true)}>
+            3D 编辑
+          </button>
+        </div>
+      ) : null}
+
       <div
         className="canvas-zoom"
         style={{ transform: `translate(${pan.x}px, ${pan.y}px) scale(${zoom})` }}
       >
+        {view3d && scene ? (
+          <div className="canvas-shell" style={{ width, height }}>
+            <Scene3DViewport
+              scene={scene}
+              fps={project.fps}
+              sceneStart={sceneStart}
+              aspect={fmt.width / fmt.height}
+              onExit={() => setView3d(false)}
+            />
+            {/*
+              Player 隐藏挂载而不卸载：时间轴的 seek / 播放头 / 空格播放全靠 playerRef，
+              卸载了整条时间轴就拖不动（实测踩过）。visibility:hidden 保留布局尺寸，
+              暂停状态下零渲染成本；在 3D 模式里按时间轴播放，3D 画面会跟着走（共享播放头）。
+            */}
+            <div style={{ position: "absolute", inset: 0, visibility: "hidden", pointerEvents: "none" }}>
+              <Player
+                ref={playerRef}
+                component={Video}
+                inputProps={inputProps}
+                durationInFrames={Math.max(1, totalDuration(project))}
+                fps={project.fps}
+                compositionWidth={fmt.width}
+                compositionHeight={fmt.height}
+                style={{ width: "100%", height: "100%" }}
+                loop
+                clickToPlay={false}
+                spaceKeyToPlayOrPause={false}
+                doubleClickToFullscreen={false}
+                numberOfSharedAudioTags={sharedAudioTags}
+                acknowledgeRemotionLicense
+              />
+            </div>
+          </div>
+        ) : (
         <div className="canvas-shell" style={{ width, height }} ref={canvasRef}>
           <Player
             ref={playerRef}
@@ -1227,10 +1295,11 @@ export const Preview: React.FC<Props> = ({ playerRef }) => {
             }}
           />
         </div>
+        )}
       </div>
 
       {/* 排列条常驻：没选中时按钮置灰而不是整条消失，免得"找个功能还要先选中" */}
-      <div className={`arrange-bar ${selection.length ? "" : "is-idle"}`}>
+      <div className={`arrange-bar ${selection.length ? "" : "is-idle"} ${view3d && can3d ? "is-hidden-3d" : ""}`}>
         <span className="arrange-label">
           {multi ? `已选 ${selection.length} 个` : activeTarget ? labelOf(activeTarget) : "未选中"}
         </span>
@@ -1361,7 +1430,11 @@ export const Preview: React.FC<Props> = ({ playerRef }) => {
           )}
         </button>
 
-        {selection.length === 1 && cur ? (
+        {/* 3D 选中（g: 节点 / cam 相机）没有 2D 的 x%/y%/旋转，显示这排数只会是假数据 */}
+        {selection.length === 1 &&
+        cur &&
+        !selection[0].startsWith("g:") &&
+        selection[0] !== "cam" ? (
           <>
             <span className="zoom-target">{labelOf(selection[0])}</span>
             <span className="zoom-values">

@@ -2350,6 +2350,536 @@ button.mini.add {
   color: #e2b341;
 }
 
+/* ── 3D 编辑视口：舞台左上角的模式开关 + 视口内的 HUD ── */
+.stage-mode {
+  position: absolute;
+  top: 10px;
+  left: 16px;
+  z-index: 30;
+  display: flex;
+  gap: 2px;
+  padding: 3px;
+  border-radius: 8px;
+  border: 1px solid var(--line);
+  background: rgba(16, 16, 22, 0.82);
+  backdrop-filter: blur(6px);
+}
+
+.stage-mode .seg-item {
+  padding: 3px 10px;
+  border-radius: 6px;
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--muted);
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.stage-mode .seg-item.is-on {
+  background: var(--panel-2);
+  border-color: var(--line-strong);
+  color: var(--text);
+}
+
+/* 3D 模式下「排列/对齐」那条对 3D 节点没有意义，藏起来而不是留着点不动 */
+.arrange-bar.is-hidden-3d {
+  display: none;
+}
+
+.vp3d {
+  position: absolute;
+  inset: 0;
+  background: #05060a;
+}
+
+.vp3d canvas {
+  display: block;
+  /* 拖动手柄要能收到指针事件；R3F 自己会接管 pointer 事件 */
+  touch-action: none;
+}
+
+.vp3d-hud {
+  position: absolute;
+  left: 50%;
+  bottom: 10px;
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  border-radius: 10px;
+  border: 1px solid var(--line);
+  background: rgba(16, 16, 22, 0.86);
+  backdrop-filter: blur(8px);
+  font-size: 11px;
+  color: var(--muted);
+  max-width: calc(100% - 24px);
+}
+
+.vp3d-btn {
+  padding: 3px 9px;
+  border-radius: 6px;
+  border: 1px solid var(--line);
+  background: var(--panel-2);
+  color: var(--text);
+  font-size: 11px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.vp3d-btn:hover:not(:disabled) {
+  border-color: var(--line-strong);
+}
+
+.vp3d-btn:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+.vp3d-range {
+  width: 160px;
+  accent-color: var(--accent);
+}
+
+.vp3d-frame {
+  font-variant-numeric: tabular-nums;
+  color: var(--text);
+  white-space: nowrap;
+}
+
+.vp3d-sep {
+  width: 1px;
+  height: 16px;
+  background: var(--line);
+}
+
+.vp3d-hud .seg {
+  gap: 1px;
+}
+
+.vp3d-hud .seg-item {
+  padding: 3px 8px;
+  font-size: 11px;
+}
+
+.vp3d-tip {
+  position: absolute;
+  left: 12px;
+  top: 10px;
+  padding: 4px 9px;
+  border-radius: 7px;
+  background: rgba(16, 16, 22, 0.72);
+  border: 1px solid var(--line);
+  font-size: 11px;
+  color: var(--muted);
+  max-width: 60%;
+  pointer-events: none;
+}
+
+.vp3d-tip b {
+  color: var(--text);
+  font-weight: 600;
+}
+
+.vp3d-empty {
+  display: grid;
+  place-items: center;
+  height: 100%;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+/* ── 3D 场景图编辑器：大纲树 + 节点字段（右栏） ── */
+.s3d-tabs {
+  padding: 0 0 8px;
+  margin-bottom: 10px;
+  border-bottom: 1px solid var(--line);
+}
+
+.s3d-tree {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  /* panel-scroll 是 flex 列：不锁 flex-shrink 的话，树会被下面高大的字段区压成一条缝 */
+  flex-shrink: 0;
+  max-height: 280px;
+  overflow-y: auto;
+  margin-bottom: 6px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 4px;
+  background: rgba(0, 0, 0, 0.16);
+}
+
+.s3d-node {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 5px 6px;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 11.5px;
+  color: var(--text);
+  transition: background 0.12s;
+}
+
+.s3d-node:hover {
+  background: var(--panel-2);
+}
+
+/* 选中态沿用自由画布卡片那套强调色：用户一眼对上"这行 = 画面上这个物体" */
+.s3d-node.is-selected {
+  background: rgba(198, 242, 78, 0.1);
+  box-shadow: inset 0 0 0 1px rgba(198, 242, 78, 0.35);
+}
+
+.s3d-node-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.s3d-node.is-hidden .s3d-node-name {
+  color: var(--muted);
+  text-decoration: line-through;
+}
+
+.s3d-node-geo {
+  flex: 0 0 auto;
+  font-size: 10px;
+  color: var(--muted);
+  padding: 1px 5px;
+  border: 1px solid var(--line);
+  border-radius: 99px;
+}
+
+.s3d-icon-btn {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  background: none;
+  border: 0;
+  padding: 0;
+  color: var(--muted);
+  cursor: pointer;
+}
+
+.s3d-icon-btn:hover {
+  color: var(--text);
+}
+
+.s3d-icon-btn.is-on {
+  color: var(--accent);
+}
+
+/* 拖拽换父级的悬停目标：蓝色描边，和选中（黄绿）区分开 */
+.s3d-node.is-drop-target {
+  background: rgba(110, 180, 250, 0.14);
+  box-shadow: inset 0 0 0 1px rgba(110, 180, 250, 0.6);
+}
+
+/* 多选后的批量操作条：跟选中态同一族强调色，但更轻 */
+.s3d-batch {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+  margin: 2px 0 8px;
+  padding: 5px 7px;
+  border: 1px solid rgba(198, 242, 78, 0.3);
+  border-radius: 8px;
+  background: rgba(198, 242, 78, 0.06);
+  font-size: 10.5px;
+  color: var(--muted);
+}
+
+.s3d-batch > span {
+  flex: 1 1 100%;
+  margin-bottom: 2px;
+}
+
+.s3d-batch .mini {
+  padding: 2px 8px;
+  font-size: 10.5px;
+}
+
+/* ── 关键帧列表（M4）── */
+.s3d-key-count {
+  margin-left: auto;
+  font-size: 10px;
+  font-weight: 500;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.s3d-key-count.is-full {
+  color: #f0a04b;
+}
+
+.s3d-key-bar {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 6px;
+  margin: 4px 0 6px;
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.s3d-key-bar > span:first-child {
+  min-width: 52px;
+  font-variant-numeric: tabular-nums;
+}
+
+.s3d-key-bar .mini {
+  padding: 2px 8px;
+  font-size: 10.5px;
+}
+
+.s3d-key-add {
+  color: var(--accent) !important;
+  border-color: rgba(198, 242, 78, 0.35) !important;
+}
+
+.s3d-keys {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin: 2px 0 6px;
+  /* 面板是 flex column，子项默认可压缩：不加这个，行会被压成 0 高——
+     DOM 里查得到、视觉上是空白、点也点不到（大纲树踩过同一个坑） */
+  flex: 0 0 auto;
+  /* 九颗封顶，不需要滚动；给个上限免得相机几十颗时把面板撑爆 */
+  max-height: 190px;
+  overflow-y: auto;
+}
+
+.s3d-key {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 4px 3px 3px;
+  border-radius: 6px;
+  font-size: 10.5px;
+  /* 行本身不点，只有圆点和按钮可点：避免误触把播放头带跑 */
+  color: var(--muted);
+}
+
+.s3d-key:hover {
+  background: rgba(255, 255, 255, 0.035);
+}
+
+/* 当前帧所在的那一颗：和选中态同色系，但不抢镜 */
+.s3d-key.is-now {
+  background: rgba(198, 242, 78, 0.08);
+  color: var(--text);
+}
+
+.s3d-key-dot {
+  flex: 0 0 auto;
+  width: 11px;
+  height: 11px;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: var(--muted);
+  cursor: pointer;
+  opacity: 0.55;
+}
+
+.s3d-key.is-now .s3d-key-dot {
+  background: var(--accent);
+  opacity: 1;
+}
+
+.s3d-key-dot:hover {
+  opacity: 1;
+  box-shadow: 0 0 0 3px rgba(198, 242, 78, 0.18);
+}
+
+.s3d-key-frame {
+  flex: 0 0 34px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  color: var(--text);
+}
+
+.s3d-key.is-now .s3d-key-frame {
+  color: var(--accent);
+}
+
+.s3d-key-val {
+  flex: 1 1 auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 10px;
+  opacity: 0.8;
+}
+
+.s3d-key-ease {
+  flex: 0 0 auto;
+  padding: 1px 5px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 5px;
+  background: transparent;
+  color: var(--muted);
+  font-size: 9.5px;
+  cursor: pointer;
+}
+
+.s3d-key-ease:hover {
+  color: var(--text);
+  border-color: rgba(255, 255, 255, 0.22);
+}
+
+.s3d-key-tools {
+  margin-top: 2px;
+}
+
+
+/* 位置/旋转/缩放那种「一行三个数」：标签占 34px，三个输入平分剩余 */
+.s3d-row {
+  display: grid;
+  grid-template-columns: 42px repeat(3, minmax(0, 1fr));
+  gap: 6px;
+  align-items: center;
+  margin-bottom: 6px;
+}
+
+.s3d-row > span {
+  font-size: 10.5px;
+  color: var(--muted);
+  letter-spacing: 0.02em;
+}
+
+/* 只有一个输入的行（强度/衰减/视场角）：第三个输入框占第一格，其余留白 */
+.s3d-row > .s3d-input:only-of-type {
+  grid-column: 2;
+}
+
+.s3d-input {
+  width: 100%;
+  min-width: 0;
+  padding: 5px 7px;
+  font-size: 11.5px;
+  background: var(--panel-2);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  color: var(--text);
+}
+
+.s3d-input:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+.s3d-color {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+}
+
+.s3d-color input[type="color"] {
+  width: 26px;
+  height: 24px;
+  flex: 0 0 auto;
+  padding: 0;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--panel-2);
+}
+
+.s3d-tokens {
+  display: flex;
+  gap: 4px;
+  flex-wrap: wrap;
+  margin-top: 5px;
+}
+
+.s3d-token {
+  font-size: 10px;
+  padding: 2px 7px;
+  border-radius: 99px;
+  border: 1px solid var(--line);
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+}
+
+.s3d-token.is-on {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+/* 面板里的提示句：比 .ff-hint 稍宽一点行距，3D 的说明普遍更长 */
+.s3d-hint {
+  margin: 5px 0 8px;
+  font-size: 11px;
+  line-height: 1.55;
+  color: var(--muted);
+}
+
+.s3d-hint code {
+  font-size: 10.5px;
+  padding: 1px 4px;
+  border-radius: 4px;
+  background: var(--panel-2);
+}
+
+/* 自动打帧说明：一句常驻提示，别让它抢关键帧列表的注意力 */
+.s3d-autokey-hint {
+  margin: 2px 0 8px;
+  font-size: 10.5px;
+  opacity: 0.75;
+}
+
+/* 关键帧覆盖提示：这是"改了没反应"最常见的真因，必须显眼到不会漏读 */
+.s3d-warn {
+  border: 1px solid rgba(255, 176, 64, 0.35);
+  background: rgba(255, 176, 64, 0.08);
+  color: #ffc857;
+  border-radius: 8px;
+  padding: 8px 10px;
+  margin: 8px 0;
+  font-size: 11.5px;
+  line-height: 1.6;
+}
+
+.s3d-inline-btn {
+  float: right;
+  padding: 1px 7px;
+  font-size: 10px;
+}
+
+.s3d-light-head {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  margin-bottom: 8px;
+}
+
+.s3d-light-head select {
+  flex: 1;
+}
+
+/* 预置场景 → 场景图：这是预置模式下面板里唯一的操作入口，得有点存在感 */
+.s3d-seed {
+  border: 1px dashed var(--line-strong);
+  border-radius: 8px;
+  padding: 10px;
+  margin-bottom: 12px;
+}
+
+.s3d-seed-title {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text);
+  margin-bottom: 2px;
+}
+
 .switch {
   width: 34px;
   height: 19px;

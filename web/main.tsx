@@ -2,7 +2,11 @@ import React from "react";
 import { createRoot } from "react-dom/client";
 import App from "./App";
 import { loadPrefs } from "./uiPrefs";
+import { quietThreeClockWarn } from "./quietThreeClockWarn";
 import "./styles.css";
+
+// 必须在第一次创建 Canvas 之前装好（R3F 在建 store 时就会 new THREE.Clock）
+quietThreeClockWarn();
 
 /**
  * 先同步 UI 偏好再渲染：面板宽度 / 折叠状态 / 时间轴高度这些值在组件里是

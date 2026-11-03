@@ -2,6 +2,7 @@ import React from "react";
 import * as THREE from "three";
 import type { Theme } from "../../../shared/schema";
 import type { DslNode, Scene3DDsl } from "../../../shared/scene3dDsl";
+import { ease, evalNode } from "../../../shared/scene3dAnim";
 import { glowTexture, hash01, metalBody, resolveColor, shade } from "./color";
 import { useDslTexture } from "./texture";
 
@@ -17,62 +18,10 @@ import { useDslTexture } from "./texture";
  * 3. 粒子永远用 `<points>`（一次 draw call）。
  */
 
-const ease = (kind: string | undefined, x: number): number => {
-  const v = Math.max(0, Math.min(1, x));
-  switch (kind) {
-    case "linear":
-      return v;
-    case "easeIn":
-      return v * v * v;
-    case "easeOut":
-      return 1 - Math.pow(1 - v, 3);
-    default:
-      return v < 0.5 ? 4 * v * v * v : 1 - Math.pow(-2 * v + 2, 3) / 2;
-  }
-};
-
-type Tr = {
-  pos: [number, number, number];
-  rot: [number, number, number];
-  /** 渲染时用的三分量缩放：有 scaleXYZ 就用它，否则用 scale 铺成三轴 */
-  scale: [number, number, number];
-  opacity: number;
-};
-
-/**
- * 求一个节点在当前帧的变换。
- *
- * 语义与 freeform 的 `evalAnim` 完全一致：**关键帧里的值是绝对值**，`from` 不写就取
- * 当前累计值，`to` 必须有值才动手（只有 from 的那段等于没写，schema 阶段已经报出来了）。
+/*
+ * 缓动与逐帧求值从 `shared/scene3dAnim` 来：编辑器的「打关键帧」要用**同一份**求值，
+ * 否则打完之后画面会跳（两份实现迟早漂）。
  */
-const evalNode = (node: DslNode, frame: number): Tr => {
-  const base = node.transform;
-  const out: Tr = {
-    pos: [...(base?.position ?? [0, 0, 0])] as [number, number, number],
-    rot: [...(base?.rotation ?? [0, 0, 0])] as [number, number, number],
-    scale: base?.scaleXYZ ? [...base.scaleXYZ] as [number, number, number] : [base?.scale ?? 1, base?.scale ?? 1, base?.scale ?? 1],
-    opacity: 1,
-  };
-  for (const a of node.anim ?? []) {
-    const [start, end] = a.at;
-    if (frame < start || frame > end) continue;
-    const p = ease(a.ease, end > start ? (frame - start) / (end - start) : 1);
-    const pick = (k: keyof NonNullable<typeof a.to>, cur: number) => {
-      const to = a.to?.[k];
-      if (typeof to !== "number") return cur;
-      const fromRaw = a.from?.[k];
-      const from = typeof fromRaw === "number" ? fromRaw : cur;
-      return from + (to - from) * p;
-    };
-    out.pos = [pick("posX", out.pos[0]), pick("posY", out.pos[1]), pick("posZ", out.pos[2])];
-    out.rot = [pick("rotX", out.rot[0]), pick("rotY", out.rot[1]), pick("rotZ", out.rot[2])];
-    // 动画的 scale 是"整体缩放"：乘到三轴上，不会破坏 scaleXYZ 的比例
-    const k = pick("scale", 1);
-    out.scale = [out.scale[0] * k, out.scale[1] * k, out.scale[2] * k];
-    out.opacity = pick("opacity", out.opacity);
-  }
-  return out;
-};
 
 /* ─────────────────────────── 相机 ─────────────────────────── */
 
@@ -81,6 +30,15 @@ export type DslCamera = {
   fov: number;
   quat: [number, number, number, number];
   groupPos: [number, number, number];
+  /**
+   * 相机在世界里的位置 / 看向点（插值之后的）。
+   *
+   * 为什么单独给：`camPos` 是"相机固定在 +Z 时的局部坐标"，不是世界位置。
+   * 编辑器要画运镜轨迹，必须拿到世界坐标逐帧采样——从 quat/groupPos 反算一遍
+   * 等于把上面的数学抄第二份，迟早漂。
+   */
+  worldPos: [number, number, number];
+  worldTarget: [number, number, number];
 };
 
 /**
@@ -150,8 +108,12 @@ export const dslCamera = (spec: Scene3DDsl, t: number, fps = 30): DslCamera => {
     let followId: string | undefined;
     for (const a of camAnims) {
       const [start, end] = a.at;
-      if (frame < start || frame > end) continue;
-      const p = ease(a.ease, end > start ? (frame - start) / (end - start) : 1);
+      /**
+       * 和节点同一套 hold 语义：段没开始不参与，段结束后按终值持续生效。
+       * 否则"运镜到第 60 帧"之后镜头会瞬移回起始机位（最后一颗关键帧像没打过）。
+       */
+      if (frame < start) continue;
+      const p = frame >= end ? 1 : ease(a.ease, end > start ? (frame - start) / (end - start) : 1);
       const lv = (key: string, cur: number) => {
         const to = a.to?.[key];
         if (typeof to !== "number") return cur;
@@ -195,6 +157,8 @@ export const dslCamera = (spec: Scene3DDsl, t: number, fps = 30): DslCamera => {
     fov,
     quat: [q.x, q.y, q.z, q.w],
     groupPos: [gp.x, gp.y, gp.z],
+    worldPos: [P.x, P.y, P.z],
+    worldTarget: [T.x, T.y, T.z],
   };
 };
 
@@ -292,6 +256,12 @@ const materialOf = (
   const emissive = m?.emissive ? resolveColor(m.emissive, theme) : undefined;
   const op = (m?.opacity ?? 1) * opacity;
   const transparent = op < 1 || hasMap;
+  /**
+   * 自发光也吃同一张贴图（three 的 emissiveMap）：自发光是**直接叠加**的纯色，
+   * 有 map 却不给 emissiveMap 时，太阳这种"贴图 + 高强度自发光"的球会被那层纯色
+   * 冲成一颗均匀的橙球——贴图明明在，眼睛看不到（太阳系示例实测）。
+   * 有 emissive 才挂，纯色自发光物体（无贴图）完全不受影响。
+   */
   const side =
     m?.side === "double" ? THREE.DoubleSide : m?.side === "back" ? THREE.BackSide : THREE.FrontSide;
 
@@ -320,6 +290,7 @@ const materialOf = (
         thickness={m.thickness}
         ior={m.ior}
         emissive={emissive}
+        emissiveMap={hasMap && emissive ? (map ?? undefined) : undefined}
         emissiveIntensity={m.emissiveIntensity}
         side={side}
         transparent
@@ -336,6 +307,7 @@ const materialOf = (
       metalness={m?.metalness ?? 0.4}
       roughness={m?.roughness ?? 0.35}
       emissive={emissive}
+      emissiveMap={hasMap && emissive ? (map ?? undefined) : undefined}
       emissiveIntensity={m?.emissiveIntensity ?? 1}
       side={side}
       transparent={transparent}
@@ -352,7 +324,11 @@ const NodeView: React.FC<{
   childrenOf: Map<string, DslNode[]>;
   frame: number;
   theme: Theme;
-}> = ({ node, childrenOf, frame, theme }) => {
+  /** 编辑器交互（成片渲染时全都不传，行为与之前一致） */
+  onPick?: (id: string) => void;
+  selectedId?: string | null;
+  onNodeObject?: (id: string, obj: THREE.Object3D | null) => void;
+}> = ({ node, childrenOf, frame, theme, onPick, selectedId, onNodeObject }) => {
   const tr = evalNode(node, frame);
   // hook 必须无条件调用（不能挂在 if 上）：没配 map 时返回 null，材质走纯色
   const map = useDslTexture(node.material?.map);
@@ -368,8 +344,48 @@ const NodeView: React.FC<{
     () => (node.geometry.type === "dashRing" ? buildDashRing(node.geometry) : null),
     [node.geometry],
   );
+  /**
+   * ref 回调必须身份稳定：内联箭头每次渲染都是新函数，React 会先调旧 ref(null)
+   * 再调新 ref(obj)。编辑器视口的 onNodeObject 把这当成"对象注册表变化"去 setState，
+   * 于是渲染 → ref 撤挂重挂 → setState → 再渲染……实测每秒 2000+ 次渲染，整页卡死。
+   * （成片路径不传 onNodeObject，本来就进不了这个分支。）
+   */
+  const bindRef = React.useCallback(
+    (o: THREE.Group | null) => {
+      onNodeObject?.(node.id, o);
+    },
+    [node.id, onNodeObject],
+  );
+  /**
+   * 轨道环（ring/dashRing）不做画布点选：环是横贯全屏的大网格，行星又正好"坐"在环上，
+   * 射线永远先命中环——太阳系这种图里表现为"怎么点都选不中行星"。
+   * 环要从大纲树里选（它们是结构性的枢轴，很少直接改变换）。
+   */
+  const pickable = Boolean(onPick) && node.geometry.type !== "ring" && node.geometry.type !== "dashRing";
+  /*
+   * 隐藏节点：**连子树一起不渲染**（返回 null 而不是 visible={false}）。
+   * 星空挡住行星时用户会临时藏掉它，藏一个父节点却露出子节点是最难理解的行为。
+   * 两个 hook 都调过了才返回，保证 hook 顺序不随 hidden 变化。
+   */
+  if (node.hidden) return null;
+  const selected = selectedId === node.id;
   return (
-    <group position={tr.pos} rotation={rotRad} scale={tr.scale}>
+    <group
+      position={tr.pos}
+      rotation={rotRad}
+      scale={tr.scale}
+      // 编辑器要拿它挂操纵器（TransformControls），成片路径不传这个回调
+      ref={bindRef}
+      onClick={
+        pickable
+          ? (e) => {
+              // 不冒泡：点中内层卫星就不该同时选中外层枢轴
+              e.stopPropagation();
+              onPick!(node.id);
+            }
+          : undefined
+      }
+    >
       {dashGeo ? (
         <lineSegments>
           <primitive object={dashGeo} attach="geometry" />
@@ -386,8 +402,41 @@ const NodeView: React.FC<{
           {materialOf(node, theme, tr.opacity, map)}
         </mesh>
       )}
+      {/*
+        选中高亮：同一份几何体罩一层线框（depthTest 关掉，被挡在后面也看得见）。
+        用线框而不是发光/变色，是因为高亮不能改变材质判断 —— 用户在挑的是"哪个物体"。
+      */}
+      {selected ? (
+        dashGeo ? (
+          <lineSegments>
+            <primitive object={dashGeo} attach="geometry" />
+            <lineBasicMaterial color={resolveColor("accent", theme)} transparent opacity={0.95} depthWrite={false} />
+          </lineSegments>
+        ) : (
+          <mesh scale={1.02}>
+            {geometryOf(node.geometry)}
+            <meshBasicMaterial
+              color={resolveColor("accent", theme)}
+              wireframe
+              transparent
+              opacity={0.55}
+              depthTest={false}
+              depthWrite={false}
+            />
+          </mesh>
+        )
+      ) : null}
       {kids.map((c) => (
-        <NodeView key={c.id} node={c} childrenOf={childrenOf} frame={frame} theme={theme} />
+        <NodeView
+          key={c.id}
+          node={c}
+          childrenOf={childrenOf}
+          frame={frame}
+          theme={theme}
+          onPick={onPick}
+          selectedId={selectedId}
+          onNodeObject={onNodeObject}
+        />
       ))}
     </group>
   );
@@ -444,15 +493,25 @@ const Particles: React.FC<{
 /**
  * 场景自定义光。
  *
- * 两个渲染细节值得记：
+ * **必须和场景内容一起被"相机搬运"**（挂在 DslScene 那个 `quaternion/position`
+ * 的 group 里面），这是踩出来的：
  *
- * 1. **灯必须挂在内容 group 外面**（见下面 DslScene 的 fragment）。
- *    `camera.orbit` 的实现是"反向旋转内容组"，如果灯跟着转，太阳就会绕着地球转 ——
- *    这正是要修的那个问题（光照方向不动）的另一半。
- * 2. directional/spot 的 `target` 必须**真的加进场景**才会生效。
- *    three 用 `light.target.matrixWorld` 定方向，一个没挂进场景的 Object3D
- *    matrixWorld 永远是单位矩阵，位置就当成原点 —— 表现是"灯照哪儿都是原点"。
- *    这里用 ref 回调（commit 阶段同步执行，早于 Remotion 截图），不用 useEffect。
+ * 成片渲染并没有真的把相机放到 `camera.position` 再 `lookAt(target)`，而是把相机
+ * 钉在 +Z、把**整份内容**按 `quat` 转过去、按 `groupPos` 平移（见 dslCamera 的长注释）。
+ * 既然内容被搬了，灯就必须跟着搬——灯是场景的一部分，`position` 写的是世界坐标，
+ * 只搬物体不搬灯，光和物体的相对方位就会随相机机位漂。
+ *
+ * 实际翻车现场（太阳系示例第 0 帧）：相机 target 正好落在地球中心，于是地球被搬到
+ * 渲染原点，而点光源（太阳，世界原点）没搬、也还留在原点——光源直接进了地球球心。
+ * 从球内部照射，表面法线全部朝外，一点漫反射都收不到，成片里地球是一颗全黑的球；
+ * 编辑器视口传的是单位相机（内容不搬），同一帧里地球却亮得很正常。用户看到的就是
+ * "编辑器里是亮面、成片里是暗面"。
+ *
+ * 另一个渲染细节：directional/spot 的 `target` 必须**真的加进场景**才会生效。
+ * three 用 `light.target.matrixWorld` 定方向，一个没挂进场景的 Object3D
+ * matrixWorld 永远是单位矩阵，位置就当成原点 —— 表现是"灯照哪儿都是原点"。
+ * 这里用 ref 回调（commit 阶段同步执行，早于 Remotion 截图），不用 useEffect；
+ * 挂进 `l.parent`（即这个 group）后，target 也随内容一起被搬运，方向不会歪。
  */
 const bindTarget = (t: [number, number, number]) => (l: THREE.DirectionalLight | THREE.SpotLight | null) => {
   if (!l) return;
@@ -519,7 +578,11 @@ export const DslScene: React.FC<{
   theme: Theme;
   camera: DslCamera;
   /** 背景交给 Scene3D 画（它要区分"自己当底"和"叠在内容上"两种情况） */
-}> = ({ spec, frame, t, theme, camera }) => {
+  /** 编辑器：点选节点 / 高亮节点 / 交出节点对象（挂操纵器）。成片路径都不传 */
+  onPick?: (id: string) => void;
+  selectedId?: string | null;
+  onNodeObject?: (id: string, obj: THREE.Object3D | null) => void;
+}> = ({ spec, frame, t, theme, camera, onPick, selectedId, onNodeObject }) => {
   const { childrenOf, roots } = React.useMemo(() => {
     const map = new Map<string, DslNode[]>();
     for (const n of spec.nodes) {
@@ -533,12 +596,25 @@ export const DslScene: React.FC<{
 
   return (
     <>
-      {/* 灯在世界坐标里，不进下面那个会被反向旋转的内容组 */}
-      {spec.lights?.length ? <DslLights lights={spec.lights} theme={theme} /> : null}
+      {/*
+       * 灯必须跟内容一起进这个 group（原因见 DslLights 顶上的注释）：
+       * 这个 group 承载的是"相机在 P 看向 T"的刚体变换，灯不跟着搬，
+       * 光和物体的相对方位就会随相机漂移——成片里太阳会跑到地球球心去。
+       */}
       <group quaternion={camera.quat} position={camera.groupPos}>
+        {spec.lights?.length ? <DslLights lights={spec.lights} theme={theme} /> : null}
         {spec.particles ? <Particles spec={spec.particles} theme={theme} t={t} /> : null}
         {roots.map((n) => (
-          <NodeView key={n.id} node={n} childrenOf={childrenOf} frame={frame} theme={theme} />
+          <NodeView
+            key={n.id}
+            node={n}
+            childrenOf={childrenOf}
+            frame={frame}
+            theme={theme}
+            onPick={onPick}
+            selectedId={selectedId}
+            onNodeObject={onNodeObject}
+          />
         ))}
       </group>
     </>

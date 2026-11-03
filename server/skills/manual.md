@@ -1,11 +1,11 @@
-# Agent 使用全书（107 个工具 = 4 常驻 + 103 按需 + 能力地图 + 铁律）
+# Agent 使用全书（112 个工具 = 4 常驻 + 108 按需 + 能力地图 + 铁律）
 
 给 agent 的完整说明书。**你不需要读源码、不需要试探参数**：这台机器能做什么、怎么组合、
 为什么没生效，全部在这页和另外 17 篇指南里（全 18 篇的索引见本文最后一节）。
 
 **工具分两层（先搞懂这个）**：
 - **常驻核心 4 个**：`start_guide`（开工入口）、`get_guide`（读指南/本书）、`tool_search`（找工具）、`tool_call`（执行工具）
-- **其余 103 个**：不在常驻列表里。用法：`tool_search("画中画")` 找到工具（返回名字/说明/参数表）→ `tool_call(name="move_scene", args={...})` 执行。
+- **其余 108 个**：不在常驻列表里。用法：`tool_search("画中画")` 找到工具（返回名字/说明/参数表）→ `tool_call(name="move_scene", args={...})` 执行。
   全量目录：`tool_search(all=true)`；某几个工具的完整文档：`tool_search(names=["add_element"])`
 - 本书的工具全表（§3）按域列出全部工具（含 4 个核心）——先查表再搜索，比盲搜快
 
@@ -60,7 +60,7 @@
 |---|---|---|
 | 工程 | 多工程并存（**可列/可切换**，当前工程标 ★ 并落盘，重启接上次）、模板沉淀/套用、历史快照（50 份，可回滚任意版本）、zip 导入导出 | `list_projects` `switch_project` `create_project` `save_template` `delete_template` `get_history` `restore_rev` `export/import_project` |
 | 场景 | **76 个 2D 场景类型**：75 个内置版式（封面/文字/列表/数据/对比/流程/对话/收尾）+ **freeform 自由画布**（自排 svg/div，上限 40 个元素）；另有 3D 与图解两行见下 | `list_scene_types` `add_scene` `update_freeform_element` |
-| **3D 场景** | `scene3d`：**6 个预设母题**（环绕核心/粒子星云/网格地平线/零件拆解/波形柱阵/球面网络）+ **`graph` 场景图 DSL**——几何体/材质/灯光/粒子/相机运镜，最多 48 节点，能做行星公转、装置拆解、分子结构这类"具体的东西" | `add_scene(type:"scene3d")`；写法**必读** `get_guide("scene3d")`，字段全表 `list_scene_types(type:"scene3d")` |
+| **3D 场景** | `scene3d`：**6 个预设母题**（环绕核心/粒子星云/网格地平线/零件拆解/波形柱阵/球面网络）+ **blank 空白画布（默认）** + **`graph` 场景图 DSL**——几何体/材质/灯光/粒子/相机运镜，最多 48 节点，能做行星公转、装置拆解、分子结构这类"具体的东西"。编辑器右栏对 graph **逐节点可编辑**（大纲树 + 变换/形状/材质/相机/灯光），人和 agent 改的是同一批 op | 建：`add_scene(type:"scene3d")`；改单个节点：`get_graph` → `update_graph_node`（**别整份覆盖 graph**）；写法**必读** `get_guide("scene3d")`，字段全表 `list_scene_types(type:"scene3d")` |
 | **图解插图** | `iso`：等轴测技术插图（anatomy 产出），零件级细节、可按帧高亮、推近不糊 | `add_scene(type:"iso")`；画法与坑见 `get_guide("external-tools")` |
 | 元素 | 场景内图片/文本/形状/视频/音频元素，rich 外观全套（圆角/边框/阴影/滤镜/混合/裁切/字体/行高/字距/对齐/斜体/下划线） | `list_element_library` `add_element` `update_element` |
 | 动效 | 元素级关键帧动画（`anim[].from/to` 绝对值）、全片动效强度三档（0 关 / 1 标准 / 2 更强） | `update_element(anim)` `set_theme(motion)` |
@@ -100,6 +100,8 @@
 **需求与分镜**：`intake(step)`（1–9 接单 / 10 稿件 / 11 观感与规格） · `save_brief(step?, 字段…, assumed[])` · `get_brief` · `confirm_brief`（确认前不能开建）· `save_storyboard(shots[])` · `get_storyboard` · `build_storyboard`（`shot=N` 只建一幕做风格帧；`replace=true` 全量建）
 
 **稿件**：`save_script(segments[])`（一段一幕，带每段预估秒数；改稿会让确认失效）· `get_script` · `confirm_script`（稿子没确认不能写分镜，`scriptType=无稿` 除外）
+
+**3D 场景图**：`get_graph`（节点大纲：id/形状/颜色/父级，改之前先看）· `update_graph_node`（按节点局部写回，**改单个物体不要整份覆盖 graph**）· `add_graph_node` · `remove_graph_node` · `set_graph_scene`（相机/灯光/粒子/辉光）
 
 **场景**：`list_scene_types` · `add_scene` · `update_scene` · `set_scene_type`（换版式，同名 key 迁移）· `set_scene_timing` · `duplicate_scene` · `reorder_scenes`（**幕序的真相是分镜表**；有被 `move_scene` 钉死的幕时必须带 `reflow:true`，否则时间轴不动） · `remove_scene` · `move_scene`（绝对帧/换轨；会给这一幕**钉死起点**）· `set_scene_box`（画中画）· `set_transition` · `set_transitions`（批量）
 
@@ -243,7 +245,7 @@
 | `long-form` | 超 12 幕/2 分钟：分章规划与验收 |
 | `scene-recipes` | 75 个版式逐个速查（items 数量、文案长度） |
 | `freeform` | 自由画布全部写法与坑 |
-| `scene3d` | **3D 场景**：6 个预设怎么选、`graph` 场景图全字段（几何体/材质/灯光/粒子/相机）、公转与卫星、太阳系完整示例、13 个坑 |
+| `scene3d` | **3D 场景**：blank 空白默认、6 个预设怎么选、`graph` 场景图全字段（几何体/材质/灯光/粒子/相机）、公转与卫星、太阳系完整示例、改已建好的幕（`update_graph_node`）、15 个坑 |
 | `external-tools` | **图解 iso**：anatomy 出图 → 落盘 → 套主题，含 sanitize 与实跑踩到的坑 |
 | `qa` | 分阶段自检清单、常见问题速查表 |
 | `delivery` | 画幅、字幕样式、渲染、交付物清单 |

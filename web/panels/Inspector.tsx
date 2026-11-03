@@ -11,6 +11,7 @@ import { EffectInspector } from "./EffectInspector";
 import { SceneBoxSection } from "./SceneBoxSection";
 import { BackdropSection } from "./BackdropSection";
 import { FreeformInspector } from "./FreeformInspector";
+import { Scene3DInspector, Scene3DSeed } from "./Scene3DInspector";
 import { TransitionSection } from "./TransitionSection";
 import { RangeInput } from "../RangeInput";
 
@@ -349,6 +350,17 @@ export const Inspector: React.FC<{ playerRef?: React.RefObject<PlayerRef | null>
     return <FreeformInspector scene={scene} fps={project.fps} />;
   }
 
+  /**
+   * 3D 场景图：整栏交给专用面板。
+   *
+   * 以前 `graph` 落在这个面板的"对象字段 → JSON 文本框"分支里，改一颗行星要读几千行 JSON，
+   * 一不小心整份写回还会抹掉别的改动。只在**有 graph** 时接管；预置场景仍走下面的通用面板，
+   * 那里给一个「换成可编辑场景图」的入口（见 Scene3DSeed）。
+   */
+  if (scene?.type === "scene3d" && (scene.props as { graph?: unknown }).graph) {
+    return <Scene3DInspector scene={scene} fps={project.fps} />;
+  }
+
   const assetKey = fields.find((f) => f.key === "src")?.key;
 
   return (
@@ -477,33 +489,38 @@ export const Inspector: React.FC<{ playerRef?: React.RefObject<PlayerRef | null>
               </div>
             ) : null}
 
-            {fields.map((f) => {
-              const note = notes[f.key];
-              const control =
-                assetKey && f.key === assetKey ? (
-                  <AssetField
-                    value={typeof draft[f.key] === "string" ? (draft[f.key] as string) : ""}
-                    accept="image/*"
-                    preview="image"
-                    onChange={(v) => commit({ ...draft, [f.key]: v })}
-                  />
+            {/* 预置 3D：唯一入口是换成场景图；graph 字段本身不再拿 JSON 文本框糊弄 */}
+            {scene.type === "scene3d" && !draft.graph ? <Scene3DSeed scene={scene} /> : null}
+
+            {fields
+              .filter((f) => !(scene.type === "scene3d" && f.key === "graph"))
+              .map((f) => {
+                const note = notes[f.key];
+                const control =
+                  assetKey && f.key === assetKey ? (
+                    <AssetField
+                      value={typeof draft[f.key] === "string" ? (draft[f.key] as string) : ""}
+                      accept="image/*"
+                      preview="image"
+                      onChange={(v) => commit({ ...draft, [f.key]: v })}
+                    />
+                  ) : (
+                    <Field
+                      field={f}
+                      value={draft[f.key] ?? f.default ?? ""}
+                      onChange={(v) => commit({ ...draft, [f.key]: v })}
+                    />
+                  );
+                return note ? (
+                  <div key={f.key} style={{ opacity: 0.45, pointerEvents: "none" }} title={note}>
+                    {control}
+                    <p className="ff-hint" style={{ marginTop: -6 }}>
+                      {note}
+                    </p>
+                  </div>
                 ) : (
-                  <Field
-                    field={f}
-                    value={draft[f.key] ?? f.default ?? ""}
-                    onChange={(v) => commit({ ...draft, [f.key]: v })}
-                  />
+                  <React.Fragment key={f.key}>{control}</React.Fragment>
                 );
-              return note ? (
-                <div key={f.key} style={{ opacity: 0.45, pointerEvents: "none" }} title={note}>
-                  {control}
-                  <p className="ff-hint" style={{ marginTop: -6 }}>
-                    {note}
-                  </p>
-                </div>
-              ) : (
-                <React.Fragment key={f.key}>{control}</React.Fragment>
-              );
             })}
           </>
         ) : (

@@ -31,6 +31,7 @@ import type { Scene3DDsl } from "../../../shared/scene3dDsl";
  */
 
 export type Scene3DPreset =
+  | "blank"
   | "orbit-core"
   | "particle-field"
   | "grid-horizon"
@@ -71,7 +72,7 @@ export type Scene3DProps = {
 
 export type Scene3DLook = "studio" | "dramatic" | "cyber" | "nature";
 
-type LightSpec = { pos: [number, number, number]; intensity: number; color: string };
+export type LightSpec = { pos: [number, number, number]; intensity: number; color: string };
 
 /**
  * 四套光线风格。**换的是光的性格，不是配色**——颜色仍然从主题里取，
@@ -83,7 +84,7 @@ type LightSpec = { pos: [number, number, number]; intensity: number; color: stri
  * 颜色 token：`core` / `dot` 走主题色，`warm` / `cool` / `cyber` / `sky` 是固定色，
  * 只在特定风格里出现（cyber 的青、dramatic 的暖白key），量都很小。
  */
-const LOOKS: Record<
+export const LOOKS: Record<
   Scene3DLook,
   {
     /** 环境光；给了 hemisphere 就不用 ambientLight（自然光靠天/地两色） */
@@ -154,7 +155,8 @@ const LOOKS: Record<
  * orbit-core 走 cyber、particle-field 走 dramatic、explode 走 studio……
  * 用户显式传 look 就覆盖它。
  */
-const AUTO_LOOK: Record<Scene3DPreset, Scene3DLook> = {
+export const AUTO_LOOK: Record<Scene3DPreset, Scene3DLook> = {
+  blank: "cyber",
   "orbit-core": "cyber",
   "particle-field": "dramatic",
   "grid-horizon": "cyber",
@@ -164,7 +166,7 @@ const AUTO_LOOK: Record<Scene3DPreset, Scene3DLook> = {
 };
 
 /** 颜色 token → 实际色值 */
-const lightColor = (token: string, core: string, dot: string): string => {
+export const lightColor = (token: string, core: string, dot: string): string => {
   if (token === "core") return core;
   if (token === "dot") return dot;
   if (token === "warm") return dot;
@@ -172,6 +174,76 @@ const lightColor = (token: string, core: string, dot: string): string => {
   if (token === "cyber") return "#22E0FF";
   if (token === "sky") return "#CFE0FF";
   return token;
+};
+
+/**
+ * look：显式给了就用显式的，auto 按预设挑。
+ * 抽成函数是因为**编辑器视口也要同一套判断**（否则视口和成片的光是两回事）。
+ */
+export function resolveLook(
+  preset: Scene3DPreset,
+  look: Scene3DLook | "auto",
+): { name: Scene3DLook; spec: (typeof LOOKS)[Scene3DLook] } {
+  const name = look === "auto" ? (AUTO_LOOK[preset] ?? "cyber") : look;
+  return { name, spec: LOOKS[name] };
+}
+
+/**
+ * 辉光参数：look 的基准值 + 底色亮度修正 + graph 的 `post.bloom` 倍数。
+ *
+ * 浅色底不能只靠"强度减半"：白底的线性亮度本来就接近 1，阈值不提上去，
+ * 整片背景都会被当成高光叠一遍 —— 这才是浅色主题做 bloom 翻车的真正原因。
+ */
+export function bloomFor(opts: {
+  spec: (typeof LOOKS)[Scene3DLook];
+  background: string;
+  graph?: Scene3DDsl;
+}): { strength: number; radius: number; threshold: number } {
+  const dark = luminance(opts.background) < 0.32;
+  const base = dark
+    ? opts.spec.bloom
+    : {
+        strength: opts.spec.bloom.strength * 0.55,
+        radius: opts.spec.bloom.radius,
+        threshold: Math.min(0.99, opts.spec.bloom.threshold + 0.12),
+      };
+  return opts.graph ? applyBloomMultiplier(opts.graph, base) : base;
+}
+
+/**
+ * look 的四盏灯 + 环境底光。
+ *
+ * 抽成组件不是为了复用方便，而是为了**成片和编辑器视口必须是同一套光**：
+ * 各写一份的结局是"视口里好看、成片颜色不对"，而这类偏差只能靠肉眼发现。
+ */
+export const LookLights: React.FC<{
+  spec: (typeof LOOKS)[Scene3DLook];
+  core: string;
+  dot: string;
+  /** 场景自带 lights：look 的固定方向光会把昼夜面抹平，只留一点环境底光 */
+  custom?: boolean;
+}> = ({ spec, core, dot, custom }) => {
+  if (custom) {
+    // 数值很小是有意的：作用只是让背光面留一点形，不参与照明
+    return <ambientLight intensity={0.12} color="#ffffff" />;
+  }
+  return (
+    <>
+      {spec.hemisphere ? (
+        <hemisphereLight args={[spec.hemisphere.sky, spec.hemisphere.ground, spec.hemisphere.intensity]} />
+      ) : (
+        <ambientLight intensity={spec.ambient} color="#ffffff" />
+      )}
+      <directionalLight position={spec.key.pos} intensity={spec.key.intensity} color={lightColor(spec.key.color, core, dot)} />
+      <directionalLight position={spec.rimA.pos} intensity={spec.rimA.intensity} color={lightColor(spec.rimA.color, core, dot)} />
+      {spec.rimB ? (
+        <directionalLight position={spec.rimB.pos} intensity={spec.rimB.intensity} color={lightColor(spec.rimB.color, core, dot)} />
+      ) : null}
+      {spec.fill ? (
+        <directionalLight position={spec.fill.pos} intensity={spec.fill.intensity} color={lightColor(spec.fill.color, core, dot)} />
+      ) : null}
+    </>
+  );
 };
 
 const pick = (theme: Theme, hue: Scene3DProps["hue"]): string => {
@@ -216,7 +288,7 @@ const easeInOut = (x: number): number => {
  * （`effect` 是 commit 后异步跑的）。放 useEffect 里，env 会晚于那一帧被截走 ——
  * 实测就是"代码明明改了、抽帧 md5 一模一样"。onCreated 在 store 初始化时同步调用，赶得上。
  */
-const setupEnvironment = (
+export const setupEnvironment = (
   { gl, scene }: { gl: THREE.WebGLRenderer; scene: THREE.Scene },
   environmentIntensity: number,
 ) => {
@@ -966,7 +1038,7 @@ const CameraSync: React.FC<{ pos: [number, number, number]; fov: number }> = ({ 
 
 export const Scene3DScene: React.FC<Scene3DProps> = ({
   theme,
-  preset = "orbit-core",
+  preset = "blank",
   graph,
   look = "auto",
   hue = "primary",
@@ -996,8 +1068,7 @@ export const Scene3DScene: React.FC<Scene3DProps> = ({
   const accent = c.secondary;
 
   // look：显式给了就用显式的，auto 按预设挑（见 AUTO_LOOK）
-  const resolvedLook: Scene3DLook = look === "auto" ? AUTO_LOOK[preset] : (look as Scene3DLook);
-  const lookSpec = LOOKS[resolvedLook];
+  const { name: resolvedLook, spec: lookSpec } = resolveLook(preset, look);
 
   /**
    * 相机。分两类：
@@ -1052,15 +1123,8 @@ export const Scene3DScene: React.FC<Scene3DProps> = ({
    * 浅色底不能只靠"强度减半"：白底的线性亮度本来就接近 1，阈值不提上去，
    * 整片背景都会被当成高光叠一遍（这才是浅色主题做 bloom 翻车的真正原因）。
    */
-  const lookBloom = darkTheme
-    ? lookSpec.bloom
-    : {
-        strength: lookSpec.bloom.strength * 0.55,
-        radius: lookSpec.bloom.radius,
-        threshold: Math.min(0.99, lookSpec.bloom.threshold + 0.12),
-      };
-  // DSL 的 post.bloom 是"倍数"而不是绝对值：agent 不该被迫知道 0.46 这个数怎么来的
-  const bloomOpts = graph ? applyBloomMultiplier(graph, lookBloom) : lookBloom;
+  // 辉光的"浅底提阈值 + graph 的倍数"都在 bloomFor 里，视口和成片共用同一套算法
+  const bloomOpts = bloomFor({ spec: lookSpec, background: c.background, graph });
 
   /**
    * 场景自带光源时，把 look 的四盏方向光全撤掉。
@@ -1135,47 +1199,7 @@ export const Scene3DScene: React.FC<Scene3DProps> = ({
           正面必须是中性光——彩色正面光会把整颗物体涂满颜色，那是"彩色塑料"不是"科技感"。
           四套 look 差在环境强度、主光色温、边光强度、以及有没有补光。
         */}
-        {dslLights ? (
-          /*
-            有自定义光时只给一点环境底光。数值很小是有意的：
-            它的作用只是让背光面留一点形，不是参与照明。
-          */
-          <ambientLight intensity={0.12} color="#ffffff" />
-        ) : (
-          <>
-            {lookSpec.hemisphere ? (
-              <hemisphereLight
-                args={[lookSpec.hemisphere.sky, lookSpec.hemisphere.ground, lookSpec.hemisphere.intensity]}
-              />
-            ) : (
-              <ambientLight intensity={lookSpec.ambient} color="#ffffff" />
-            )}
-            <directionalLight
-              position={lookSpec.key.pos}
-              intensity={lookSpec.key.intensity}
-              color={lightColor(lookSpec.key.color, core, dot)}
-            />
-            <directionalLight
-              position={lookSpec.rimA.pos}
-              intensity={lookSpec.rimA.intensity}
-              color={lightColor(lookSpec.rimA.color, core, dot)}
-            />
-            {lookSpec.rimB ? (
-              <directionalLight
-                position={lookSpec.rimB.pos}
-                intensity={lookSpec.rimB.intensity}
-                color={lightColor(lookSpec.rimB.color, core, dot)}
-              />
-            ) : null}
-            {lookSpec.fill ? (
-              <directionalLight
-                position={lookSpec.fill.pos}
-                intensity={lookSpec.fill.intensity}
-                color={lightColor(lookSpec.fill.color, core, dot)}
-              />
-            ) : null}
-          </>
-        )}
+        <LookLights spec={lookSpec} core={core} dot={dot} custom={dslLights} />
 
         {graph ? (
           /*
@@ -1195,6 +1219,12 @@ export const Scene3DScene: React.FC<Scene3DProps> = ({
           <Waveform t={t} spin={spin} count={count} core={core} dot={dot} isPortrait={isPortrait} />
         ) : preset === "globe-arc" ? (
           <GlobeArc t={t} spin={spin} count={count} core={core} dot={dot} accent={accent} />
+        ) : preset === "blank" ? (
+          /*
+            空白母题：什么都不放。它存在的意义是"新增 3D 幕时别硬塞一个预设"——
+            用户要么从零搭 graph，要么在面板里挑母题。背景和灯照常（灯没东西可照，零成本）。
+          */
+          null
         ) : (
           <OrbitCore t={t} spin={spin} count={count} core={core} dot={dot} accent={accent} />
         )}

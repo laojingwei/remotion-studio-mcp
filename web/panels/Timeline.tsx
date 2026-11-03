@@ -5,6 +5,7 @@ import { sceneSpans, totalDuration } from "@shared/schema";
 import { useDoc } from "../store";
 import { setLocalPref } from "../uiPrefs";
 import { uploadAsset } from "../apiClient";
+import { frameBus } from "../frameBus";
 import { PX_PER_FRAME } from "./SceneTimeline";
 import { SceneTimeline } from "./SceneTimeline";
 import { askConfirm } from "../ui";
@@ -390,15 +391,46 @@ export const Timeline: React.FC<Props> = ({ playerRef }) => {
     };
   }, [resizingTimeline, timelineH]);
 
-  // 帧更新用 Player 的 frameupdate 事件（seek/播放都会派发）：
-  // rAF 在页面不可见时会被浏览器暂停，时间轴就会停在 0 帧
+  /**
+   * 播放头驱动：**自己在 rAF 里轮询 `getCurrentFrame()`**，不信 `frameupdate`。
+   *
+   * 为什么不能只靠事件：Remotion 的 Player 是在一个 passive effect 里派发的
+   * （`useEffect(() => emitter.dispatchFrameUpdate({frame}), [frame])`），effect 要等主线程
+   * 空闲才 flush。画面重的幕（3D / 长合成）每帧都在渲染，主线程被占满，effect 迟迟不 flush——
+   * 实测：按下播放后 2 秒，Player 内部已经跑到 100 帧，`frameupdate` 一次都没派发，
+   * 两条时间轴的播放头死死停在起点，按暂停才补发一次（用户看到的就是"播放时线不动"）。
+   *
+   * 为什么不在 play 事件里起/停轮询：**第一次点击播放时那个 play 事件可能压根没到**
+   * （同样实测过：第一次播放不动、暂停再播放才动）。所以循环常驻，逐帧问 `isPlaying()`：
+   *  - 在播 → 推进总线；
+   *  - 刚停下 → 补一帧（停在准确位置），之后不再写；
+   *  - 一直没播 → 一帧都不写，3D 视口自己的播放循环不会被时间轴抢（它会收到外部帧就暂停自己）。
+   * `frameBus.set` 自带同值早退，重复写不产生重渲染。
+   *
+   * `frameupdate`/`seeked` 仍然保留：暂停状态下 seek 要立刻反映，不必等下一帧。
+   */
   useEffect(() => {
     let disposed = false;
     let cleanup: (() => void) | null = null;
-    const onFrame = (data: { detail: { frame: number } }) => {
-      const f = data.detail?.frame;
-      if (typeof f === "number") setFrame(f);
+    let raf = 0;
+
+    const push = () => {
+      const f = playerRef.current?.getCurrentFrame?.();
+      if (typeof f === "number") frameBus.set(Math.round(f));
     };
+    const onFrame = () => push();
+
+    let wasPlaying = false;
+    const tick = () => {
+      raf = requestAnimationFrame(tick);
+      if (disposed) return;
+      const p = playerRef.current;
+      if (!p) return;
+      const nowPlaying = Boolean(p.isPlaying?.());
+      if (nowPlaying || wasPlaying) push();
+      wasPlaying = nowPlaying;
+    };
+
     const bind = () => {
       if (disposed) return;
       const p = playerRef.current;
@@ -406,15 +438,26 @@ export const Timeline: React.FC<Props> = ({ playerRef }) => {
         setTimeout(bind, 120);
         return;
       }
-      const now = p.getCurrentFrame?.();
-      if (typeof now === "number") setFrame(now);
+      push();
       p.addEventListener("frameupdate", onFrame);
-      cleanup = () => p.removeEventListener("frameupdate", onFrame);
+      p.addEventListener("seeked", onFrame);
+      cleanup = () => {
+        p.removeEventListener("frameupdate", onFrame);
+        p.removeEventListener("seeked", onFrame);
+      };
     };
     bind();
+    raf = requestAnimationFrame(tick);
+    // 显示层订阅总线：3D 视口自己播放、或本组件轮询写入时，播放头都从这一个来源读
+    const off = frameBus.subscribe((f) => setFrame(f));
+    // 别人（属性面板的关键帧列表等）请求跳帧时，真正执行 seekTo 的是这里
+    const offSeek = frameBus.onSeek((f) => playerRef.current?.seekTo(f));
     return () => {
       disposed = true;
+      if (raf) cancelAnimationFrame(raf);
       cleanup?.();
+      off();
+      offSeek();
     };
   }, [playerRef]);
 
@@ -777,11 +820,18 @@ export const Timeline: React.FC<Props> = ({ playerRef }) => {
     };
   }, [fxDrag, ppf, total, apply]);
 
-  const seekAt = (clientX: number) => {    const el = lanesRef.current;
+  const seekAt = (clientX: number) => {
+    const el = lanesRef.current;
     if (!el) return;
     const r = el.getBoundingClientRect();
-    const f = Math.round(((clientX - r.left) / Math.max(1, width)) * (total - 1));
-    playerRef.current?.seekTo(Math.max(0, Math.min(total - 1, f)));
+    const f = Math.max(
+      0,
+      Math.min(total - 1, Math.round(((clientX - r.left) / Math.max(1, width)) * (total - 1))),
+    );
+    playerRef.current?.seekTo(f);
+    // 立即写总线，不等 Player 的 frameupdate：3D 模式下 Player 是隐藏挂载，
+    // seekTo 的事件链路更长，拖播放头要逐帧实时跟手
+    frameBus.set(f);
   };
 
   // 拖播放头 seek

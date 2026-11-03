@@ -3,6 +3,7 @@ import type { PlayerRef } from "@remotion/player";
 import type { OverlayElement } from "@shared/schema";
 import { sceneSpans } from "@shared/schema";
 import { useDoc } from "../store";
+import { frameBus } from "../frameBus";
 import { framesForAsset } from "../assetDuration";
 import { CtxMenu } from "./CtxMenu";
 import { elementFromLibrary } from "@shared/elementLibrary";
@@ -121,9 +122,12 @@ export const SceneTimeline: React.FC<{ playerRef: React.RefObject<PlayerRef | nu
       cleanup = () => p.removeEventListener("frameupdate", onFrame);
     };
     bind();
+    // 显示层也订阅总线：3D 模式下 Player 不派发 frameupdate，只有总线能驱动这条播放头
+    const off = frameBus.subscribe((f) => setFrame(f));
     return () => {
       disposed = true;
       cleanup?.();
+      off();
     };
   }, [playerRef]);
 
@@ -264,7 +268,14 @@ export const SceneTimeline: React.FC<{ playerRef: React.RefObject<PlayerRef | nu
     if (!el || !scene) return;
     const r = el.getBoundingClientRect();
     const f = Math.round((clientX - r.left) / ppf);
-    playerRef.current?.seekTo(sceneStart + Math.min(sceneDur - 1, Math.max(0, f)));
+    /**
+     * 走共享播放头总线，而不是直接 `playerRef.seekTo`。
+     *
+     * 原因：3D 编辑模式下 Player 是**隐藏挂载**的，`seekTo` 不一定派发 `frameupdate`
+     * （实测：3D 模式下拖场景时间轴，播放头和画面都纹丝不动）。总线是唯一可靠的通道——
+     * 2D 模式下时间轴会把它转成真正的 `seekTo`，3D 模式下视口直接跟着走。
+     */
+    frameBus.seek(sceneStart + Math.min(sceneDur - 1, Math.max(0, f)));
   };
 
   /** 拖动 / 拉伸：直接改 DOM，不 setState，保证顺滑 */
