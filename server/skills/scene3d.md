@@ -75,10 +75,18 @@
 | `target` | 看向哪里，默认原点 |
 | `fov` | 10–120，默认 42 |
 | `orbit.degPerSec` | 绕 target 匀速环绕（度/秒），只转相机不动物体 |
-| `anim[]` | 运镜关键帧：`{at,from,to,ease,follow}`，键是 `posX posY posZ targetX targetY targetZ fov` |
+| `anim[]` | 运镜关键帧：`{at,from,to,ease,follow,lookAt}`，键是 `posX posY posZ targetX targetY targetZ fov` |
 | `anim[].follow` | 钉在某个节点上：本段 pos/target 变成**相对该节点的偏移**——拍公转中的行星必须用它，否则几帧后主体就跑出画 |
+| `anim[].lookAt` | **段内锁定看向某个节点**：target 每帧重算为该节点世界位置（`targetX/Y/Z` 在锁定段失效）。`lookAtOffset:[0,0.6,0]` 可以看向头顶 |
+| `anim[].lookAt` 的退出 | 下一段不给 `lookAt`、也**不写 `from` 的 target** 时，起点自动落在"退出帧那一刻的锁定点"上，镜头不会甩；写了 `from.target` 就按写的坐标硬切 |
+| `anim[].curve` | 运镜也可以走弧线（同节点 `curve`）：`{out,in}` 是相对直线的偏移，绕拍、甩镜用它，不写=直线 |
+| `follow` + `lookAt` | 可以同时给、也可以指向不同节点：`follow` 管"相机在哪"，`lookAt` 管"镜头朝哪"。两者同给时 target 只算一次（不会叠加两次偏移） |
 
 `anim` 同 key 的多段必须首尾相接、不重叠（边界帧 `end = 下一段 start − 1`）。
+
+**什么时候用 `lookAt` 而不是 key 帧 `target`**：目标自己在动（公转的行星、飘的物体、被旋转枢轴带动的子节点）
+——用 `targetX/Y/Z` 写死坐标，几帧后目标就移开画面了；`lookAt` 是每帧求值，目标动到哪儿镜头跟到哪儿。
+只想让镜头"看向某个固定位置"时仍然用 `targetX/Y/Z`（更便宜也更好改）。
 
 **求值语义（节点 `anim` 和相机 `anim` 一致）**：段**开始前**不参与（用基础值 / 上一段的终值），
 段**结束后保持终值**——最后一段的 `to` 一直生效到幕尾。想让物体"变完再弹回去"必须写两段
@@ -94,6 +102,7 @@
 | `material` | 不写就是一层中性暗金属 |
 | `transform.position / rotation / scale / scaleXYZ` | 基础变换，`rotation` 是**度** |
 | `anim[]` | 关键帧，最多 8 段。段结束后**保持终值**（同相机 `anim` 的语义） |
+| `anim[].curve` | 轨迹曲线：`{out:[x,y,z], in:[x,y,z]}`，两个都是**相对直线方向的偏移**（世界单位）。不写/全零 = 直线；`out` 和 `in` 给相同值 = 这一段朝那个方向鼓出去。物体位置和相机位置都生效 |
 
 ### 几何体白名单（13 种，写错 type 会直接报可用值）
 

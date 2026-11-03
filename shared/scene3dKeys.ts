@@ -44,6 +44,17 @@ export type CamKey = {
   target: [number, number, number];
   fov: number;
   ease: EaseKind;
+  /**
+   * 这一帧作为**段起点**时的约束。
+   *
+   * 为什么关键帧要带约束：重建段时 `camAnimFromKeys` 会把 from/to 全通道写死，
+   * 一拖相机整段就变成"纯坐标"，原来挂在上面的 lookAt/follow 被悄悄抹掉——
+   * 画面表现是"拖了一下，镜头突然不锁了"，而且撤销一次才能恢复。
+   * 所以约束必须跟着关键帧走：采样时记下来，重建时按区间原样贴回去。
+   */
+  lookAt?: string;
+  lookAtOffset?: [number, number, number];
+  follow?: string;
 };
 
 /* ───────────────────────────── 排序 / 增删 ───────────────────────────── */
@@ -227,8 +238,51 @@ export const camAnimFromKeys = (keys: CamKey[]): unknown[] | null => {
       from: packCam(k),
       to: packCam(next),
       ease: k.ease,
+      /**
+       * 约束按"段起点那颗关键帧"回填。段的约束天然属于起点：
+       * 区间 [k, next] 的行为由 k 决定，next 的约束从下一段开始生效。
+       */
+      ...(k.follow ? { follow: k.follow } : {}),
+      ...(k.lookAt
+        ? { lookAt: k.lookAt, ...(k.lookAtOffset ? { lookAtOffset: k.lookAtOffset } : {}) }
+        : {}),
     };
   });
+};
+
+/* ───────────────────────────── 相机锁定区间 ───────────────────────────── */
+
+export type CamLockSpan = {
+  start: number;
+  end: number;
+  id: string;
+  /**
+   * 是否是"最后一段"——最后一段的锁定按 hold 语义一直持续到片尾，
+   * 面板上要显示成「f80 → 片尾」而不是「f80 → f80」（后者看起来像没生效）。
+   */
+  openEnded: boolean;
+};
+
+/**
+ * 相机所有锁定区间（给面板列表用）。
+ *
+ * 直接从段读，不做任何合并：相邻两段锁同一个节点时仍是两个区间，
+ * 因为用户可能是分两次锁的、中间还改过参数；合并会让他删不掉后一半。
+ */
+export const camLookAtSpans = (camera: { anim?: Array<{ at: [number, number]; lookAt?: string }> } | undefined): CamLockSpan[] => {
+  const anims = camera?.anim ?? [];
+  if (!anims.length) return [];
+  let lastStart = -Infinity;
+  for (const a of anims) lastStart = Math.max(lastStart, a.at[0]);
+  return anims
+    .filter((a) => Boolean(a.lookAt))
+    .map((a) => ({
+      start: Math.round(a.at[0]),
+      end: Math.round(a.at[1]),
+      id: a.lookAt!,
+      openEnded: Math.round(a.at[0]) === Math.round(lastStart),
+    }))
+    .sort((a, b) => a.start - b.start);
 };
 
 /* ───────────────────────────── 提示文案 ───────────────────────────── */

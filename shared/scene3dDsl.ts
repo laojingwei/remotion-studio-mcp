@@ -248,10 +248,30 @@ const animKeyShape = {
   opacity: z.number().min(0).max(1).optional(),
 };
 
+/**
+ * 轨迹曲线（每段一个）。不写 = 直线。
+ *
+ * `out` / `in` 是**相对直线方向**的偏移量（世界单位），不是切线本身：
+ * - 全零或缺省 → 这一段精确直线，和没有 curve 完全一样；
+ * - `[0,2,0]` → 这一段路径向上鼓出 2 个单位（起手朝上、收尾朝上）；
+ * - 想让它"斜着绕过去"就给 out/in 不同的水平分量。
+ *
+ * 数学上是 Hermite：切线 = (终点−起点) + 偏移，所以偏移为 0 时切线就等于直线方向，
+ * 速度由 `ease` 单独控制——"走哪条路"和"什么时候到"互不干扰。
+ */
+export const curveSchema = z
+  .object({
+    out: vec3.optional().describe("起点出切线偏移（相对直线方向，世界单位）"),
+    in: vec3.optional().describe("终点入切线偏移（相对直线方向，世界单位）"),
+  })
+  .optional()
+  .describe("轨迹曲线：out/in 是相对直线的偏移，全零=直线；物体位置与相机位置都生效");
+
 export const animSchema = z.object({
   at: z.tuple([z.number(), z.number()]).describe("起止帧 [start, end]（场景内帧号）"),
   from: z.object(animKeyShape).optional().describe("起点值，不写就用节点的基础值"),
   to: z.object(animKeyShape).optional().describe("终点值 —— **必须有至少一个**，否则这段动画等于没写"),
+  curve: curveSchema,
   ease: z
     .enum(["linear", "easeInOut", "easeOut", "easeIn"])
     .default("easeInOut")
@@ -375,6 +395,7 @@ export const dslSchema = z.object({
               })
               .optional(),
             ease: z.enum(["linear", "easeInOut", "easeOut", "easeIn"]).default("easeInOut"),
+            curve: curveSchema,
             /**
              * 跟随某个节点：这一段的 posX/Y/Z 与 targetX/Y/Z 全部变成**相对该节点**的偏移。
              *
@@ -386,6 +407,27 @@ export const dslSchema = z.object({
               .string()
               .optional()
               .describe("跟随节点 id：本段的 pos/target 解释为相对该节点世界坐标的偏移"),
+            /**
+             * 段内**锁定看向**某个节点（机位自由、镜头死盯目标）。
+             *
+             * 和 follow 的分工：follow 管"相机在哪"（位置参考系），lookAt 管"镜头朝哪"。
+             * 两者可同时给（边跟着飞边盯着它），也可以给不同节点（跟着 A 移动、却看向 B）。
+             *
+             * 三条语义，和渲染端 dslCamera 严格一致：
+             * 1. 段内 target = 该节点**当前帧**的世界位置 + lookAtOffset，targetX/Y/Z 被忽略；
+             * 2. 段结束按 hold 语义持续（最后一段永不退出 = 锁到片尾）；
+             * 3. **退出时不必手写目标点**：下一段不给 lookAt、也不给 from 的 target，
+             *    起点会自动落在"退出帧那一刻的锁定点"上，镜头不会甩。
+             */
+            lookAt: z
+              .string()
+              .optional()
+              .describe(
+                "锁定看向的节点 id：本段 target 强制 = 该节点世界位置 + lookAtOffset（targetX/Y/Z 失效）",
+              ),
+            lookAtOffset: vec3
+              .optional()
+              .describe("锁定点偏移（世界轴向），看向头顶/脚底用 [0,0.6,0]"),
           }),
         )
         .max(240)
@@ -497,6 +539,22 @@ export function dslIssues(spec: Scene3DDsl): string[] {
       issues.push(
         `节点「${n.id}」的贴图 src「${src}」不合法（可用：/assets/xxx 先 upload_asset、https://、data:）`,
       );
+    }
+  }
+  /**
+   * 相机引用的节点 id（follow / lookAt）。
+   *
+   * 这两条都必须在这里拦死：渲染端对"节点不存在"只能静默降级（follow 退化成原点偏移、
+   * lookAt 退回上一段的 target），成片里表现为"镜头没跟住 / 没锁上"，而 agent 从
+   * 渲染结果完全看不出是 id 拼错了一个字符 —— 它只会去改运镜参数，越改越远。
+   */
+  for (const a of spec.camera?.anim ?? []) {
+    const span = `第 ${a.at[0]}–${a.at[1]} 帧`;
+    if (a.follow && !ids.has(a.follow)) {
+      issues.push(`相机${span}要跟随节点「${a.follow}」，但场景里没有这个节点（可用：${[...ids].join("、")}）`);
+    }
+    if (a.lookAt && !ids.has(a.lookAt)) {
+      issues.push(`相机${span}要锁定节点「${a.lookAt}」，但场景里没有这个节点（可用：${[...ids].join("、")}）`);
     }
   }
   return issues;

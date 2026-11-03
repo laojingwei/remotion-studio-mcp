@@ -8,6 +8,7 @@ import { frameBus } from "./frameBus";
 import type { DslNode } from "@shared/scene3dDsl";
 import { Scene3DViewport } from "./panels/Scene3DViewport";
 import { Scene3DInspector } from "./panels/Scene3DInspector";
+import { dslCamera } from "../src/scenes/scene3d/DslScene";
 import { quietThreeClockWarn } from "./quietThreeClockWarn";
 
 quietThreeClockWarn();
@@ -56,6 +57,11 @@ useDoc.setState({
 (window as unknown as { __useDoc: unknown }).__useDoc = useDoc;
 // 跳帧入口：属性面板的"跳到这个关键帧"、关键帧列表都要靠总线驱动
 (window as unknown as { __frameBus: unknown }).__frameBus = frameBus;
+/**
+ * 相机求值也暴露给 e2e：拖相机的手柄在"当前帧的真实机位"上，
+ * 硬编码初始机位会点到空白处（锁定测试就是在 f30 拖，机位已经运镜到中途了）。
+ */
+(window as unknown as { __dslCamera: unknown }).__dslCamera = dslCamera;
 
 /**
  * 关键帧 op 在本地落地。

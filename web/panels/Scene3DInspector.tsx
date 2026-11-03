@@ -10,9 +10,12 @@ import {
   type NodeKey,
   camAnimFromKeys,
   camHasFollow,
+  camKeyFrames,
   camKeySummary,
+  camLookAtSpans,
   nodeAnimFromKeys,
   nodeKeyAt,
+  nodeKeyFrames,
   nodeKeySummary,
   nodeKeysOf,
   removeKeyAt,
@@ -22,7 +25,8 @@ import {
   upsertKeyKeepingZero,
 } from "@shared/scene3dKeys";
 import { dslCamera } from "../../src/scenes/scene3d/DslScene";
-import { camKeysOf } from "./scene3dCamKeys";
+import { smoothAtKey, smoothTangents } from "@shared/scene3dPath";
+import { camKeyWithPose, camKeysOf, camZeroKeyOf, withCamLookAt } from "./scene3dCamKeys";
 import { frameBus } from "../frameBus";
 import { SceneBoxSection } from "./SceneBoxSection";
 import { BackdropSection } from "./BackdropSection";
@@ -501,7 +505,252 @@ export const Scene3DInspector: React.FC<{ scene: Scene; fps: number }> = ({ scen
     notify("关键帧已清空，节点回到静态");
   };
 
+  /* ── 轨迹形状（直线 / 平滑 / 手动贝塞尔） ── */
+
+  const r3 = (v: readonly number[]): [number, number, number] => [
+    Math.round((v[0] ?? 0) * 1e4) / 1e4,
+    Math.round((v[1] ?? 0) * 1e4) / 1e4,
+    Math.round((v[2] ?? 0) * 1e4) / 1e4,
+  ];
+
+  /** 只改一段的一侧曲线，另一侧原样保留；两侧都归零就把 curve 整个删掉 */
+  const withCurveSide = <T extends { curve?: { out?: number[]; in?: number[] } }>(
+    seg: T,
+    side: "out" | "in",
+    v: [number, number, number] | null,
+  ): T => {
+    if (!v) return seg;
+    const out = side === "out" ? v : (seg.curve?.out ?? [0, 0, 0]);
+    const inn = side === "in" ? v : (seg.curve?.in ?? [0, 0, 0]);
+    const flat = [...out, ...inn].every((x) => Math.abs(x) < 1e-4);
+    return { ...seg, ...(flat ? { curve: undefined } : { curve: { out: r3(out), in: r3(inn) } }) };
+  };
+
+  /** 某一帧两侧的段（没有的那侧为 null）。节点和相机共用 */
+  const sidesAt = <T extends { at: [number, number] }>(segs: T[], f: number) => ({
+    prev: segs.find((a) => Math.round(a.at[1]) === f) ?? null,
+    next: segs.find((a) => Math.round(a.at[0]) === f) ?? null,
+  });
+
+  const frameNow = Math.round(curFrame);
+
+  /**
+   * 只平滑**当前这一颗关键帧**两侧的线。
+   *
+   * 整条平滑会把其它关键帧已经调好的曲线一起重算——用户在某一颗点上点"平滑"，
+   * 期望的只是"这个拐点变圆"，不是"整条轨迹重新洗一遍"。
+   */
+  const smoothNodeAtPoint = () => {
+    if (!node?.anim?.length) return;
+    const f = frameNow;
+    const { prev, next } = sidesAt(node.anim, f);
+    if (!prev && !next) {
+      notify(`第 ${f} 帧不是关键帧：先点视口里轨迹上的关键帧球，再把播放头停在这一帧`);
+      return;
+    }
+    const posAt = (fr: number) => evalNode(node, fr).pos as [number, number, number];
+    const span = (a: [number, number, number], b: [number, number, number]) =>
+      Math.hypot(a[0] - b[0], a[1] - b[1], a[2] - b[2]);
+    const P = prev ? posAt(Math.round(prev.at[0])) : null;
+    const N = next ? posAt(Math.round(next.at[1])) : null;
+    const { inPrev, outNext } = smoothAtKey(
+      P,
+      posAt(f),
+      N,
+      P ? span(P, posAt(f)) : 0,
+      N ? span(posAt(f), N) : 0,
+    );
+    if (!inPrev && !outNext) {
+      notify("这个点在轨迹两端（只有一侧有段），没有切线可平滑；要整条拉直用下面的「整条」");
+      return;
+    }
+    patchNode(node.id, {
+      anim: node.anim.map((a) => {
+        if (prev && a === prev) return withCurveSide(a, "in", inPrev);
+        if (next && a === next) return withCurveSide(a, "out", outNext);
+        return a;
+      }),
+    });
+    notify(`第 ${f} 帧两侧已平滑（只改这两段靠近该点的一端，其它关键帧不动）`);
+  };
+
+  /** 只拉直**当前这一颗关键帧**两侧的线（该点两侧切线归零），其它点不动 */
+  const straightNodeAtPoint = () => {
+    if (!node?.anim?.length) return;
+    const f = frameNow;
+    const { prev, next } = sidesAt(node.anim, f);
+    if (!prev && !next) {
+      notify(`第 ${f} 帧不是关键帧：先点视口里轨迹上的关键帧球`);
+      return;
+    }
+    patchNode(node.id, {
+      anim: node.anim.map((a) => {
+        if (prev && a === prev) return withCurveSide(a, "in", [0, 0, 0]);
+        if (next && a === next) return withCurveSide(a, "out", [0, 0, 0]);
+        return a;
+      }),
+    });
+    notify(`第 ${f} 帧两侧已拉直（其它关键帧不动）`);
+  };
+
+  /**
+   * 一键平滑：每段两端各取"邻居差分的一半"当切线（Catmull-Rom）。
+   * 相邻段在共享关键帧处算出同一条切线，所以接缝 C1 连续 —— 不会出现速度折角。
+   * 邻居按端点帧在关键帧序列里的位置找；首末段没有邻居就自然退化为直线。
+   */
+  const smoothNodePath = () => {
+    if (!node?.anim?.length) return;
+    const frames = nodeKeyFrames(node);
+    const posAt = (f: number) => evalNode(node, f).pos;
+    const nextAnim = node.anim.map((a) => {
+      const s = Math.round(a.at[0]);
+      const e = Math.round(a.at[1]);
+      const iS = frames.indexOf(s);
+      const iE = frames.indexOf(e);
+      const prev = iS > 0 ? frames[iS - 1] : null;
+      const next = iE >= 0 && iE < frames.length - 1 ? frames[iE + 1] : null;
+      const { out, inn } = smoothTangents(
+        prev != null ? (posAt(prev) as [number, number, number]) : null,
+        posAt(s) as [number, number, number],
+        posAt(e) as [number, number, number],
+        next != null ? (posAt(next) as [number, number, number]) : null,
+      );
+      /** 两侧都算成 0（端点的端点没有邻居）就不写 curve，别在 DSL 里留零值 */
+      const flat = [...out, ...inn].every((v) => Math.abs(v) < 1e-4);
+      return { ...a, ...(flat ? { curve: undefined } : { curve: { out: r3(out), in: r3(inn) } }) };
+    });
+    patchNode(node.id, { anim: nextAnim });
+    notify("轨迹已平滑：相邻段在关键帧处相切，拐点变成圆角");
+  };
+
+  const straightNodePath = () => {
+    if (!node?.anim?.length) return;
+    patchNode(node.id, { anim: node.anim.map((a) => ({ ...a, curve: undefined })) });
+    notify("轨迹已拉直：所有段恢复直线");
+  };
+
+  /**
+   * 运镜路径一键平滑。相机的 pos 本来就是世界坐标，所以端点直接用 dslCamera 取；
+   * follow 段例外（pos 是相对节点的偏移），整条运镜里有 follow 时不给按——
+   * 拿世界邻点去算偏移会得到一条越飞越偏的曲线，比不按更糟。
+   */
+  const smoothCamPath = () => {
+    if (!graph?.camera?.anim?.length) return;
+    if (camHasFollow(graph.camera)) {
+      notify("这条运镜里有 follow（相对跟随）段，路径平滑会算歪；先去掉跟随再平滑");
+      return;
+    }
+    const frames = camKeyFrames(graph.camera);
+    const posAt = (f: number) => dslCamera(graph, f / fps, fps).worldPos;
+    const next = graph.camera.anim.map((a) => {
+      const s = Math.round(a.at[0]);
+      const e = Math.round(a.at[1]);
+      const iS = frames.indexOf(s);
+      const iE = frames.indexOf(e);
+      const prev = iS > 0 ? frames[iS - 1] : null;
+      const nextF = iE >= 0 && iE < frames.length - 1 ? frames[iE + 1] : null;
+      const { out, inn } = smoothTangents(
+        prev != null ? posAt(prev) : null,
+        posAt(s),
+        posAt(e),
+        nextF != null ? posAt(nextF) : null,
+      );
+      const flatCam = [...out, ...inn].every((v) => Math.abs(v) < 1e-4);
+      return { ...a, ...(flatCam ? { curve: undefined } : { curve: { out: r3(out), in: r3(inn) } }) };
+    });
+    write([{ op: "set_graph_camera", sceneId: scene.id, camera: { anim: next } } as Op]);
+    notify("运镜已平滑：镜头会沿弧线绕过去，拐点不再打折");
+  };
+
+  const straightCamPath = () => {
+    if (!graph?.camera?.anim?.length) return;
+    write([
+      {
+        op: "set_graph_camera",
+        sceneId: scene.id,
+        camera: { anim: graph.camera.anim.map((a) => ({ ...a, curve: undefined })) },
+      } as Op,
+    ]);
+    notify("运镜已拉直：所有段恢复直线");
+  };
+
+  /** 只平滑当前这一颗运镜关键帧两侧（其它机位点不动） */
+  const smoothCamAtPoint = () => {
+    if (!graph?.camera?.anim?.length) return;
+    const f = frameNow;
+    const { prev, next } = sidesAt(graph.camera.anim, f);
+    if (!prev && !next) {
+      notify(`第 ${f} 帧不是运镜关键帧：先点视口里运镜轨迹上的关键帧球`);
+      return;
+    }
+    if ([prev, next].some((s) => s && (s as { follow?: string }).follow)) {
+      notify("这一帧旁边是 follow（跟随）段，位置是相对偏移，按世界坐标算切线会算歪；先去掉跟随");
+      return;
+    }
+    const posAt = (fr: number) => dslCamera(graph, fr / fps, fps).worldPos;
+    const span = (a: [number, number, number], b: [number, number, number]) =>
+      Math.hypot(a[0] - b[0], a[1] - b[1], a[2] - b[2]);
+    const P = prev ? posAt(Math.round(prev.at[0])) : null;
+    const N = next ? posAt(Math.round(next.at[1])) : null;
+    const { inPrev, outNext } = smoothAtKey(
+      P,
+      posAt(f),
+      N,
+      P ? span(P, posAt(f)) : 0,
+      N ? span(posAt(f), N) : 0,
+    );
+    if (!inPrev && !outNext) {
+      notify("这个点在运镜两端（只有一侧有段），没有切线可平滑；要整条拉直用「整条」");
+      return;
+    }
+    write([
+      {
+        op: "set_graph_camera",
+        sceneId: scene.id,
+        camera: {
+          anim: graph.camera.anim.map((a) => {
+            if (prev && a === prev) return withCurveSide(a, "in", inPrev);
+            if (next && a === next) return withCurveSide(a, "out", outNext);
+            return a;
+          }),
+        },
+      } as Op,
+    ]);
+    notify(`第 ${f} 帧两侧已平滑（其它机位点不动）`);
+  };
+
+  /** 只拉直当前这一颗运镜关键帧两侧 */
+  const straightCamAtPoint = () => {
+    if (!graph?.camera?.anim?.length) return;
+    const f = frameNow;
+    const { prev, next } = sidesAt(graph.camera.anim, f);
+    if (!prev && !next) {
+      notify(`第 ${f} 帧不是运镜关键帧：先点视口里运镜轨迹上的关键帧球`);
+      return;
+    }
+    write([
+      {
+        op: "set_graph_camera",
+        sceneId: scene.id,
+        camera: {
+          anim: graph.camera.anim.map((a) => {
+            if (prev && a === prev) return withCurveSide(a, "in", [0, 0, 0]);
+            if (next && a === next) return withCurveSide(a, "out", [0, 0, 0]);
+            return a;
+          }),
+        },
+      } as Op,
+    ]);
+    notify(`第 ${f} 帧两侧已拉直（其它机位点不动）`);
+  };
+
   /* 相机运镜关键帧：值是世界坐标（和视口里那台相机实体看到的一致） */
+  const isNodeKeyFrame = Boolean(
+    node?.anim?.some((a) => Math.round(a.at[0]) === frameNow || Math.round(a.at[1]) === frameNow),
+  );
+  const isCamKeyFrame = Boolean(
+    graph?.camera?.anim?.some((a) => Math.round(a.at[0]) === frameNow || Math.round(a.at[1]) === frameNow),
+  );
   const camFollowLocked = Boolean(graph && camHasFollow(graph.camera));
   const camKeys = useMemo(() => {
     const base = !graph || camFollowLocked ? [] : camKeysOf(graph, fps);
@@ -525,13 +774,17 @@ export const Scene3DInspector: React.FC<{ scene: Scene; fps: number }> = ({ scen
   const addCamKey = () => {
     if (!graph) return;
     const c = dslCamera(graph, curFrame / fps, fps);
-    const c0 = dslCamera(graph, 0, fps);
     commitCamKeys(
       // 同节点：不足两颗时补第 0 帧（起始机位）
       upsertKeyKeepingZero(
         camKeys,
-        { frame: curFrame, pos: c.worldPos, target: c.worldTarget, fov: c.fov, ease: "easeInOut" },
-        { frame: 0, pos: c0.worldPos, target: c0.worldTarget, fov: c0.fov, ease: "easeInOut" },
+        /**
+         * 走 camKeyWithPose：它会继承当前段的 follow/lookAt。
+         * 打关键帧等于把这一段切成两半，新关键帧是后半段的起点——不继承就等于
+         * "打个关键帧把锁定弄丢了"。
+         */
+        camKeyWithPose(graph, curFrame, { pos: c.worldPos, target: c.worldTarget, fov: c.fov }),
+        camZeroKeyOf(graph, fps),
       ),
       curFrame,
     );
@@ -547,7 +800,52 @@ export const Scene3DInspector: React.FC<{ scene: Scene; fps: number }> = ({ scen
   const clearCamKeys = () => {
     setPendingCamKey(null);
     write([{ op: "set_graph_camera", sceneId: scene.id, camera: { anim: null } } as Op]);
-    notify("运镜关键帧已清空，相机回到固定机位");
+    notify(
+      camLockSpans.length
+        ? "运镜关键帧已清空，相机回到固定机位（其中的锁定段也一起清掉了）"
+        : "运镜关键帧已清空，相机回到固定机位",
+    );
+  };
+
+  /* ── 看向锁定：把"镜头死盯某个物体"写成段的 lookAt 约束 ── */
+
+  const camLockSpans = useMemo(() => camLookAtSpans(graph?.camera), [graph]);
+  /** 面板下拉的选择；不选就跟随"当前正在锁谁"，这样点「重新锁定」不会先要人再选一次 */
+  const [camLockPick, setCamLockPick] = useState("");
+  /**
+   * 当前帧**实际生效**的那一段（所有 start ≤ 当前帧的段里，start 最大的那个）。
+   * 不能"找包含该帧的段"：段是首尾相接的，边界帧会同时命中两段，
+   * 命中前一段就会在"已经退出锁定"的帧上显示"锁定中"。
+   */
+  const camSegNow = useMemo(() => {
+    const anims = [...(graph?.camera?.anim ?? [])].sort((a, b) => a.at[0] - b.at[0]);
+    let cur: (typeof anims)[number] | null = null;
+    for (const a of anims) if (a.at[0] <= curFrame) cur = a;
+    return cur;
+  }, [graph, curFrame]);
+  const camLockNow = camSegNow?.lookAt
+    ? { id: camSegNow.lookAt, start: Math.round(camSegNow.at[0]), end: Math.round(camSegNow.at[1]) }
+    : null;
+  const camLockSelect = camLockPick || camLockNow?.id || graph?.nodes[0]?.id || "";
+  const labelOf = (id: string) => graph?.nodes.find((n) => n.id === id)?.label ?? id;
+
+  /**
+   * 锁定 / 退出。**只有这个操作会改段结构**（在目标帧切段），所以错误要原样抛给用户看：
+   * follow 段不能切、段数有限，这些都是用户需要知道的约束，不是内部异常。
+   */
+  const applyCamLookAt = (nodeId: string | null, atFrame = curFrame) => {
+    if (!graph) return;
+    const r = withCamLookAt(graph, atFrame, nodeId, fps);
+    if ("error" in r) {
+      notify(r.error);
+      return;
+    }
+    write([{ op: "set_graph_camera", sceneId: scene.id, camera: { anim: r.anim } } as Op]);
+    notify(
+      nodeId
+        ? `已从第 ${atFrame} 帧起锁定「${labelOf(nodeId)}」：看向线变虚线，镜头每帧重新对准它`
+        : `已从第 ${atFrame} 帧退出锁定：镜头从当时的锁定点继续飞`,
+    );
   };
 
   /**
@@ -575,6 +873,18 @@ export const Scene3DInspector: React.FC<{ scene: Scene; fps: number }> = ({ scen
    */
   const writeCam = (patch: { position?: number[]; target?: number[]; fov?: number }) => {
     if (!graph) return;
+    /**
+     * 锁定段里改"看向"是无效的：target 每帧被节点位置覆盖。
+     * 静默忽略最伤信任（用户调半天画面不动），所以明说 + 不动数据。
+     */
+    if (patch.target && camLockNow) {
+      notify(
+        `第 ${curFrame} 帧正锁定「${labelOf(camLockNow.id)}」：看向点由目标位置每帧决定，改这里不会生效。` +
+          `要手改看向，先点「退出锁定」`,
+      );
+      patch = { ...patch, target: undefined };
+      if (!patch.position && patch.fov === undefined) return;
+    }
     if (camFollowLocked) {
       // follow 段是相对节点的偏移，图形化改会把镜头带跑（见 camHasFollow 的注释）
       write([{ op: "set_graph_camera", sceneId: scene.id, camera: patch } as Op]);
@@ -600,21 +910,12 @@ export const Scene3DInspector: React.FC<{ scene: Scene; fps: number }> = ({ scen
       return;
     }
 
-    const c0 = dslCamera(graph, 0, fps);
-    const key = {
-      frame: curFrame,
+    const key = camKeyWithPose(graph, curFrame, {
       pos: (patch.position ?? camNow.pos) as [number, number, number],
       target: (patch.target ?? camNow.target) as [number, number, number],
       fov: patch.fov ?? camNow.fov,
-      ease: "easeInOut" as const,
-    };
-    const zero = {
-      frame: 0,
-      pos: c0.worldPos as [number, number, number],
-      target: c0.worldTarget as [number, number, number],
-      fov: c0.fov,
-      ease: "easeInOut" as const,
-    };
+    });
+    const zero = camZeroKeyOf(graph, fps);
     const next = upsertKeyKeepingZero(camKeys, key, zero);
     write([
       { op: "set_graph_camera", sceneId: scene.id, camera: { anim: camAnimFromKeys(next) } } as Op,
@@ -1210,6 +1511,41 @@ export const Scene3DInspector: React.FC<{ scene: Scene; fps: number }> = ({ scen
                       : undefined
                   }
                 />
+                {nodeKeys.length >= 2 ? (
+                  <>
+                    <div className="s3d-row" data-scope="node" data-kind="point">
+                      <span title="只改当前这一帧两侧的线">此点</span>
+                      <button
+                        className="mini"
+                        onClick={smoothNodeAtPoint}
+                        disabled={!isNodeKeyFrame}
+                        title="只把当前这一帧两侧的线调成相切（其它关键帧的曲线不动）"
+                      >
+                        平滑
+                      </button>
+                      <button
+                        className="mini"
+                        onClick={straightNodeAtPoint}
+                        disabled={!isNodeKeyFrame}
+                        title="只把当前这一帧两侧拉直（其它关键帧的曲线不动）"
+                      >
+                        拉直
+                      </button>
+                    </div>
+                    <div className="s3d-row" data-scope="node" data-kind="all">
+                      <span title="改整条轨迹的所有段">整条</span>
+                      <button className="mini" onClick={smoothNodePath} title="所有关键帧一起算相切（会重算整条轨迹）">
+                        平滑
+                      </button>
+                      <button className="mini" onClick={straightNodePath} title="所有段恢复直线（删掉所有曲线）">
+                        拉直
+                      </button>
+                    </div>
+                    <p className="s3d-hint">
+                      想精细调：在视口里点轨迹上的关键帧球，会出现贝塞尔手柄，直接拖；两侧默认相切联动（拖一个另一个跟着转），按住 <b>Shift</b> 只动这一侧；双击手柄拉直那一侧。
+                    </p>
+                  </>
+                ) : null}
 
                 {/* ── 几何体 ── */}
                 <div className="divider" />
@@ -1460,6 +1796,67 @@ export const Scene3DInspector: React.FC<{ scene: Scene; fps: number }> = ({ scen
               />
             </div>
             <div className="divider" />
+            <div className="section-title">看向锁定</div>
+            <p className="s3d-hint">
+              锁定后这一段镜头每帧重新对准目标：摄像机怎么飞都对着它。退出后镜头从当时的锁定点继续飞，不会甩。
+            </p>
+            <div className="s3d-row">
+              <span>目标</span>
+              <select
+                value={camLockSelect}
+                onChange={(e) => setCamLockPick(e.target.value)}
+                disabled={!graph.nodes.length}
+                style={{ flex: 1, minWidth: 0 }}
+              >
+                {graph.nodes.map((n) => (
+                  <option key={n.id} value={n.id}>
+                    {n.label ?? n.id}
+                  </option>
+                ))}
+              </select>
+            </div>
+            {camLockNow ? (
+              <div className="s3d-warn">
+                当前帧（f{curFrame}）正锁定「{labelOf(camLockNow.id)}」
+                {camLockNow.end > camLockNow.start ? `，本段 f${camLockNow.start}–f${camLockNow.end}` : ""}
+                。旋转手柄已禁用，移动/推拉照常。
+              </div>
+            ) : null}
+            <div style={{ display: "flex", gap: 6 }}>
+              <button
+                className="mini add"
+                onClick={() => applyCamLookAt(camLockSelect || null)}
+                disabled={!camLockSelect}
+              >
+                {camLockNow ? "改锁到目标" : `从 f${curFrame} 锁定`}
+              </button>
+              <button className="mini" onClick={() => applyCamLookAt(null)} disabled={!camLockNow}>
+                退出锁定
+              </button>
+            </div>
+            {camLockSpans.length ? (
+              <>
+                <p className="s3d-hint">锁定区间（× 解除，画面不跳）</p>
+                {camLockSpans.map((s) => (
+                  <div className="s3d-row" key={`${s.start}-${s.id}`}>
+                    <span>
+                      f{s.start}–{s.openEnded ? "片尾" : s.end} · {labelOf(s.id)}
+                    </span>
+                    <button className="mini" onClick={() => seekTo(s.start)} title="跳到这段的起点">
+                      跳
+                    </button>
+                    <button
+                      className="mini"
+                      onClick={() => applyCamLookAt(null, s.start)}
+                      title="解除这段锁定：目标点保持当时的锁定位置，画面不跳"
+                    >
+                      ×
+                    </button>
+                  </div>
+                ))}
+              </>
+            ) : null}
+            <div className="divider" />
             {camFollowLocked ? (
               <div className="s3d-warn">
                 这段运镜用了 <code>follow</code>（把相机钉在某个节点上跟随）。图形化编辑会把
@@ -1487,6 +1884,41 @@ export const Scene3DInspector: React.FC<{ scene: Scene; fps: number }> = ({ scen
                 }
               />
             )}
+            {camKeys.length >= 2 ? (
+              <>
+                <div className="s3d-row" data-scope="cam" data-kind="point">
+                  <span title="只改当前这一帧两侧的机位">此点</span>
+                  <button
+                    className="mini"
+                    onClick={smoothCamAtPoint}
+                    disabled={!isCamKeyFrame || camFollowLocked}
+                    title="只把当前这一帧两侧的运镜调成相切（其它机位点不动）"
+                  >
+                    平滑
+                  </button>
+                  <button
+                    className="mini"
+                    onClick={straightCamAtPoint}
+                    disabled={!isCamKeyFrame}
+                    title="只把当前这一帧两侧拉直（其它机位点不动）"
+                  >
+                    拉直
+                  </button>
+                </div>
+                <div className="s3d-row" data-scope="cam" data-kind="all">
+                  <span title="改整条运镜的所有段">整条</span>
+                  <button className="mini" onClick={smoothCamPath} disabled={camFollowLocked} title="所有机位点一起算相切（会重算整条运镜）">
+                    平滑
+                  </button>
+                  <button className="mini" onClick={straightCamPath} title="所有段恢复直线">
+                    拉直
+                  </button>
+                </div>
+                <p className="s3d-hint">
+                  精细调整：在视口里点运镜轨迹上的关键帧球，会出现贝塞尔手柄，直接拖；两侧默认相切联动，按住 <b>Shift</b> 只动这一侧；双击手柄拉直那一侧。
+                </p>
+              </>
+            ) : null}
             <div className="divider" />
             <button
               className="mini"

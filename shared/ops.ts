@@ -1942,10 +1942,14 @@ export function applyOps(project: Project, ops: Op[]): OpResult {
         ) as unknown as NonNullable<Scene3DDsl["camera"]>;
         graph.camera = cam;
         const savedCam = saveGraph(scene, graph, "set_graph_camera").camera!;
+        const lockSegs = (savedCam.anim ?? []).filter((a) => a.lookAt);
         summary.push(
           `「${scene.name}」相机：位置 [${savedCam.position.join(", ")}] → 看向 [${savedCam.target.join(", ")}]` +
             `，fov ${savedCam.fov}` +
-            (savedCam.orbit?.degPerSec ? `，环绕 ${savedCam.orbit.degPerSec}°/s` : ""),
+            (savedCam.orbit?.degPerSec ? `，环绕 ${savedCam.orbit.degPerSec}°/s` : "") +
+            (lockSegs.length
+              ? `，锁定 ${lockSegs.length} 段（${lockSegs.map((a) => `${a.lookAt}@f${a.at[0]}–${a.at[1]}`).join("；")}）`
+              : ""),
         );
         break;
       }

@@ -6079,11 +6079,26 @@ const TOOLS: ToolDef[] = [
       const out = [`「${s.name}」sceneId=${s.id} · ${g.nodes.length} 个节点`, ...lines];
       if (g.camera) {
         const c = g.camera;
+        /**
+         * 锁定/跟随段必须显式报出来：agent 看到"target 写了却没变化"时，
+         * 最常见的原因就是这一段被 lookAt 覆盖了——不报它，agent 会一直去改 target。
+         */
+        const segs = (c.anim ?? []) as Array<{ at: [number, number]; lookAt?: string; follow?: string }>;
+        const locks = segs.filter((a) => a.lookAt);
+        const follows = segs.filter((a) => a.follow);
         out.push(
           `相机：pos[${c.position.join(",")}] → target[${c.target.join(",")}] fov${c.fov}` +
             (c.orbit?.degPerSec ? ` 环绕${c.orbit.degPerSec}°/s` : "") +
-            ((c.anim ?? []).length ? ` anim×${c.anim!.length}` : ""),
+            ((c.anim ?? []).length ? ` anim×${c.anim!.length}` : "") +
+            (locks.length ? ` 锁定×${locks.length}` : "") +
+            (follows.length ? ` 跟随×${follows.length}` : ""),
         );
+        if (locks.length) {
+          out.push(
+            `　锁定段：${locks.map((a) => `「${a.lookAt}」f${a.at[0]}–f${a.at[1]}`).join("；")}` +
+              `（这些段的 target 由节点位置每帧决定，改 targetX/Y/Z 无效；退出锁定=下一段不给 lookAt 且不写 from.target）`,
+          );
+        }
       } else out.push("相机：自动取景");
       if (g.lights?.length) {
         out.push(`光源 ${g.lights.length} 盏：${g.lights.map((l) => `${l.type}@[${l.position.join(",")}] i=${l.intensity}`).join("；")}`);
@@ -6106,6 +6121,7 @@ const TOOLS: ToolDef[] = [
       "patch:{transform:{position:[0,1,0]}} 移动（position/rotation/scale 整个替换，其余保留）、" +
       "patch:{label:\"地球\"} 起名、patch:{hidden:true} 临时隐藏（子树一起）、" +
       "patch:{parent:\"sun\"} 换父级（**保持世界位置不变**，做卫星就靠它）、patch:{anim:[…]} 整段替换关键帧、anim:null 清空。\n" +
+      "轨迹想走曲线：段里加 curve:{out:[x,y,z], in:[x,y,z]}（相对直线方向的偏移，世界单位；不写=直线；两个给相同值=这段朝那个方向鼓）。\n" +
       "⚠️ 节点有关键帧时，基础 transform 在关键帧区间内会被覆盖——改了看不到变化就检查 anim。\n" +
       "nodeId 从 get_graph 拿。不知道有什么节点就先 get_graph，别整份改 graph。",
     shape: {
@@ -6218,13 +6234,22 @@ const TOOLS: ToolDef[] = [
     description:
       "改 scene3d 的**场景级**设置（不是某个节点）：相机、光源、粒子、辉光。只传要改的那几项，其余保持原样；传 null 表示清掉（恢复默认）。\n" +
       "相机：{position:[0,2,8], target:[0,0,0], fov:42, orbit:{degPerSec:6}}；" +
+      "运镜段里想**锁定看向某个会动的节点**（行星、飘的物体）用 anim[].lookAt:\"节点id\"" +
+      "（target 每帧重算，targetX/Y/Z 在该段失效；退出锁定=下一段不给 lookAt 且不写 from.target，镜头会自动接上）；" +
+      "想让镜头走弧线用 anim[].curve:{out,in}（相对直线的偏移，绕拍/甩镜）；" +
       "光源（给了就顶掉预设打光，最多 8 盏）：[{type:\"point\", position:[0,0,0], intensity:20, color:\"#FFE9B0\"}]" +
       "（point/spot 按 1/距离² 衰减，距离 2 时要 20 上下才亮；directional 1~3 就够）；" +
       "粒子：{count:800, spread:[6,4,6], size:0.06, drift:0.3}；辉光：{bloom:1.2}。",
     shape: {
       projectId: z.string().optional().describe("要操作的工程 id，不传 = 当前默认工程（list_projects 查）"),
       sceneId: z.string(),
-      camera: z.record(z.any()).nullable().optional().describe("相机；null = 交还自动取景"),
+      camera: z
+        .record(z.any())
+        .nullable()
+        .optional()
+        .describe(
+          "相机；null = 交还自动取景。anim[] 里可用 lookAt:\"节点id\" 锁定看向（段内 target 每帧重算）",
+        ),
       lights: z.array(z.any()).nullable().optional().describe("整组光源；null 或 [] = 撤掉自定义光"),
       particles: z.record(z.any()).nullable().optional().describe("粒子层；null = 关掉"),
       post: z.record(z.any()).nullable().optional().describe("后期（bloom/threshold）；null = 回到默认"),

@@ -8,6 +8,7 @@
  * 不依赖 three：纯数组运算，server 端也能 import（web / src / server 共用 shared）。
  */
 import type { DslNode } from "./scene3dDsl";
+import { hasCurve, pathAt, type Vec3 } from "./scene3dPath";
 
 export type EaseKind = "linear" | "easeInOut" | "easeOut" | "easeIn";
 
@@ -77,7 +78,35 @@ export const evalNode = (node: DslNode, frame: number): Tr => {
       const from = typeof fromRaw === "number" ? fromRaw : cur;
       return from + (to - from) * p;
     };
-    out.pos = [pick("posX", out.pos[0]), pick("posY", out.pos[1]), pick("posZ", out.pos[2])];
+    /*
+     * 位置：这一段被拉弯了就走空间曲线（Hermite），否则仍是逐通道线性插值。
+     *
+     * `hasCurve` 全零即 false，所以没配 curve 的段走的还是原来那三行 pick，
+     * 老数据逐位不变（这是"加功能不改旧片"的底线）。
+     * 曲线段里缺省的通道用起点补：曲线是**整个 3D 点**在走，不能三个轴各弯各的。
+     */
+    if (hasCurve(a.curve) && a.curve) {
+      const curve = a.curve;
+      const p0: Vec3 = [
+        typeof a.from?.posX === "number" ? a.from.posX : out.pos[0],
+        typeof a.from?.posY === "number" ? a.from.posY : out.pos[1],
+        typeof a.from?.posZ === "number" ? a.from.posZ : out.pos[2],
+      ];
+      const p1: Vec3 = [
+        typeof a.to?.posX === "number" ? a.to.posX : p0[0],
+        typeof a.to?.posY === "number" ? a.to.posY : p0[1],
+        typeof a.to?.posZ === "number" ? a.to.posZ : p0[2],
+      ];
+      out.pos = pathAt(
+        p0,
+        p1,
+        [curve.out?.[0] ?? 0, curve.out?.[1] ?? 0, curve.out?.[2] ?? 0],
+        [curve.in?.[0] ?? 0, curve.in?.[1] ?? 0, curve.in?.[2] ?? 0],
+        p,
+      );
+    } else {
+      out.pos = [pick("posX", out.pos[0]), pick("posY", out.pos[1]), pick("posZ", out.pos[2])];
+    }
     out.rot = [pick("rotX", out.rot[0]), pick("rotY", out.rot[1]), pick("rotZ", out.rot[2])];
     // 动画的 scale 是"整体缩放"：乘到三轴上，不会破坏 scaleXYZ 的比例
     const k = pick("scale", 1);

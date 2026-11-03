@@ -1,4 +1,5 @@
 import type { DslNode } from "./scene3dDsl";
+import { evalNode } from "./scene3dAnim";
 
 /**
  * 3D 节点变换的小型数学库：**只为「换父级但位置不跳」这一件事服务**。
@@ -182,6 +183,50 @@ export function worldMatrixOf(nodes: DslNode[], id: string): Mat4 | null {
   let m: Mat4 = IDENTITY.slice();
   for (const n of chain) m = multiply(m, composeTrs(trsOfNode(n)));
   return m;
+}
+
+/* ─────────────────── 含动画的世界位置（相机锁定 / 轨迹共用） ─────────────────── */
+
+/** 节点 id → 节点。批量求值时先建一次，避免每帧重扫 nodes 数组 */
+export type NodeIndex = Map<string, DslNode>;
+
+export const indexNodes = (nodes: readonly DslNode[]): NodeIndex =>
+  new Map(nodes.map((n) => [n.id, n]));
+
+/**
+ * 节点在某一帧的**世界位置**（含关键帧动画，沿 parent 链乘到根）。
+ *
+ * 为什么必须是这一份：它同时被三处消费——
+ * 1. 成片渲染的相机求值（`dslCamera` 的 follow / lookAt）；
+ * 2. 编辑器视口的运动辅助线采样；
+ * 3. 锁定目标的实时位置。
+ * 三处各写一份，迟早出现"线在 A、镜头看 B"的漂移，而这种偏差在动态画面里
+ * 极难被指认（历史上 `worldOf` 就只在 dslCamera 里有一份，编辑器只能干瞪眼）。
+ *
+ * 和 `worldMatrixOf` 的区别：那个只看**基础 transform**（换父级用），这个走 `evalNode`
+ * 把关键帧一起算进去。别拿错。
+ */
+export function worldPointOf(
+  nodes: readonly DslNode[] | NodeIndex,
+  id: string,
+  frame: number,
+): [number, number, number] | null {
+  const byId = nodes instanceof Map ? nodes : indexNodes(nodes);
+  if (!byId.has(id)) return null;
+  const chain: DslNode[] = [];
+  let cur: DslNode | undefined = byId.get(id);
+  let guard = 0;
+  while (cur && guard++ <= byId.size) {
+    chain.unshift(cur);
+    cur = cur.parent ? byId.get(cur.parent) : undefined;
+  }
+  if (guard > byId.size + 1) return null; // 成环：dslIssues 会报，这里不死循环
+  let m: Mat4 = IDENTITY.slice();
+  for (const n of chain) {
+    const tr = evalNode(n, frame);
+    m = multiply(m, composeTrs({ position: tr.pos, rotation: tr.rot, scale: tr.scale }));
+  }
+  return [m[12], m[13], m[14]];
 }
 
 /**

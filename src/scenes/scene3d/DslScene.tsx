@@ -3,6 +3,8 @@ import * as THREE from "three";
 import type { Theme } from "../../../shared/schema";
 import type { DslNode, Scene3DDsl } from "../../../shared/scene3dDsl";
 import { ease, evalNode } from "../../../shared/scene3dAnim";
+import { indexNodes, worldPointOf } from "../../../shared/scene3dTransform";
+import { hasCurve, pathAt, type Vec3 } from "../../../shared/scene3dPath";
 import { glowTexture, hash01, metalBody, resolveColor, shade } from "./color";
 import { useDslTexture } from "./texture";
 
@@ -39,6 +41,14 @@ export type DslCamera = {
    */
   worldPos: [number, number, number];
   worldTarget: [number, number, number];
+  /**
+   * 当前帧锁定的目标节点 id（没有就是自由看向）。
+   *
+   * 编辑器靠它画"锁定虚线 / 目标靶环 / 面板状态"；成片渲染不读。
+   * 在这里给出而不是让编辑器另算一遍：锁定判定和求值是同一件事，
+   * 分开算必然出现"面板说锁着、画面却没锁"的分裂。
+   */
+  lockId?: string;
 };
 
 /**
@@ -53,6 +63,8 @@ export const dslCamera = (spec: Scene3DDsl, t: number, fps = 30): DslCamera => {
   const P = new THREE.Vector3(...(cam?.position ?? [0, 1.6, 6]));
   const T = new THREE.Vector3(...(cam?.target ?? [0, 0, 0]));
   let fov = cam?.fov ?? 42;
+  /** 当前帧生效的锁定目标（编辑器要画锁线/靶环，成片忽略） */
+  let lockId: string | undefined;
 
   /*
    * 相机关键帧（可选）：position / target / fov 随时间插值，实现推拉、摇移、飞向某颗行星。
@@ -66,46 +78,33 @@ export const dslCamera = (spec: Scene3DDsl, t: number, fps = 30): DslCamera => {
           to?: Record<string, number>;
           ease?: string;
           follow?: string;
+          lookAt?: string;
+          lookAtOffset?: [number, number, number];
+          curve?: { out?: number[]; in?: number[] };
         }>;
       }
     | undefined)?.anim;
   if (camAnims?.length) {
     const frame = t * fps;
     /*
-     * follow：把相机钉在某个节点上。
-     * 需要一个"节点在世界里的位置"求值器 —— 沿 parent 链把变换乘起来，思路和
-     * three 的 Object3D 一致（T * R * S，Euler 用默认 XYZ）。这样相机的相对偏移
-     * 不会因为行星公转而漂掉。
+     * follow / lookAt 都要"节点在世界里的位置"：沿 parent 链把**含关键帧**的变换乘起来。
+     * 用 shared 里那一份（worldPointOf），因为编辑器画轨迹、面板显示锁定状态读的是同一份；
+     * 各写一份就会出现"线在 A、镜头看 B"的漂移，动态画面里几乎指认不出来。
      */
-    const byId = new Map(spec.nodes.map((n) => [n.id, n]));
-    const worldOf = (id: string): THREE.Vector3 => {
-      const chain: DslNode[] = [];
-      let cur: DslNode | undefined = byId.get(id);
-      let guard = 0;
-      while (cur && guard++ < 16) {
-        chain.unshift(cur);
-        cur = cur.parent ? byId.get(cur.parent) : undefined;
-      }
-      const m = new THREE.Matrix4();
-      for (const n of chain) {
-        const tr = evalNode(n, frame);
-        m.multiply(
-          new THREE.Matrix4().compose(
-            new THREE.Vector3(...tr.pos),
-            new THREE.Quaternion().setFromEuler(
-              new THREE.Euler(
-                (tr.rot[0] * Math.PI) / 180,
-                (tr.rot[1] * Math.PI) / 180,
-                (tr.rot[2] * Math.PI) / 180,
-              ),
-            ),
-            new THREE.Vector3(...tr.scale),
-          ),
-        );
-      }
-      return new THREE.Vector3().setFromMatrixPosition(m);
+    const index = indexNodes(spec.nodes);
+    const worldOf = (id: string, atFrame: number): THREE.Vector3 | null => {
+      const p = worldPointOf(index, id, atFrame);
+      return p ? new THREE.Vector3(p[0], p[1], p[2]) : null;
     };
     let followId: string | undefined;
+    /**
+     * 上一段的锁定目标。退出锁定段要靠它把"退出那一刻的看向点"接上：
+     * 不接的话，锁定段最后一帧看的是行星，下一段第一帧却回到旧 target，镜头当场甩出去。
+     */
+    let prevLock: { id: string; off: [number, number, number] } | undefined;
+    /** 当前生效的锁定（循环里最后处理的段说了算 = hold 语义） */
+    let lock: { id: string; off: [number, number, number] } | undefined;
+
     for (const a of camAnims) {
       const [start, end] = a.at;
       /**
@@ -121,18 +120,80 @@ export const dslCamera = (spec: Scene3DDsl, t: number, fps = 30): DslCamera => {
         const from = typeof fr === "number" ? fr : cur;
         return from + (to - from) * p;
       };
-      P.set(lv("posX", P.x), lv("posY", P.y), lv("posZ", P.z));
+
+      /**
+       * 退出衔接：本段不锁定、上一段锁着、且**本段没有显式写 from.target** 时，
+       * 起点落在"本段起始帧那一刻上一段锁定的点"上。位置连续，之后正常插值飞走。
+       * 显式写了 from.target 就尊重作者意图，不插手。
+       */
+      const fromHasTarget =
+        typeof a.from?.targetX === "number" ||
+        typeof a.from?.targetY === "number" ||
+        typeof a.from?.targetZ === "number";
+      if (!a.lookAt && prevLock && !fromHasTarget) {
+        const at = worldOf(prevLock.id, start);
+        if (at) T.set(at.x + prevLock.off[0], at.y + prevLock.off[1], at.z + prevLock.off[2]);
+      }
+
+      /**
+       * 位置：这一段被拉弯了就走空间曲线，否则仍是逐通道线性插值（老数据逐位不变）。
+       * 相机走曲线=运镜绕弧线，这跟物体走曲线是同一份数学，所以共用 pathAt。
+       */
+      if (hasCurve(a.curve) && a.curve) {
+        const curve = a.curve;
+        const p0: Vec3 = [
+          typeof a.from?.posX === "number" ? a.from.posX : P.x,
+          typeof a.from?.posY === "number" ? a.from.posY : P.y,
+          typeof a.from?.posZ === "number" ? a.from.posZ : P.z,
+        ];
+        const p1: Vec3 = [
+          typeof a.to?.posX === "number" ? a.to.posX : p0[0],
+          typeof a.to?.posY === "number" ? a.to.posY : p0[1],
+          typeof a.to?.posZ === "number" ? a.to.posZ : p0[2],
+        ];
+        const q = pathAt(
+          p0,
+          p1,
+          [curve.out?.[0] ?? 0, curve.out?.[1] ?? 0, curve.out?.[2] ?? 0],
+          [curve.in?.[0] ?? 0, curve.in?.[1] ?? 0, curve.in?.[2] ?? 0],
+          p,
+        );
+        P.set(q[0], q[1], q[2]);
+      } else {
+        P.set(lv("posX", P.x), lv("posY", P.y), lv("posZ", P.z));
+      }
       T.set(lv("targetX", T.x), lv("targetY", T.y), lv("targetZ", T.z));
       fov = lv("fov", fov);
       // 每段都覆盖：system 段没有 follow，必须把上一段的跟随清掉，
       // 否则绝对坐标会被再叠加一次节点位置，镜头直接飞走
       followId = a.follow;
+      prevLock = a.lookAt
+        ? { id: a.lookAt, off: (a.lookAtOffset ?? [0, 0, 0]) as [number, number, number] }
+        : undefined;
+      lock = prevLock;
+    }
+
+    /**
+     * 锁定：target 每帧重算成节点当前世界位置 + 偏移。
+     * 放在循环外做，是因为它要覆盖掉本段里 target 通道的插值结果（targetX/Y/Z 在锁定段失效），
+     * 而 follow 的平移必须知道"T 是否已经是世界坐标"——两者顺序不能反。
+     */
+    if (lock) {
+      const at = worldOf(lock.id, frame);
+      if (at) T.set(at.x + lock.off[0], at.y + lock.off[1], at.z + lock.off[2]);
+      lockId = lock.id;
     }
     if (followId) {
       // 段内偏移是相对量，最后统一平移到节点当前的世界位置
-      const w = worldOf(followId);
-      P.add(w);
-      T.add(w);
+      const w = worldOf(followId, frame);
+      if (w) {
+        P.add(w);
+        /**
+         * 锁定时 T 已经是世界坐标，**绝不能再叠加一次 follow 偏移**：会双倍平移，
+         * 镜头直接飞出场景。没有锁定时 T 才是"相对跟随节点"的偏移。
+         */
+        if (!lock) T.add(w);
+      }
     }
   }
 
@@ -159,6 +220,7 @@ export const dslCamera = (spec: Scene3DDsl, t: number, fps = 30): DslCamera => {
     groupPos: [gp.x, gp.y, gp.z],
     worldPos: [P.x, P.y, P.z],
     worldTarget: [T.x, T.y, T.z],
+    lockId,
   };
 };
 
@@ -326,9 +388,13 @@ const NodeView: React.FC<{
   theme: Theme;
   /** 编辑器交互（成片渲染时全都不传，行为与之前一致） */
   onPick?: (id: string) => void;
+  /** 双击节点：编辑器据此把镜头推到它跟前（成片不传） */
+  onNodeDoubleClick?: (id: string) => void;
   selectedId?: string | null;
+  /** 相机当前锁定的节点：罩一层区别于选中色的线框（成片不传） */
+  lockedId?: string | null;
   onNodeObject?: (id: string, obj: THREE.Object3D | null) => void;
-}> = ({ node, childrenOf, frame, theme, onPick, selectedId, onNodeObject }) => {
+}> = ({ node, childrenOf, frame, theme, onPick, selectedId, lockedId, onNodeObject, onNodeDoubleClick }) => {
   const tr = evalNode(node, frame);
   // hook 必须无条件调用（不能挂在 if 上）：没配 map 时返回 null，材质走纯色
   const map = useDslTexture(node.material?.map);
@@ -369,6 +435,7 @@ const NodeView: React.FC<{
    */
   if (node.hidden) return null;
   const selected = selectedId === node.id;
+  const locked = lockedId === node.id;
   return (
     <group
       position={tr.pos}
@@ -382,6 +449,14 @@ const NodeView: React.FC<{
               // 不冒泡：点中内层卫星就不该同时选中外层枢轴
               e.stopPropagation();
               onPick!(node.id);
+            }
+          : undefined
+      }
+      onDoubleClick={
+        pickable && onNodeDoubleClick
+          ? (e) => {
+              e.stopPropagation();
+              onNodeDoubleClick(node.id);
             }
           : undefined
       }
@@ -402,6 +477,24 @@ const NodeView: React.FC<{
           {materialOf(node, theme, tr.opacity, map)}
         </mesh>
       )}
+      {/*
+        锁定高亮：相机当前正盯着它时罩一层 primary 线框。
+        和选中线框必须分色（accent），否则"我选的是它"和"镜头锁的是它"混成一个状态——
+        用户在调运镜时最需要一眼分清这两件事。
+      */}
+      {locked && !dashGeo ? (
+        <mesh scale={1.014}>
+          {geometryOf(node.geometry)}
+          <meshBasicMaterial
+            color={resolveColor("primary", theme)}
+            wireframe
+            transparent
+            opacity={0.34}
+            depthTest={false}
+            depthWrite={false}
+          />
+        </mesh>
+      ) : null}
       {/*
         选中高亮：同一份几何体罩一层线框（depthTest 关掉，被挡在后面也看得见）。
         用线框而不是发光/变色，是因为高亮不能改变材质判断 —— 用户在挑的是"哪个物体"。
@@ -435,7 +528,9 @@ const NodeView: React.FC<{
           theme={theme}
           onPick={onPick}
           selectedId={selectedId}
+          lockedId={lockedId}
           onNodeObject={onNodeObject}
+          onNodeDoubleClick={onNodeDoubleClick}
         />
       ))}
     </group>
@@ -580,9 +675,12 @@ export const DslScene: React.FC<{
   /** 背景交给 Scene3D 画（它要区分"自己当底"和"叠在内容上"两种情况） */
   /** 编辑器：点选节点 / 高亮节点 / 交出节点对象（挂操纵器）。成片路径都不传 */
   onPick?: (id: string) => void;
+  onNodeDoubleClick?: (id: string) => void;
   selectedId?: string | null;
+  /** 相机当前锁定的节点（编辑器画锁框用，成片不传） */
+  lockedId?: string | null;
   onNodeObject?: (id: string, obj: THREE.Object3D | null) => void;
-}> = ({ spec, frame, t, theme, camera, onPick, selectedId, onNodeObject }) => {
+}> = ({ spec, frame, t, theme, camera, onPick, selectedId, lockedId, onNodeObject, onNodeDoubleClick }) => {
   const { childrenOf, roots } = React.useMemo(() => {
     const map = new Map<string, DslNode[]>();
     for (const n of spec.nodes) {
@@ -613,7 +711,9 @@ export const DslScene: React.FC<{
             theme={theme}
             onPick={onPick}
             selectedId={selectedId}
+            lockedId={lockedId}
             onNodeObject={onNodeObject}
+            onNodeDoubleClick={onNodeDoubleClick}
           />
         ))}
       </group>
