@@ -17,6 +17,7 @@ import path from "node:path";
 import { z } from "zod";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { listSkills, readSkill } from "./skills.service";
+import { loadUploadFile } from "./upload-path";
 import { recallAll, remember, type MemoryKind } from "./memory.service";
 import { ROOT as PROJECT_ROOT } from "./root";
 import { BACKDROP_TYPES } from "../shared/sceneKinds";
@@ -4855,7 +4856,8 @@ const TOOLS: ToolDef[] = [
       "把本机文件（图片 / 音频 / 视频）上传，返回站内地址。\n" +
       "**两种归宿**：registerToLibrary:true（默认）→ 进「我的素材」库（assets/library/，跨工程复用、删工程不动它）；\n" +
       "false → 进**本工程素材目录**（assets/projects/<工程id>/，删工程时一起清掉）。\n" +
-      "只是这一支片子用一次的素材（生成的图 / 配音）建议 false；想反复用就入库存。",
+      "只是这一支片子用一次的素材（生成的图 / 配音）建议 false；想反复用就入库存。\n" +
+      "path 给本机绝对路径即可（反斜杠要写成 \\\\ 或用正斜杠）；文件不存在/是目录/空文件/超 40MB 会直接说清原因并给出同目录里名字相近的候选。",
     shape: {
       projectId: z.string().optional().describe("要操作的工程 id，不传 = 当前默认工程（list_projects 查）"),
       path: z.string().describe("本机绝对路径，如 D:/tmp/icon.png"),
@@ -4867,10 +4869,11 @@ const TOOLS: ToolDef[] = [
     },
     run: async (a) => {
       const p = await resolveProject(a.projectId);
-      const fs = await import("node:fs/promises");
-      const nodePath = await import("node:path");
-      const buf = await fs.readFile(a.path);
-      const base = nodePath.basename(a.path);
+      // 路径解析统一走 server/upload-path.ts：不存在 / 是目录 / 空文件 / 超大 / 没权限
+      // 各自给不同的下一步（以前直接 readFile，抛一句裸 ENOENT，agent 只能反复换写法重试）
+      const file = loadUploadFile(a.path);
+      const buf = file.buf;
+      const base = file.name;
       const toLibrary = a.registerToLibrary ?? true;
 
       await ensureServer();
