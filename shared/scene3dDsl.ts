@@ -513,6 +513,11 @@ export const dslSchema = z.object({
    */
   world: z
     .object({
+      /**
+       * 世界预设 id（`shared/worldPresets.ts`）。**op 层会把它展开成整组参数后删掉**，
+       * 不会留在 project.json 里；写在这里是为了让 `world:{preset:"…"}` 这种写法也能被接住。
+       */
+      preset: z.string().optional().describe("世界预设 id（list_world_skies 查），op 层展开后不落盘"),
       mode: z
         .enum(["auto", "gradient", "color", "image"])
         .default("auto")

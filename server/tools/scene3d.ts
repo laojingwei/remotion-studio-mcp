@@ -337,9 +337,13 @@ export const SCENE3D_TOOLS: ToolDef[] = [
       "auto 给「深蓝灰的夜 / 冷白天光」，gradient 自己给两个端点（低饱和）；image 用等距柱状全景图（**优先 .hdr**）当背景，" +
       "imageLighting:true 时同一张图同时当 IBL（照片里的太阳方位/天光/地面反光全变成真实光照，开了它就把 lights 调少）；" +
       "haze 是空气透视，星空场景给 0；" +
-      "地面：{y, color, roughness, metalness, size, shadow} —— 不写 y 自动落在节点最低点，" +
-      "有了地面才有接触阴影（真实感的一半）；" +
-      "粒子：{count:800, spread:[6,4,6], size:0.06, drift:0.3}；后期：{bloom:1.2, tonemap:\"aces|none\", exposure:1.25}。",
+      "地面：{y, color, roughness, metalness, size, shadow, mode:\"solid|shadow\", shadowOpacity} —— 不写 y 自动落在节点最低点，" +
+      "有了地面才有接触阴影（真实感的一半）；**用全景图当世界时 mode 必须给 \"shadow\"**，" +
+      "实体地面会把照片里真实的地和地平线盖成一块塑料布；" +
+      "粒子：{count:800, spread:[6,4,6], size:0.06, drift:0.3}；后期：{bloom:1.2, tonemap:\"aces|none\", exposure:1.25}。\n" +
+      "**换背景优先用 worldPreset**（list_world_skies 查 id）：一个 id 就把背景图 + 起始档位 + 补光 + 地面 + 后期一起配好，" +
+      "省得从零填十几个数。但它只是**起点不是保证值** —— 全景图的绝对亮度差几十倍（雪地反光、正午太阳、室内灯箱、银河），" +
+      "套完必须 preview_frames 抽一帧，看背景有没有过曝、主体还读不读得出来、影子方向和照片里的太阳对不对，再自己微调。",
     shape: {
       projectId: z.string().optional().describe("要操作的工程 id，不传 = 当前默认工程（list_projects 查）"),
       sceneId: z.string(),
@@ -356,6 +360,14 @@ export const SCENE3D_TOOLS: ToolDef[] = [
         .nullable()
         .optional()
         .describe("世界背景（渐变天空 + 雾 + 暗角）；null = 回到 auto"),
+      worldPreset: z
+        .string()
+        .optional()
+        .describe(
+          "世界预设 id（list_world_skies 查），如 spring-meadow / summer-noon / autumn-hills / winter-snow / " +
+            "dawn-field / misty-morning / overcast / golden-hour / city-night / milky-way / warehouse / apartment。" +
+            "整组套用：背景图 + imageIntensity/envIntensity 标定 + 补光 + 地面 + 后期；world 里的字段可再覆盖",
+        ),
       ground: z
         .record(z.any())
         .nullable()
@@ -370,14 +382,25 @@ export const SCENE3D_TOOLS: ToolDef[] = [
     },
     run: async (a) => {
       const ops: Record<string, unknown>[] = [];
-      if (a.camera !== undefined) ops.push({ op: "set_graph_camera", sceneId: a.sceneId, camera: a.camera });
+      // 世界预设放第一个：它会把 lights/ground/post 一起换掉，后面显式给的要能覆盖它
+      if (a.worldPreset !== undefined) {
+        ops.push({
+          op: "set_graph_world",
+          sceneId: a.sceneId,
+          preset: a.worldPreset,
+          ...(a.world !== undefined && a.world !== null ? { world: a.world } : {}),
+        });
+      } else if (a.world !== undefined) {
+        ops.push({ op: "set_graph_world", sceneId: a.sceneId, world: a.world });
+      }
       if (a.lights !== undefined) ops.push({ op: "set_graph_lights", sceneId: a.sceneId, lights: a.lights });
-      if (a.world !== undefined) ops.push({ op: "set_graph_world", sceneId: a.sceneId, world: a.world });
       if (a.ground !== undefined) ops.push({ op: "set_graph_ground", sceneId: a.sceneId, ground: a.ground });
       if (a.particles !== undefined) ops.push({ op: "set_graph_particles", sceneId: a.sceneId, particles: a.particles });
       if (a.post !== undefined) ops.push({ op: "set_graph_post", sceneId: a.sceneId, post: a.post });
       if (!ops.length) {
-        throw new Error("set_graph_scene 没有要改的东西：给 camera / lights / world / ground / particles / post 之一");
+        throw new Error(
+          "set_graph_scene 没有要改的东西：给 camera / lights / world / worldPreset / ground / particles / post 之一",
+        );
       }
       const p = await resolveProject(a.projectId);
       const res = await api<{ summary: string[] }>(`/api/projects/${p.id}/ops`, {
@@ -385,6 +408,92 @@ export const SCENE3D_TOOLS: ToolDef[] = [
         body: JSON.stringify({ actor: "agent", ops }),
       });
       return fmtSummary(res.summary);
+    },
+  },
+  {
+    name: "list_world_skies",
+    description:
+      "列出**世界全景图的配方表**，并**真的去扫本机目录**告诉你哪些文件在、哪些没有。\n" +
+      "配方按题材分类：春/夏/秋/冬、晨/午/黄昏、城市夜景、银河星空、工业厂房、居家室内；每个都带一组" +
+      "**起始档位**（背景 imageIntensity / 环境 envIntensity / 雾 / 暗角 / 补光 / 地面模式）。\n" +
+      "套用方式：set_graph_scene { sceneId, worldPreset: \"id\" }。\n" +
+      "⚠️ 两个必须知道的事：\n" +
+      "1）`public/assets/library/world/` **不进版本库**（换机器/换工作空间就是空的），所以别假设素材存在 —— " +
+      "这个工具会标出 ✅已在本机 / ⛔缺失，缺的给出下载命令（Poly Haven CC0，可商用）或让用户放进来。\n" +
+      "2）预设参数只是**起点不是保证值**：全景图亮度差几十倍（雪地反光、正午太阳、室内灯箱几千尼特、银河几乎全黑），" +
+      "套完必须 preview_frames 抽帧，按「背景过曝 / 主体可读 / 影子方向」三项自己微调。",
+    shape: {
+      category: z
+        .enum(["season", "time", "night", "indoor"])
+        .optional()
+        .describe("只列某一类：season=春夏秋冬 / time=晨午昏 / night=夜景与星空 / indoor=室内"),
+    },
+    run: async (a) => {
+      const { WORLD_SKIES, WORLD_DIR_REL, hdriFileName, hdriDownloadUrl } = await import("../../shared/worldPresets");
+      const fs = await import("node:fs");
+      const path = await import("node:path");
+      const { PUBLIC_DIR } = await import("../store");
+
+      // 真的去读目录：这张表只是「建议」，本地有没有是另一回事
+      const dir = path.join(PUBLIC_DIR, WORLD_DIR_REL);
+      let files: string[] = [];
+      try {
+        files = fs.readdirSync(dir).filter((f) => /\.(hdr|exr|jpe?g|png)$/i.test(f));
+      } catch {
+        files = [];
+      }
+      const have = new Set(files);
+      const known = new Set(WORLD_SKIES.map((s) => hdriFileName(s.asset)));
+      const extras = files.filter((f) => !known.has(f));
+
+      const groupLabel: Record<string, string> = {
+        season: "季节",
+        time: "晨 / 午 / 黄昏",
+        night: "夜与星空",
+        indoor: "室内",
+      };
+      const list = a.category ? WORLD_SKIES.filter((s) => s.category === a.category) : WORLD_SKIES;
+      if (!list.length) throw new Error(`没有这类预设：${a.category}`);
+
+      const present = WORLD_SKIES.filter((s) => have.has(hdriFileName(s.asset))).length;
+      const out: string[] = [
+        `世界全景配方（${list.length} / ${WORLD_SKIES.length} 组）· 本机目录 ${dir}`,
+        `本机已有 ${present} / ${WORLD_SKIES.length} 张推荐素材` +
+          (extras.length ? `，另有 ${extras.length} 张不在配方表里的图` : ""),
+        "",
+      ];
+
+      for (const cat of ["season", "time", "night", "indoor"] as const) {
+        const rows = list.filter((s) => s.category === cat);
+        if (!rows.length) continue;
+        out.push(`■ ${groupLabel[cat]}`);
+        for (const s of rows) {
+          const ok = have.has(hdriFileName(s.asset));
+          out.push(`· ${s.id}（${s.label}）  ${ok ? "✅ 已在本机" : "⛔ 缺失"}`);
+          out.push(`  ${s.note}`);
+          out.push(
+            `  起始档位：背景 ${s.world.imageIntensity}× / 环境 ${s.world.envIntensity}× / 雾 ${s.world.haze} / 暗角 ${s.world.vignette}` +
+              ` · 补光 ${s.lights?.length ?? 0} 盏 · 地面 ${s.ground?.mode ?? "shadow"}`,
+          );
+          out.push(`  文件：${WORLD_DIR_REL}/${hdriFileName(s.asset)}`);
+          if (!ok) out.push(`  下载：${hdriDownloadUrl(s.asset)}`);
+        }
+        out.push("");
+      }
+
+      if (extras.length) {
+        out.push("■ 目录里的其它全景图（不在配方表里，参数要自己给定）");
+        for (const f of extras) out.push(`· ${WORLD_DIR_REL}/${f}`);
+        out.push("");
+      }
+
+      out.push('套用：set_graph_scene { sceneId, worldPreset: "golden-hour" }');
+      out.push(
+        "⛔ 缺文件时**不要硬套**：背景会静默退回渐变天空。要么按上面的地址下载到 " +
+          `${WORLD_DIR_REL}/（.hdr 约 5–7MB，2048×1024），要么让用户提供，要么先用渐变（world.mode=gradient）顶上。`,
+      );
+      out.push("换完抽一帧：背景有没有过曝 / 主体还读不读得出来 / 影子方向和照片里的太阳对不对。");
+      return out.join("\n");
     },
   },
 ];

@@ -234,6 +234,81 @@ test("全景图当照明时，不再提示「抬 ambient 到 1.2–2.0」", () =
   assert.equal(dslWarnings(parse(off)).some((w) => w.includes("ambient 抬到")), true);
 });
 
+/* ── ⑥ 世界预设（2026-11-04 深夜） ── */
+test("worldPreset：整组套用（背景图 + 档位 + 补光 + 地面 + 后期），preset 不落盘", () => {
+  const seeded = applyOps(createSeedProject("t-sky"), [
+    { op: "add_scene", type: "scene3d", props: { graph: { nodes: [{ id: "a", geometry: { type: "box" } }] } } },
+  ]);
+  const sceneId = seeded.createdSceneIds[0];
+  const proj = seeded.project;
+
+  const res = applyOps(proj, [{ op: "set_graph_world", sceneId, preset: "city-night" }]);
+  const g = res.project.scenes.find((s) => s.id === sceneId)!.props.graph as Record<string, any>;
+
+  assert.equal(g.world.mode, "image");
+  assert.ok(g.world.image.endsWith("/modern_buildings_night_2k.hdr"), g.world.image);
+  assert.equal(g.world.imageLighting, true);
+  assert.equal(g.world.envIntensity, 0.22);
+  assert.equal(g.world.imageIntensity, 0.36);
+  // 灯跟着一起换（夜景那组是高强度暖主光）
+  assert.ok(Array.isArray(g.lights) && g.lights.length >= 2, JSON.stringify(g.lights));
+  assert.ok(g.lights.some((l: any) => l.intensity >= 3), "夜景主光应该是高强度");
+  // 全景图必须配 shadow 地面
+  assert.equal(g.ground.mode, "shadow");
+  assert.ok(g.post && typeof g.post.bloom === "number", JSON.stringify(g.post));
+  // preset 只是入参，不该被写进工程
+  assert.equal(g.world.preset, undefined);
+  assert.ok(res.summary.some((s) => s.includes("city-night")));
+  assert.ok(res.summary.some((s) => s.includes("起点不是保证值")));
+});
+
+test("worldPreset：world 里的字段覆盖预设，其余保持预设值", () => {
+  const seeded = applyOps(createSeedProject("t-sky2"), [
+    { op: "add_scene", type: "scene3d", props: { graph: { nodes: [{ id: "a" }] } } },
+  ]);
+  const sceneId = seeded.createdSceneIds[0];
+  const res = applyOps(seeded.project, [
+    { op: "set_graph_world", sceneId, preset: "milky-way", world: { envIntensity: 2.2, imageRotation: 40 } },
+  ]);
+  const g = res.project.scenes.find((s) => s.id === sceneId)!.props.graph as Record<string, any>;
+  assert.equal(g.world.envIntensity, 2.2);
+  assert.equal(g.world.imageRotation, 40);
+  // 没覆盖的保持预设（银河 haze 必须是 0，否则银河被雾洗掉）
+  assert.equal(g.world.haze, 0);
+  assert.ok(res.summary.some((s) => s.includes("envIntensity")), "回执要说明哪些字段被覆盖");
+});
+
+test("worldPreset：写进 world.preset 也能识别；未知 id 报错并列出可选", () => {
+  const seeded = applyOps(createSeedProject("t-sky3"), [
+    { op: "add_scene", type: "scene3d", props: { graph: { nodes: [{ id: "a" }] } } },
+  ]);
+  const sceneId = seeded.createdSceneIds[0];
+  const ok = applyOps(seeded.project, [
+    { op: "set_graph_world", sceneId, world: { preset: "winter-snow" } },
+  ]);
+  const g = ok.project.scenes.find((s) => s.id === sceneId)!.props.graph as Record<string, any>;
+  assert.ok(g.world.image.endsWith("/snowy_hillside_02_2k.hdr"));
+  assert.equal(g.world.preset, undefined);
+
+  assert.throws(
+    () => applyOps(ok.project, [{ op: "set_graph_world", sceneId, preset: "no-such-sky" }]),
+    /没有这个世界预设/,
+  );
+});
+
+test("findWorldSky 认 id / Poly Haven 资产名 / 文件名", async () => {
+  const { findWorldSky, WORLD_SKIES } = await import("../shared/worldPresets");
+  assert.equal(findWorldSky("golden-hour")!.id, "golden-hour");
+  assert.equal(findWorldSky("belfast_sunset")!.id, "golden-hour");
+  assert.equal(findWorldSky("belfast_sunset_2k.hdr")!.id, "golden-hour");
+  assert.equal(findWorldSky("nope"), undefined);
+  // 每个预设都必须写出 image 路径与档位，别留空给运行时猜
+  for (const s of WORLD_SKIES) {
+    assert.ok(s.world.envIntensity > 0 && s.world.imageIntensity > 0, s.id);
+    assert.ok(s.note.length > 4, s.id);
+  }
+});
+
 console.log("");
 if (failures.length) {
   console.log(`✗ ${failures.length} 项失败：`);

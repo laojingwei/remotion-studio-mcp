@@ -200,6 +200,7 @@
 
 | 字段 | 说明 |
 |---|---|
+| `preset` | 世界预设 id（`list_world_skies` 查）。**op 层展开成整组参数后不落盘**，见下面「世界预设」 |
 | `mode` | `auto`（默认，按主题明暗挑中性色）/ `gradient`（自己给 `top`/`bottom`/`glow`）/ `color`（纯色）/ `image`（全景图） |
 | `image` | 等距柱状全景图（2:1），站内 `/assets/…` 或 http。**优先 `.hdr`**：JPG 只有 0–1 的亮度，当照明时没有太阳那种高动态 |
 | `imageLighting` | 同一张图同时当 IBL，默认 true。**这是"像真的"的最大一步**：太阳方位、天光颜色、地面反光全来自照片 |
@@ -213,16 +214,47 @@
 `auto` 的暗色版本是「深蓝灰的夜」而不是黑：天顶 `#0A0D14` → 地平线 `#2B3342`。
 想要别的气氛就写 `gradient`，两个端点都建议**低饱和**（彩色天空一眼假）。
 
+#### 世界预设（换背景的首选路径）
+
+```json
+set_graph_scene { "sceneId": "scene_x", "worldPreset": "golden-hour" }
+```
+
+一次把**背景图 + 起始档位 + 补光 + 地面 + 后期**都配好，省得从零填十几个数。
+同时给 `world` 时，里面的字段覆盖预设（比如 `world: { envIntensity: 0.9 }`）。
+
+`list_world_skies` 会列出全部 id 和题材，并**标出本机有没有那张图**（✅ / ⛔ + 下载地址）。
+当前 12 组，覆盖：春（绿野）、夏（正午蓝天）、秋（枯黄丘陵）、冬（雪坡）、晨（日出 / 薄雾）、
+阴天（万能柔光）、黄昏（草原夕照）、夜（城市灯火 / 银河）、室内（工业厂房 / 居家大窗）。
+
+> 预设里的数字是**这类图该往哪个方向压**，不是保证值。雪地要压背景、夜景要压环境、
+> 银河要提环境并关雾 —— 但每张图的实际亮度只有渲染出来才知道。套完必须抽帧看。
+
 **用全景图当世界**（最省事也最真）：
 
 ```json
 "world": { "mode": "image", "image": "/assets/library/world/belfast_sunset_2k.hdr", "imageLighting": true, "imageRotation": 0, "haze": 0.15 }
 ```
 
-- 素材来自 Poly Haven（CC0，可商用），本项目已有两张：
-  - `/assets/library/world/belfast_sunset_2k.hdr` —— 黄昏草原，暖调逆光
-  - `/assets/library/world/modern_buildings_night_2k.hdr` —— 城市夜景（玻璃中庭 + 远景楼宇灯火）
-- 开了 `imageLighting` 就把 `lights` 调少：照片本身已经是主光。留一盏 ambient（1.2–1.8）补暗部 + 一两盏 directional 补轮廓
+- **素材不在仓库里，别假设它存在。** `public/` 整块不进版本库（可能是软链到外部工作空间），
+  换机器、换工作空间、清过缓存之后这个目录就是空的。用 `list_world_skies` 看本机到底有哪些
+  （它会真的去扫目录，✅ 有 / ⛔ 没有，缺的给下载地址）。缺失的表现是**背景静默退回渐变天空**，
+  不报错——所以别跳过这一步
+- 素材来源：Poly Haven（CC0，可商用，免署名）。挑 `.hdr`，别用 JPG（JPG 最亮只有 1，
+  当照明没有太阳那种高动态，金属会发闷）。一张 2k 的（2048×1024）约 5–7MB：
+
+```bash
+# 想放哪张就换资产名。资产名在 polyhaven.com 的 URL 里（t=hdris 分类）
+curl -L -o "public/assets/library/world/<资产名>_2k.hdr" \
+  "https://dl.polyhaven.org/file/ph-assets/HDRIs/hdr/2k/<资产名>_2k.hdr"
+```
+
+  没有网络权限时，让用户帮忙下载放进 `public/assets/library/world/`，或先 `upload_asset` 再引用
+- **最省事的路径是预设**：`set_graph_scene { sceneId, worldPreset: "golden-hour" }`，
+  一次把背景图 + 起始档位 + 补光 + 地面 + 后期都配好（`list_world_skies` 列全部 id）。
+  但**预设只是起点**：全景图亮度差几十倍，套完必须抽帧，看背景有没有过曝、主体还读不读得出来、
+  影子方向和照片里的太阳对不对，再自己调
+- 开了 `imageLighting` 就把 `lights` 调少：照片本身已经是主光。留一盏 ambient 补暗部 + 一两盏 directional 补轮廓
 - **城市夜景/室内全景要压环境强度**：`envIntensity: 0.2–0.4`、`imageIntensity: 0.3–0.4`、`bloom: 0.12–0.2`。
   不压的话整张画面直接白掉（玻璃幕墙在 HDR 里是几千尼特）
 - **`imageRotation` 同时转背景和 IBL**：转背景不转光，会出现"窗在右、光从左边来"。夜景里一眼能看出来

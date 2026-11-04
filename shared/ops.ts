@@ -24,6 +24,7 @@ import {
 import { describeSceneBox, normalizeSceneBox, type SceneBox } from "./sceneBox";
 import { droppedProps, getMeta, MIN_SCENE_FRAMES, normalizeProps } from "./sceneMetas";
 import { dslIssues, dslSchema, dslWarnings, nodeSchema, type DslNode, type Scene3DDsl } from "./scene3dDsl";
+import { WORLD_SKIES, findWorldSky, hdriPath } from "./worldPresets";
 import { hasAnimatedChain, reparentLocalTrs, type Trs } from "./scene3dTransform";
 import { effectLabel, effectSummaryText } from "./effects";
 import { TRANSITION_TYPES } from "./transitions";
@@ -248,7 +249,18 @@ export type Op =
   /** 后期（辉光）。null = 回到 look 的默认值 */
   | { op: "set_graph_post"; sceneId: string; post: Record<string, unknown> | null }
   /** 世界背景（渐变天空 + 空气透视）。null = 回到 auto */
-  | { op: "set_graph_world"; sceneId: string; world: Record<string, unknown> | null }
+  | {
+      op: "set_graph_world";
+      sceneId: string;
+      /** null = 回到 auto */
+      world?: Record<string, unknown> | null;
+      /**
+       * 世界预设 id（`list_world_skies` 查，如 `golden-hour`）。
+       * 给了就**整组套用**：world + lights + ground + post 一起换，`world` 里的字段再覆盖预设。
+       * 存在的意义是亮度标定：每张全景图的绝对亮度差几十倍，让 agent 自己猜 envIntensity 必翻车。
+       */
+      preset?: string;
+    }
   /** 自动地面（接投影）。null = 撤掉地面 */
   | { op: "set_graph_ground"; sceneId: string; ground: Record<string, unknown> | null }
   | {
@@ -517,7 +529,7 @@ export const OP_FIELDS: Record<string, readonly string[]> = {
   set_graph_lights: ["op", "sceneId", "lights"],
   set_graph_particles: ["op", "sceneId", "particles"],
   set_graph_post: ["op", "sceneId", "post"],
-  set_graph_world: ["op", "sceneId", "world"],
+  set_graph_world: ["op", "sceneId", "world", "preset"],
   set_graph_ground: ["op", "sceneId", "ground"],
   reorder_scenes: ["op", "sceneIds", "reflow"],
   compact_main_track: ["op"],
@@ -2061,13 +2073,75 @@ export function applyOps(project: Project, ops: Op[]): OpResult {
       case "set_graph_world": {
         const scene = mustFind(next, op.sceneId);
         const graph = graphOf(scene, "set_graph_world");
+
+        /**
+         * 世界预设：整组套用（world + lights + ground + post）。
+         *
+         * 之所以要一起换而不是只换背景图：**灯和地面是配着那张图调的**。
+         * 城市夜景的灯是 4.0 的暖主光 + 1.9 的冷环境，换成雪地还照抄就是一片惨白；
+         * 全景图的世界一定要 `ground.mode=shadow`，不然实体地面会盖掉照片里的地。
+         */
+        // 两种写法都收：`preset` 在 op 上，或塞在 `world.preset` 里（agent 很容易这么写）
+        const presetId =
+          op.preset ?? (isPlainObject(op.world) && typeof op.world.preset === "string" ? op.world.preset : undefined);
+        if (presetId) {
+          const sky = findWorldSky(presetId);
+          if (!sky) {
+            throw new Error(
+              `set_graph_world：没有这个世界预设「${presetId}」。` +
+                `可选：${WORLD_SKIES.map((s) => s.id).join("、")}（详情用 list_world_skies）`,
+            );
+          }
+          const override = isPlainObject(op.world) ? { ...op.world } : {};
+          delete override.preset;
+          const merged = deepMerge(
+            {
+              mode: "image",
+              image: hdriPath(sky.asset),
+              imageLighting: true,
+              imageRotation: sky.world.imageRotation ?? 0,
+              imageIntensity: sky.world.imageIntensity,
+              envIntensity: sky.world.envIntensity,
+              haze: sky.world.haze,
+              vignette: sky.world.vignette,
+            },
+            override,
+          );
+          graph.world = merged as unknown as NonNullable<Scene3DDsl["world"]>;
+          const savedSky = saveGraph(scene, graph, "set_graph_world", summary).world!;
+          if (sky.lights?.length) graph.lights = sky.lights as unknown as NonNullable<Scene3DDsl["lights"]>;
+          else delete graph.lights;
+          if (sky.ground) {
+            graph.ground = (graph.ground ?? {}) as NonNullable<Scene3DDsl["ground"]>;
+            graph.ground.mode = sky.ground.mode;
+            if (sky.ground.shadowOpacity !== undefined) graph.ground.shadowOpacity = sky.ground.shadowOpacity;
+          }
+          if (sky.post) graph.post = { ...(graph.post ?? {}), ...sky.post } as NonNullable<Scene3DDsl["post"]>;
+          saveGraph(scene, graph, "set_graph_world", summary);
+          summary.push(
+            `「${scene.name}」世界套用预设 ${sky.id}（${sky.label}）：${sky.note}。` +
+              `起始档位 背景 ${savedSky.imageIntensity}× / 环境 ${savedSky.envIntensity}× / 雾 ${savedSky.haze} / 暗角 ${savedSky.vignette}` +
+              (sky.lights?.length ? `，补光 ${sky.lights.length} 盏` : "，不额外打灯") +
+              `，地面 ${sky.ground?.mode ?? "shadow"}` +
+              (override && Object.keys(override).length
+                ? `（你另外指定的 ${Object.keys(override).join("、")} 已覆盖预设）`
+                : ""),
+          );
+          summary.push(
+            `⚠️ 这是**起点不是保证值**：抽一帧看三件事 —— 背景有没有过曝、主体还读不读得出来、影子和照片里的太阳方向对不对。` +
+              `不对就调 imageIntensity（压背景）和 envIntensity（压环境照明），别急着加灯。` +
+              `素材不在本机时背景会静默退回渐变天空（用 list_world_skies 确认文件在不在）。`,
+          );
+          break;
+        }
+
         if (op.world === null) {
           delete graph.world;
           saveGraph(scene, graph, "set_graph_world", summary);
           summary.push(`「${scene.name}」世界背景回到 auto（按主题明暗挑中性色）`);
           break;
         }
-        if (!isPlainObject(op.world)) throw new Error("set_graph_world：world 必须是对象或 null");
+        if (!isPlainObject(op.world)) throw new Error("set_graph_world：world 必须是对象或 null，或给 preset");
         const world = deepMerge((graph.world ?? {}) as Record<string, unknown>, op.world) as unknown as NonNullable<
           Scene3DDsl["world"]
         >;
