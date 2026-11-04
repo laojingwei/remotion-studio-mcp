@@ -17,6 +17,7 @@ import path from "node:path";
 import { z } from "zod";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { listSkills, readSkill } from "./skills.service";
+import { formatProjectList } from "./projects-text";
 import { loadUploadFile } from "./upload-path";
 import { recallAll, remember, type MemoryKind } from "./memory.service";
 import { ROOT as PROJECT_ROOT } from "./root";
@@ -830,68 +831,34 @@ const TOOLS: ToolDef[] = [
         projects: { id: string; name: string; rev: number; scenes: number; archivedAt?: string }[];
       }>("/api/projects");
       if (!projects.length) return "还没有任何工程。用 create_project 新建。";
-      const nl = String.fromCharCode(10);
-      const live = projects.filter((p) => !p.archivedAt);
-      const archived = projects.filter((p) => p.archivedAt);
-      const shown = a.includeArchived ? projects : live;
-      if (!shown.length) {
-        // 全归档了：不能说「没有工程」——文件都在，只是都收进抽屉了
-        return (
-          `在用的工程是 0 个，${archived.length} 个都已归档（文件都还在）：${nl}` +
-          archived.map((p) => `  ${p.name}（id=${p.id}，${p.scenes} 场景）`).join(nl) +
-          `${nl}恢复某个：archive_project({projectId:"…", archived:false})；要直接干活也可以显式传它的 projectId。`
-        );
-      }
       // 指针为空 **或指向已删工程** 都要自愈并写回，否则这里永远标不出 ★、
       // get_project 每次读都静默换一个工程（N-04 残留：旧写法只判断了「指针为空」）。
       // 自愈只在「在用」的里面挑：归档的工程不该被自动选中。
+      const live = projects.filter((p) => !p.archivedAt);
       if (!projects.some((p) => p.id === lastProjectId) && live[0]) {
         setCurrentProject(live[0].id);
       }
       // 对账：out/ 里有、data/ 里没有的工程 = 多半是另一个实例/另一份数据目录。
       // 不说的话，agent 会以为工程被删了，或者对着错误的工程继续改
-      let orphanNote = "";
-      let dataNote = "";
+      let orphanIds: string[] | undefined;
+      let dataDir: string | undefined;
       try {
-        const { ids, dataDir } = await api<{ ids: string[]; dataDir: string }>("/api/orphans");
-        // 总是显示数据目录：同一台机器上可能有两套 data/ 目录（不同 cwd 启动的实例各一份），
-        // 不显示绝对路径的话，「工程怎么不见了」根本无从判断——只能猜。
-        dataNote = `${nl}数据目录：${dataDir}${nl}（本次连的是 ${BASE}；同一台机器上如果还有别的实例/别的 cwd，工程是按各自数据目录分开存的）`;
-        if (ids.length) {
-          orphanNote =
-            `${nl}⚠ 对账提醒：out/ 里有 ${ids.length} 个工程不在当前数据目录（${ids.slice(0, 5).join("、")}${ids.length > 5 ? "…" : ""}）。` +
-            `${nl}  当前数据目录：${dataDir}。这些工程要么是别的实例/别的数据目录写的，要么已被删只剩渲染产物。` +
-            `${nl}  别当成「工程被删了」：先确认 SERVER_URL 指向的是不是同一个实例，再动手。`;
-        }
+        const r = await api<{ ids: string[]; dataDir: string }>("/api/orphans");
+        orphanIds = r.ids;
+        dataDir = r.dataDir;
       } catch {
         /* 对账拿不到不影响列表本身 */
       }
-      const archivedNote = archived.length
-        ? `${nl}${nl}已归档 ${archived.length} 个（不在上面，文件都还在）：${archived
-            .slice(0, 6)
-            .map((p) => p.name)
-            .join("、")}${archived.length > 6 ? "…" : ""}` +
-          `${nl}  它们只是从默认列表收起来了：显式传 projectId 照样能改；想放回列表 → archive_project({projectId, archived:false})；` +
-          `要看全 → list_projects(includeArchived:true)`
-        : "";
-      const currentHidden = live.every((p) => p.id !== lastProjectId) && lastProjectId
-        ? `${nl}⚠ 当前默认工程 ${lastProjectId} 已归档：不在上面的在用列表里，但照样是默认工程`
-        : "";
-      return (
-        `共 ${live.length} 个在用工程（★ = 当前默认工程）：` +
-        nl +
-        shown
-          .map(
-            (p) =>
-              `${p.id === lastProjectId ? "★" : " "} ${p.name}（id=${p.id}，${p.scenes} 场景，rev=${p.rev}）` +
-              (p.archivedAt ? ` · 已归档 ${p.archivedAt.slice(0, 10)}` : ""),
-          )
-          .join(nl) +
-        currentHidden +
-        archivedNote +
-        dataNote +
-        orphanNote
-      );
+      // 文案交给 projects-text.ts：那段有三套数字要对上（行数 / 头部总数 / 末尾归档数），
+      // 混在 run 里只能靠肉眼对，出过错（includeArchived 时头部少算）
+      return formatProjectList({
+        projects,
+        currentId: lastProjectId ?? undefined,
+        includeArchived: a.includeArchived,
+        dataDir,
+        serverUrl: BASE,
+        orphanIds,
+      });
     },
   },
   {
