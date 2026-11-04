@@ -120,6 +120,11 @@ import {
   probedDurationFrames,
 } from "./tools/_shared";
 import { SCENE3D_TOOLS } from "./tools/scene3d";
+import { PROJECT_TOOLS } from "./tools/project";
+import { BRIEF_TOOLS } from "./tools/brief";
+import { SCRIPT_TOOLS } from "./tools/script";
+import { STORYBOARD_TOOLS } from "./tools/storyboard";
+import { CLEANUP_TOOLS } from "./tools/cleanup";
 
 // 老调用方（server/index.ts）从这里引，保持导出面不变
 export { validateToolArgs } from "./tools/_shared";
@@ -5435,6 +5440,17 @@ const TOOLS: ToolDef[] = [
   },
   /* ── scene3d 场景图：逐节点读写（人和编辑器面板改的就是这批 op） ── */
   ...SCENE3D_TOOLS,
+
+  /*
+   * 下面五组原来是塞在 scene3d.ts 里的（那个文件一度混着工程/稿件/分镜类工具）。
+   * 现在按主题分文件，但仍**按原位、按原顺序**依次展开：TOOLS 的顺序是 tool_search
+   * 同分时的排序依据，也是 `tool_search(all:true)` 的目录顺序，别随意调换。
+   */
+  ...PROJECT_TOOLS,
+  ...BRIEF_TOOLS,
+  ...SCRIPT_TOOLS,
+  ...STORYBOARD_TOOLS,
+  ...CLEANUP_TOOLS,
 
   /* ───────────── 工具门面：按需发现与执行（其余工具经这两层调用） ───────────── */
   {
