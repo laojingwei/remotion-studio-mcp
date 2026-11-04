@@ -117,6 +117,17 @@ export type AssetCleanupResult = {
   dryRun: boolean;
   /** 顺手收掉的空目录（相对 assets/） */
   removedDirs: string[];
+  /**
+   * 具体文件名（相对 assets/）。
+   *
+   * 只有数字的话，用户问「删的是哪些」agent 答不出来，也就不敢按 dryRun:false。
+   * dryRun 时这里就是**候选清单**。
+   */
+  files: string[];
+  /** 因为「在 library/ 但没登记条目」而被跳过的文件数（默认不删，见函数内注释） */
+  skippedLibrary: number;
+  /** 因为 scope="root" 而跳过的子目录文件数（projects/、library/ 等） */
+  skippedSubdir: number;
 };
 
 /** 删掉目录树里的空目录（自底向上；assets 根本身不删） */
@@ -140,10 +151,22 @@ function pruneEmptyDirs(dir: string, removed: string[] = []): string[] {
 }
 
 /** 清理 public/assets 里所有没被引用的文件（含分层目录；已删工程的目录一并收掉） */
-export function cleanupUnusedAssets(opts: { dryRun?: boolean; onlyRels?: string[] } = {}): AssetCleanupResult {
+export function cleanupUnusedAssets(
+  opts: { dryRun?: boolean; onlyRels?: string[]; includeLibrary?: boolean; scope?: "root" | "all" } = {},
+): AssetCleanupResult {
   const dryRun = !!opts.dryRun;
+  const scope = opts.scope ?? "root";
   if (!fs.existsSync(ASSET_DIR)) {
-    return { scanned: 0, removed: 0, freedBytes: 0, dryRun, removedDirs: [] };
+    return {
+      scanned: 0,
+      removed: 0,
+      freedBytes: 0,
+      dryRun,
+      removedDirs: [],
+      files: [],
+      skippedLibrary: 0,
+      skippedSubdir: 0,
+    };
   }
 
   const used = referencedAssetFiles();
@@ -152,11 +175,31 @@ export function cleanupUnusedAssets(opts: { dryRun?: boolean; onlyRels?: string[
     : walkAssetFiles();
   let removed = 0;
   let freedBytes = 0;
+  let skippedLibrary = 0;
+  let skippedSubdir = 0;
+  const gone: string[] = [];
 
   for (const full of files) {
     const rel = relOf(full);
     // 隐藏文件（.gitkeep / 系统缩略图）一律不碰
     if (rel.split("/").some((seg) => seg.startsWith("."))) continue;
+    /**
+     * 默认只清 assets/ 根目录的散落文件（scope="root"）。
+     *
+     * 子目录（projects/<id>/、library/）里的文件不能按「project.json 里有没有这个字符串」判死：
+     * demo3d 这类示例工程的行星贴图是程序按名字加载的，json 里根本没有路径 ——
+     * 一次全量清理会把示例工程的图删光（实测扫出 62 个，包括 demo3d 全套贴图）。
+     * onlyRels 是显式点名清单（调用方明确知道要删哪个），不走 scope 过滤。
+     */
+    const scanning = !(opts.onlyRels?.length ?? 0);
+    if (scanning && scope === "root" && rel.includes("/")) {
+      skippedSubdir++;
+      continue;
+    }
+    if (scanning && !opts.includeLibrary && rel.startsWith("library/")) {
+      skippedLibrary++;
+      continue;
+    }
     if (used.has(rel)) continue;
     let size = 0;
     try {
@@ -172,11 +215,14 @@ export function cleanupUnusedAssets(opts: { dryRun?: boolean; onlyRels?: string[
       }
     }
     removed++;
+    gone.push(rel);
     freedBytes += size;
   }
 
-  const removedDirs = dryRun ? [] : pruneEmptyDirs(ASSET_DIR);
-  return { scanned: files.length, removed, freedBytes, dryRun, removedDirs };
+  // root 扫描模式不动子目录，也就不收它们的空目录；显式点名（onlyRels）或全量模式照收
+  const doPrune = !dryRun && (scope === "all" || !!opts.onlyRels?.length);
+  const removedDirs = doPrune ? pruneEmptyDirs(ASSET_DIR) : [];
+  return { scanned: files.length, removed, freedBytes, dryRun, removedDirs, files: gone, skippedLibrary, skippedSubdir };
 }
 
 /**
@@ -437,7 +483,7 @@ export function organizeAssets(opts: { dryRun?: boolean; onlyRels?: string[] } =
       to = `${LIBRARY_REL}/${fileName}`;
       reason = `只被素材库引用（${lib.map((x) => x.name).join("、")}）`;
     } else {
-      result.skipped.push({ rel: fileName, reason: "没有任何工程/素材库引用（留给 cleanupUnusedAssets）" });
+      result.skipped.push({ rel: fileName, reason: "没有任何工程/素材库引用（用 cleanup_unused_assets 清）" });
       continue;
     }
 

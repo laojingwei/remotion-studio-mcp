@@ -962,6 +962,40 @@ export function briefProgress(brief: Brief | null): { done: number[]; next: numb
 }
 
 /**
+ * confirm_brief 会拒在哪：9 步里还缺必填的步骤 + 每步缺哪些字段。
+ *
+ * 抽出来只有一目的：**回执和闸口必须用同一个判定**。
+ * 以前 save_brief 用 briefCoverage 说「契约完整 ✅」，confirm_brief 却按 9 步必填拒人，
+ * agent 拿着「完整」的回执去确认，白撞一轮才知道还缺 8 项。
+ */
+export function confirmGaps(
+  brief: Brief | null,
+): { stepNo: number; title: string; miss: { key: string; label: string }[] }[] {
+  return CORE_STEPS.map((s) => ({ stepNo: s.no, title: s.title, miss: stepMissingDetail(s.no, brief) })).filter(
+    (g) => g.miss.length,
+  );
+}
+
+/** 缺口块（save_brief 回执 / intake 总览共用一套措辞） */
+export function confirmGapText(brief: Brief | null, NL = "\n"): string {
+  const gaps = confirmGaps(brief);
+  if (!gaps.length) return "";
+  const total = gaps.reduce((n, g) => n + g.miss.length, 0);
+  return (
+    `confirm_brief 还差 ${gaps.length} 步 / ${total} 项必填（现在问确认会被拒）：` +
+    NL +
+    gaps
+      .map(
+        (g) =>
+          `  第 ${g.stepNo} 步「${g.title}」：${g.miss.map((m) => `${m.key}（${m.label}）`).join("、")}`,
+      )
+      .join(NL) +
+    NL +
+    `一次补齐再确认——反复一轮补一项只会一轮轮往下推。`
+  );
+}
+
+/**
  * 核对记录够不够：每个 assumed 字段都要有一条原话，且原话不能太短。
  *
  * 抽成纯函数是为了能单测 —— 这段逻辑决定了「一个布尔能不能糊过去」，
@@ -1038,16 +1072,12 @@ export function confirmBrief(
   if (!progress.finished) {
     // 一次把所有缺口列完：以前只报「（8/9），下一步第 5 步」，
     // agent 只能补一步试一次，于是出现 6/9 → 7/9 → 8/9 三次往返。
-    const gaps = CORE_STEPS.map((s) => ({
-      no: s.no,
-      title: s.title,
-      miss: stepMissingDetail(s.no, b),
-    })).filter((g) => g.miss.length);
+    const gaps = confirmGaps(b);
     const total = gaps.reduce((n, g) => n + g.miss.length, 0);
     const body = gaps
       .map(
         (g) =>
-          `  第 ${g.no} 步「${g.title}」缺 ${g.miss.length} 项：\n` +
+          `  第 ${g.stepNo} 步「${g.title}」缺 ${g.miss.length} 项：\n` +
           g.miss
             .map(
               (m) =>
@@ -1089,12 +1119,18 @@ export function confirmBrief(
     }
     const check = checkAssumptionQuotes(assumed, provided);
     if (!check.ok) {
+      const near = check.missing.length
+        ? `\n提示：assumptions[].field 要**逐字复制** assumed 里的那条原文（不是字段名、不是你自己概括的短语）。` +
+          `可直接照抄：\n` +
+          check.missing.map((f) => `  field: ${JSON.stringify(f)}`).join("\n")
+        : "";
       throw new Error(
-        (check.missing.length ? `这 ${check.missing.length} 个字段还没有用户原话：${check.missing.join("、")}\n` : "") +
+        (check.missing.length ? `这 ${check.missing.length} 段 assumed 还没有对应原话：${check.missing.join("、")}\n` : "") +
           (check.tooShort.length
             ? `这几条原话太短，无法判断用户到底同意了什么：${check.tooShort.join("、")}\n`
             : "") +
-          `\n「用户同意了」不算原话 —— 要贴他实际说的那句。`,
+          `\n「用户同意了」不算原话 —— 要贴他实际说的那句。` +
+          near,
       );
     }
     opts = { ...opts, assumptions: check.checks };
@@ -1303,10 +1339,14 @@ export function briefToText(b: Brief | null): string {
   }
 
   // v4 优先用"4 组"叙述；老工程没有 v4 字段时退回 9 步进度
+  // 判定必须与 confirm_brief 同源（confirmGaps），否则会出现「回执说完整、确认说缺 8 项」
   const v4Ready = !!(b.core && (b.core.who || b.core.action) && (b.segments ?? []).length);
-  const head =
-    cov.ok && v4Ready
-      ? "需求 4 组已问完、契约完整 ✅"
+  const gaps = confirmGaps(b);
+  const readyToConfirm = cov.ok && v4Ready && !gaps.length;
+  const head = readyToConfirm
+    ? "需求 4 组已问完、契约完整 ✅（confirm_brief 现在能过）"
+    : cov.ok && v4Ready
+      ? `内容契约完整 ✅，但还不能确认——${gaps.length} 步必填项还空着（见下）`
       : progress.finished
         ? "需求已问完 9 步 ✅（但契约还不完整，见下方）"
         : `需求进度：${progress.done.length}/9，下一步该问第 ${progress.next} 步（${BRIEF_STEPS.find((s) => s.no === progress.next)?.title}）`;
@@ -1324,5 +1364,7 @@ export function briefToText(b: Brief | null): string {
     ? `\n⚠️ 以下字段是 agent 替用户定的（用户没明确回答）：${assumed.join("、")}\n` +
       `   确认前必须逐条跟用户核对，否则 confirm_brief 会拒绝。`
     : "";
-  return `${head}${lockedNote}\n${lines.join("\n")}${blocks.length ? NL + blocks.join(NL) : ""}${covNote}${assumedNote}`;
+  const gapText = confirmGapText(b, NL);
+  const gapNote = gapText ? `${NL}${gapText}` : "";
+  return `${head}${lockedNote}\n${lines.join("\n")}${blocks.length ? NL + blocks.join(NL) : ""}${covNote}${gapNote}${assumedNote}`;
 }

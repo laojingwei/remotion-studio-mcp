@@ -44,6 +44,13 @@ export type Scene3DProps = {
   /** 场景 id（由 Video/Backdrop 注入）。氛围层会带 `::backdrop` 后缀，用来判断"我是不是背景" */
   sceneId?: string;
   /**
+   * 字幕在画面底部占掉的保护区顶部（按画面高度百分比，由 Video 算好传入；0 = 没字幕）。
+   *
+   * 底部是抢手位置：3D 的标题层贴在底部，烧录字幕也在底部 —— 以前固定让 13%，
+   * 而字幕 bottom 可以被调到 18%+，字幕条正好压在副标题上（实测横屏 1080p 第 502 帧）。
+   */
+  subtitleReservePct?: number;
+  /**
    * 只对氛围层有意义：**盖在内容之上**时置 true。
    * 这时画布必须透明（否则整块盖住下面的字），布局也不画自己的底色。
    */
@@ -1048,6 +1055,7 @@ export const Scene3DScene: React.FC<Scene3DProps> = ({
   sub = "",
   sceneId,
   overlay = false,
+  subtitleReservePct = 0,
 }) => {
   const frame = useCurrentFrame();
   const { fps, width, height } = useVideoConfig();
@@ -1266,9 +1274,14 @@ export const Scene3DScene: React.FC<Scene3DProps> = ({
           style={{
             justifyContent: "flex-end",
             alignItems: "center",
-            paddingBottom: h(6),
+            // 有字幕时整块标题层躲开字幕条（占位由 Video 按字幕样式实算，不是拍脑袋的固定值）
+            paddingBottom: subtitleReservePct > 0 ? h(subtitleReservePct) : h(6),
             // 只在最底部留一道很窄的暗角做文字衬底；不再向上铺开（铺开会挡住 3D 星系）
-            background: `linear-gradient(to top, ${c.background}8C 0%, ${c.background}00 18%)`,
+            // 有字幕时不垫底：字幕条自己带底色，两层暗角叠一起会发灰
+            background:
+              subtitleReservePct > 0
+                ? "transparent"
+                : `linear-gradient(to top, ${c.background}8C 0%, ${c.background}00 18%)`,
           }}
         >
           {title ? (

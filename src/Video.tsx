@@ -134,6 +134,27 @@ const EffectOverlays: React.FC<{ effects?: EffectClip[] }> = ({ effects }) => {
   );
 };
 
+/**
+ * 字幕在画面底部占掉的「保护区」（按画面高度百分比，从底往上算的顶部边界）。
+ *
+ * scene3d 一类自带底部标题层的版式要用它让位：以前只让固定 13%，
+ * 而字幕 bottom 可以被调到 18%+ —— 结果字幕条正好压在 3D 副标题上（实测 p_03wjko 第 502 帧）。
+ * 任意时刻字幕只显示一句，所以高度按一行算。
+ */
+export function subtitleReservePct(scene: Scene, width: number, height: number): number {
+  if (!sceneSubtitleLines(scene).length) return 0;
+  const unit = Math.min(width, height);
+  const st = scene.subtitleStyle ?? {};
+  // 与 SubtitleLayer 同一套换算：bottomPct 按画面高度，bottom 按短边
+  const bottomPct = st.bottomPct !== undefined ? st.bottomPct : ((st.bottom ?? 6.5) * unit) / height;
+  // fontSizePct 本身就是「短边百分比」，换算成画面高度百分比只差 unit/height 的比例——不要再乘 100
+  // （乘了 100 的版本把标题顶出画面外，实测 p_03wjko 第 502 帧标题整块消失）
+  const fontSizePct = st.fontSize ?? 2.6;
+  // 一行字幕 ≈ 字号 × 1.35 行高 + 上下 padding（约 2.8%）+ 1% 呼吸
+  const linePct = fontSizePct * 1.35 * (unit / height) + 2.8 + 1;
+  return bottomPct + linePct;
+}
+
 /** 字幕烧录层：按 scene.subtitle 的字数比例分配，幕内逐句显示（与导出的 SRT 同一套逻辑） */
 const SubtitleLayer: React.FC<{ scene: Scene; theme: Theme }> = ({ scene, theme }) => {  const frame = useCurrentFrame();
   const { width, height } = useVideoConfig();
@@ -285,6 +306,7 @@ export type VideoProps = Project & { formatKey: string };
  * 与画幅无关，画幅只决定 useVideoConfig() 的 width/height。
  */
 export const Video: React.FC<VideoProps> = ({ scenes, theme, audio, audioTracks, effects, fps }) => {
+  const { width, height } = useVideoConfig();
   const spans = sceneSpans(scenes);
   /**
    * 接缝重叠：第 i 幕要**往后再多渲染几帧**，好让下一幕的入场转场跨过接缝。
@@ -379,7 +401,15 @@ export const Video: React.FC<VideoProps> = ({ scenes, theme, audio, audioTracks,
                   </>
                 ) : null}
                 <BareContext.Provider value={bdBelow}>
-                  <Comp {...scene.props} type={scene.type} theme={theme} sceneId={scene.id} />
+                  {/* 字幕占位传给自带底部标题层的版式（scene3d 等）：有字幕就整体让位，别压在字幕条上 */}
+                  <Comp
+                    {...scene.props}
+                    type={scene.type}
+                    theme={theme}
+                    sceneId={scene.id}
+                    hasSubtitle={sceneSubtitleLines(scene).length > 0}
+                    subtitleReservePct={subtitleReservePct(scene, width, height)}
+                  />
                 </BareContext.Provider>
                 {scene.backdrop && !bdBelow ? (
                   <BackdropLayer

@@ -24,7 +24,7 @@ import type { ToolDef } from "./_shared";
 
 import fs from "node:fs";
 import path from "node:path";
-import { BRIEF_STEPS, CONFIRM_GROUPS, CORE_STEPS, briefCoverage, briefProgress, briefToText, confirmBrief, legacyFieldNotice, readBrief, recomputeDesignLock, sceneCountHint, stepMissingFields, type Brief } from "../brief.service";
+import { BRIEF_STEPS, CONFIRM_GROUPS, CORE_STEPS, briefCoverage, briefProgress, briefToText, confirmBrief, confirmGapText, legacyFieldNotice, readBrief, recomputeDesignLock, sceneCountHint, stepMissingFields, type Brief } from "../brief.service";
 import { FORM_SPECS, designLockSummary, normalizeForm } from "../../shared/designLock";
 import { auditBriefAgainstProject, auditToText } from "../brief-audit.service";
 import { densitySummary, projectDensity, rhythmIssues } from "../../shared/density";
@@ -607,6 +607,8 @@ export const BRIEF_TOOLS: ToolDef[] = [
         ...cov.blocking.slice(0, 10).map((x) => `  ✗ ${x.message}`),
         ...(cov.blocking.length > 10 ? [`  …还有 ${cov.blocking.length - 10} 项`] : []),
         ...cov.warnings.map((x) => `  ⚠️ ${x.message}`),
+        // 契约规则通过 ≠ 能确认：confirm_brief 还按 9 步必填拦，两处口径必须一起报
+        ...(confirmGapText(brief, nl) ? [confirmGapText(brief, nl)] : []),
       ].join(nl);
 
       // 快问：低表达欲用户不该被 9 步问诊拖着走三四个来回（复盘问题 2）。
@@ -978,9 +980,14 @@ export const BRIEF_TOOLS: ToolDef[] = [
         : "";
       const cov = briefCoverage(brief as never);
       const lock = (brief as Brief).designLock;
-      const nextTip = cov.ok
-        ? `需求契约已完整 ✅ 把总结发给用户确认（重点：段落表 / 镜头清单 / 必现信息 / 参考指到点），点头后 confirm_brief`
-        : `下一步：补齐上面的契约缺口 → 4 组都齐了再 confirm_brief（intake 不带参数可看全部）`;
+      // 契约规则过了不代表能确认：把 confirm_brief 真正会拦的缺口一起说清
+      const gapText = confirmGapText(brief as never, String.fromCharCode(10));
+      const nextTip =
+        cov.ok && !gapText
+          ? `需求契约已完整 ✅ 把总结发给用户确认（重点：段落表 / 镜头清单 / 必现信息 / 参考指到点），点头后 confirm_brief`
+          : cov.ok
+            ? `${String.fromCharCode(10)}${gapText}`
+            : `下一步：补齐上面的契约缺口 → 4 组都齐了再 confirm_brief（intake 不带参数可看全部）`;
       const lockNote = lock
         ? `${String.fromCharCode(10)}${designLockSummary(lock)}` +
           `${String.fromCharCode(10)}（档位变了会自动重算；改一次全片跟随，不用逐幕改）`
@@ -1024,7 +1031,12 @@ export const BRIEF_TOOLS: ToolDef[] = [
     description:
       "**参数最小实验**：给 1 个元素 + 1 组参数，渲 1 张图看它到底长什么样。\n" +
       "为什么需要：maxWidth / bottom / stroke / textAlign 这些语义不直观，直接铺到整片再改要动几十幕。\n" +
-      "先用它把参数摸清，再全量铺。探针写在一个叫「参数探针」的 freeform 幕里，不碰你正在做的那几幕。",
+      "先用它把参数摸清，再全量铺。探针写在一个叫「参数探针」的 freeform 幕里，不碰你正在做的那几幕。\n" +
+      'element 用的是 **freeform 元素** 的字段（与 add_freeform_element 的 element 同一套，未知键会被严格拒绝）：\n' +
+      '  {type:"text", text:"账面音浪", x:50, y:50, size:4, maxWidth:82, color:"#fff", bg:"#000"}\n' +
+      "  常用：type（text / svg / shape / image / fx）· x/y（画面百分比，中心点）· size（短边百分比）· maxWidth（折行宽度）· " +
+      "width/height（矩形单独定，不传=size）· color / fill · bg · style（camelCase 内联样式，如 {fontWeight:900}）· viewBox（改 svg 必须一起给）。\n" +
+      "  没有 fontSize / fontWeight 这类顶层键：字号是 size，字重写在 style 里。",
     shape: {
       projectId: z.string().optional().describe("要操作的工程 id，不传 = 当前默认工程"),
       element: z.record(z.any()).describe("一个 freeform 元素，如 {type:'text', text:'账面音浪', x:50, y:50, size:4, maxWidth:82}"),
@@ -1040,7 +1052,13 @@ export const BRIEF_TOOLS: ToolDef[] = [
         const detail = parsed.error.issues
           .map((x: { path: (string | number)[]; message: string }) => `${x.path.join(".") || "(根)"}：${x.message}`)
           .join("；");
-        throw new Error(`探测元素本身不合法：${detail}`);
+        // 只报「不认识的键」等于让 agent 猜字段名：把可用键和两个常见笔误一起给出来
+        const allowed = Object.keys((freeElSchema as unknown as { shape?: Record<string, unknown> }).shape ?? {}).join(" / ");
+        throw new Error(
+          `探测元素本身不合法：${detail}\n可用字段：${allowed}\n` +
+            `常见笔误：字号是 size（不是 fontSize）、字重写 style:{fontWeight:900}（不是 fontWeight）；` +
+            `改 svg 要一起给 viewBox。`,
+        );
       }
 
       const existing = (p.scenes ?? []).find((x: { name?: string }) => String(x.name ?? "") === "参数探针");

@@ -1479,8 +1479,18 @@ app.post("/api/library/delete", async (c) => {
 /** 清理 public/assets 里没有任何引用的文件（工程和素材库都不认它） */
 app.post("/api/assets/cleanup", async (c) => {
   try {
-    const body = (await c.req.json().catch(() => ({}))) as { dryRun?: boolean };
-    return c.json(cleanupUnusedAssets({ dryRun: !!body.dryRun }));
+    const body = (await c.req.json().catch(() => ({}))) as {
+      dryRun?: boolean;
+      includeLibrary?: boolean;
+      scope?: "root" | "all";
+    };
+    return c.json(
+      cleanupUnusedAssets({
+        dryRun: !!body.dryRun,
+        includeLibrary: !!body.includeLibrary,
+        scope: body.scope === "all" ? "all" : "root",
+      }),
+    );
   } catch (err) {
     return fail(c, err);
   }

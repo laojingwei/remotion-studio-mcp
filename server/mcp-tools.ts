@@ -120,6 +120,7 @@ import {
   fullDoc,
   clearDirty,
   probedDurationFrames,
+  sceneMissingMessage,
 } from "./tools/_shared";
 import { SCENE3D_TOOLS } from "./tools/scene3d";
 import { PROJECT_TOOLS } from "./tools/project";
@@ -136,6 +137,34 @@ export const CORE_TOOL_NAMES = new Set(["start_guide", "get_guide", "tool_search
 
 /** MCP_EXPOSE=all 时恢复全量暴露（调试用） */
 export const exposeAllTools = () => (process.env.MCP_EXPOSE ?? "").trim().toLowerCase() === "all";
+
+/**
+ * 文字元素出界粗判（x/y 是中心点）。
+ *
+ * 本地实测：x=85 放 7 个字的标签，右边被裁掉一截，而抽帧之前完全看不出来。
+ * 宽度只能估（真实排版在浏览器里），所以这里是「大概会出界」的提醒，不是断言。
+ */
+function elementEdgeWarn(el: {
+  kind?: string;
+  text?: string;
+  size?: number;
+  x?: number;
+  maxWidth?: number;
+}): string | null {
+  if (el?.kind !== "text" || !el.text) return null;
+  const size = Number(el.size ?? 4);
+  const chars = [...el.text];
+  const cjk = chars.filter((c) => /[\u3000-\u31ff\u4e00-\u9fff\uff00-\uffef]/.test(c)).length;
+  const est = (cjk * size + (chars.length - cjk) * size * 0.58) * 1.12; // 1.12 ≈ 内边距
+  const width = el.maxWidth ? Math.min(est, el.maxWidth) : est;
+  const x = Number(el.x ?? 50);
+  const right = x + width / 2;
+  if (right <= 100.5) return null;
+  return (
+    `这段文字约 ${width.toFixed(0)}% 宽、中心在 ${x}%，右边缘到 ${right.toFixed(0)}%，会被裁掉约 ${(right - 100).toFixed(0)}%。` +
+    `x 是中心点，改到 ≤ ${Math.max(2, Math.round(100 - width / 2 - 3))}，或加 maxWidth 让它折行`
+  );
+}
 
 const TOOLS: ToolDef[] = [
   {
@@ -1019,7 +1048,7 @@ const TOOLS: ToolDef[] = [
     run: async (a) => {
       const p = await resolveProject(a.projectId);
       const s = p.scenes.find((x) => x.id === a.sceneId);
-      if (!s) throw new Error(`找不到场景 ${a.sceneId}`);
+      if (!s) throw new Error(sceneMissingMessage(p as never, p.scenes as never, a.sceneId));
       return JSON.stringify(s, null, 2);
     },
   },
@@ -4557,14 +4586,22 @@ const TOOLS: ToolDef[] = [
       const p = await resolveProject(a.projectId);
       const nl = String.fromCharCode(10);
       const lines: string[] = [];
-      let frames = a.frames ?? [];
+      let frames: number[] = a.frames ?? [];
+      /** 被钳过的帧：静默钳到末帧会让人以为「四个不同帧长得一模一样」 */
+      const clampedInfo: { asked: number; used: number; scene: string }[] = [];
       if (a.sceneId) {
         const idx = (p.scenes ?? []).findIndex((x: any) => x.id === a.sceneId);
-        if (idx < 0) throw new Error(`没有场景 ${a.sceneId}`);
+        if (idx < 0) throw new Error(sceneMissingMessage(p as never, (p.scenes ?? []) as never, a.sceneId));
         // 多轨之后起点不再等于"前序时长之和"，必须走 sceneSpans（否则画中画会预览到别处）
         const span = sceneSpans(p.scenes as any[])[idx];
         const dur = span?.dur ?? (p.scenes as any[])[idx].durationInFrames;
-        const clamp = (f: number) => Math.max(0, Math.min(dur - 1, f));
+        const sceneName = String((p.scenes as any[])[idx].name ?? a.sceneId);
+        const clamp = (f: number) => {
+          const asked = Math.round(f);
+          const used = Math.max(0, Math.min(dur - 1, asked));
+          if (used !== asked) clampedInfo.push({ asked, used, scene: sceneName });
+          return used;
+        };
         if (a.frames?.length) {
           // sceneId + frames = 该幕内的帧号（agent 的自然直觉，实测就是这么传的——
           // 以前这里直接用 frames 覆盖成 [起点+offset]，传的帧被静默丢掉只回第 0 帧）
@@ -4572,6 +4609,15 @@ const TOOLS: ToolDef[] = [
         } else {
           const off = Math.max(0, Math.min(dur - 1, a.offset ?? 0));
           frames = [(span?.start ?? 0) + off];
+        }
+        if (clampedInfo.length) {
+          const name = clampedInfo[0].scene;
+          const dur0 = dur;
+          lines.push(
+            `⚠️ ${clampedInfo.length} 个帧号超出「${name}」的长度（${dur0} 帧，合法幕内帧号 0–${dur0 - 1}），已钳到边界：` +
+              clampedInfo.map((c) => `${c.asked}→${c.used}`).join("、") +
+              `${nl}   frames 配 sceneId 时是**幕内帧号**；要看别的一幕请换 sceneId，要看全片请不带 sceneId 传全局帧号`,
+          );
         }
       }
       if (a.around === "transitions") {
@@ -4592,6 +4638,18 @@ const TOOLS: ToolDef[] = [
         }
       }
       if (!frames.length) throw new Error('给 frames 列表（单帧 frames:[帧号]）、sceneId+offset，或 around="transitions" 自动取交界帧');
+      // 全局帧号同样要拦越界：以前超出片长会落到渲染端超时，报错里看不出是帧号写错了
+      if (!a.sceneId) {
+        const spansAll = sceneSpans(p.scenes as any[]);
+        const totalFrames = spansAll.reduce((m, s) => Math.max(m, s.start + s.dur), 0);
+        const over = frames.filter((f) => f < 0 || f >= totalFrames);
+        if (over.length) {
+          lines.push(
+            `⚠️ ${over.length} 个全局帧号超出片长（全片 ${totalFrames} 帧，合法 0–${totalFrames - 1}）：${over.join("、")}，已钳到边界`,
+          );
+          frames = frames.map((f) => Math.max(0, Math.min(totalFrames - 1, f)));
+        }
+      }
       for (const f of frames) {
         const res = await api<{ stills: { format: string; url: string }[] }>(
           `/api/projects/${p.id}/stills`,
@@ -5131,7 +5189,8 @@ const TOOLS: ToolDef[] = [
   {
     name: "add_element",
     description:
-      "往场景里放一个自由元素（贴纸 / 图标 / 标签 / 图片 / 视频 / 音频）。可以用 libraryId 取素材库现成的，也可以自己给 svg（矢量）、text（文字）、imageSrc（图片）、videoSrc（视频）、audioSrc（音频）——素材库没有合适的就自己造。放进去之后用户可以正常拖动/旋转/缩放/删除。视频默认有声、不循环；音频/视频没给 durationInFrames 会按素材真实时长。支持背景色 bg、入场 enter / 出场 exit 特效、场景内时间 from / durationInFrames。",
+      "往场景里放一个自由元素（贴纸 / 图标 / 标签 / 图片 / 视频 / 音频）。可以用 libraryId 取素材库现成的，也可以自己给 svg（矢量）、text（文字）、imageSrc（图片）、videoSrc（视频）、audioSrc（音频）——素材库没有合适的就自己造。放进去之后用户可以正常拖动/旋转/缩放/删除。视频默认有声、不循环；音频/视频没给 durationInFrames 会按素材真实时长。支持背景色 bg、入场 enter / 出场 exit 特效、场景内时间 from / durationInFrames。\n" +
+      "**x/y 是元素中心点**（不是左上角）：贴边放时元素有一半会被裁掉。文字宽度随字数×字号变化，长句别往 x>80 放，否则右侧超出画面（回执会算给你）。",
     shape: {
       projectId: z.string().optional().describe("要操作的工程 id，不传 = 当前默认工程（list_projects 查）"),
       sceneId: z.string().optional().describe("放到哪个场景；不传就用第一个场景"),
@@ -5153,8 +5212,8 @@ const TOOLS: ToolDef[] = [
         .optional()
         .describe("视频元素：/assets/xxx.mp4（先 upload_asset）；默认有声、不循环"),
       name: z.string().optional().describe("图层名，方便后续指认"),
-      x: z.number().optional().describe("中心 X，画面宽度百分比，默认 50"),
-      y: z.number().optional().describe("中心 Y，画面高度百分比，默认 52"),
+      x: z.number().optional().describe("中心 X（画面宽度百分比 0–100，默认 50）。**中心点定位**：x=85 的长文字会右边出界"),
+      y: z.number().optional().describe("中心 Y（画面高度百分比 0–100，默认 52）。顶部贴边时 y 给 6 以上"),
       size: z.number().optional().describe("短边百分比：图形是宽度，文字是字号"),
       rotate: z.number().optional(),
       scale: z.number().optional(),
@@ -5227,7 +5286,12 @@ const TOOLS: ToolDef[] = [
           ops: [{ op: "add_element", sceneId, element }],
         }),
       });
-      return `已放入元素 ${element.id}「${element.name}」到场景 ${sceneId}（${element.kind}，位置 ${element.x}% / ${element.y}%）`;
+      // 中心点定位 + 文字宽度随字数变：靠边放必出界，出界在抽帧前看不出来（本地实测过 x=85 长句被裁一半）
+      const warn = elementEdgeWarn(element as never);
+      return (
+        `已放入元素 ${element.id}「${element.name}」到场景 ${sceneId}（${element.kind}，位置 ${element.x}% / ${element.y}%）` +
+        (warn ? `\n⚠️ ${warn}` : "")
+      );
     },
   },
   {

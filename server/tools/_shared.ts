@@ -596,6 +596,31 @@ export async function resolveProject(projectId?: string): Promise<ProjectLite> {
  * 组装逻辑只留这一份：字段名、默认值、libraryId 解析、音视频按素材真实时长，
  * 单工具与批量两条路径共用。
  */
+/**
+ * 「找不到场景」的统一说法。
+ *
+ * 真实踩坑：上一步用 `projectId` 显式建了幕，下一步忘了带 —— 后者落到**当前默认工程**，
+ * 于是报「找不到场景 s_xxx」。原报错只列本工程 id，agent 会以为 id 抄错了，
+ * 实际上是「两个工程」的问题。这里把默认工程一起说出来。
+ */
+export function sceneMissingMessage(
+  project: { id: string; name?: string },
+  scenes: { id: string; name?: string }[],
+  sceneId: string,
+): string {
+  const shown = scenes.slice(0, 10).map((s) => `${s.id}${s.name ? `（${s.name}）` : ""}`).join("、");
+  const tail = scenes.length > 10 ? ` 等 ${scenes.length} 个` : "";
+  const pointer =
+    lastProjectId && lastProjectId !== project.id
+      ? `\n当前默认工程是 ${lastProjectId}：显式传的 projectId **只对当次调用生效**，下一次不带 projectId 就会落回默认工程。` +
+        `\n要么每次显式带上 projectId，要么先 switch_project(${JSON.stringify(project.id)})。`
+      : "";
+  return (
+    `工程「${project.name ?? project.id}」里没有场景 ${sceneId}。${pointer}` +
+    `\n本工程现有场景：${shown || "（一个都没有）"}${tail}`
+  );
+}
+
 export async function composeElement(
   a: Record<string, unknown>,
   project: ProjectLite,
@@ -607,7 +632,7 @@ export async function composeElement(
   if (!sceneId) throw new Error("工程里还没有场景，先 add_scene 再放元素");
   // @别名 指向"本批刚建的场景"，此刻还不存在 —— 交给服务端 apply 时解析
   if (!sceneId.startsWith("@") && !project.scenes.some((s) => s.id === sceneId)) {
-    throw new Error(`找不到场景 ${sceneId}（现有场景：${project.scenes.map((s) => s.id).join("、")}）`);
+    throw new Error(sceneMissingMessage(project, project.scenes, sceneId));
   }
 
   const libraryId = str("libraryId");

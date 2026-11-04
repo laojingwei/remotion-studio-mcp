@@ -175,4 +175,63 @@ export const CLEANUP_TOOLS: ToolDef[] = [
       );
     },
   },
+  {
+    name: "cleanup_unused_assets",
+    description:
+      "清掉 `public/assets/` **根目录**里谁都不引用的散落文件（工程、素材库条目都不认它）。\n" +
+      "典型来源：测试上传、中途删掉的贴图、旧版散在根目录的图。organize_assets 会跳过这些并让你来这里处理。\n" +
+      "先 dryRun=true 看清单（默认就是 dryRun，不会动文件），确认后再 dryRun:false 真删。\n" +
+      "**子目录默认不碰**（projects/<id>/、library/）：示例工程的行星贴图是按名字加载的，json 里没有路径，按引用判会把它们删光。" +
+      "确实要连子目录一起清才传 scope:\"all\"（library/ 还要再加 includeLibrary:true）。",
+    shape: {
+      dryRun: z.boolean().optional().describe("true（默认）= 只列清单不删；false = 真删"),
+      scope: z
+        .enum(["root", "all"])
+        .optional()
+        .describe('默认 "root" = 只清 assets/ 根目录的散落文件；"all" = 连 projects/ 子目录一起扫（风险高，先 dryRun 看清单）'),
+      includeLibrary: z
+        .boolean()
+        .optional()
+        .describe("默认 false = 跳过 assets/library/（那里的未登记文件可能还在用）；true = 连库目录一起清（需配合 scope:\"all\"）"),
+    },
+    run: async (a) => {
+      const dry = a.dryRun !== false;
+      const res = await api<{
+        scanned: number;
+        removed: number;
+        freedBytes: number;
+        files?: string[];
+        removedDirs?: string[];
+        skippedLibrary?: number;
+        skippedSubdir?: number;
+      }>("/api/assets/cleanup", {
+        method: "POST",
+        body: JSON.stringify({
+          dryRun: dry,
+          includeLibrary: !!a.includeLibrary,
+          scope: a.scope === "all" ? "all" : "root",
+        }),
+      });
+      const nl = String.fromCharCode(10);
+      const all = res.files ?? [];
+      const list = all.slice(0, 20);
+      const more = all.length - list.length;
+      const scopeNote = res.skippedSubdir
+        ? `${nl}（本轮只看 assets/ 根目录：${res.skippedSubdir} 个文件在子目录里，没动。要连它们一起清用 scope:"all"）`
+        : "";
+      const libNote = res.skippedLibrary
+        ? `${nl}assets/library/ 里另有 ${res.skippedLibrary} 个文件没登记成素材条目，已跳过（要清就显式传 includeLibrary:true，先确认那些图还在不在用）`
+        : "";
+      return (
+        `${dry ? "可清理（dryRun，未删除）" : "已清理"} ${res.removed ?? 0} / 扫到 ${res.scanned ?? 0} 个文件` +
+        `，腾出约 ${formatBytes(Number(res.freedBytes ?? 0))}` +
+        (list.length ? `${nl}- ${list.join(`${nl}- `)}` : "") +
+        (more > 0 ? `${nl}…还有 ${more} 个` : "") +
+        (res.removedDirs?.length ? `${nl}顺带收掉空目录 ${res.removedDirs.length} 个` : "") +
+        scopeNote +
+        libNote +
+        (dry && list.length ? `${nl}确认没问题后调 cleanup_unused_assets(dryRun:false)` : "")
+      );
+    },
+  },
 ];

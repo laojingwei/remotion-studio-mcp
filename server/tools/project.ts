@@ -13,6 +13,7 @@ import {
   api,
   fmtSummary,
   resolveProject,
+  sceneMissingMessage,
   setCurrentProject,
 } from "./_shared";
 import type { ToolDef } from "./_shared";
@@ -180,7 +181,7 @@ export const PROJECT_TOOLS: ToolDef[] = [
       if (a.elementIds.length < 2) throw new Error("至少给两个元素");
       const p = await resolveProject(a.projectId);
       const scene = p.scenes.find((s) => s.id === a.sceneId);
-      if (!scene) throw new Error(`没有场景 ${a.sceneId}`);
+      if (!scene) throw new Error(sceneMissingMessage(p, p.scenes, a.sceneId));
       const els = (scene.elements ?? []).filter((e) => a.elementIds.includes(e.id));
       if (els.length < 2) throw new Error("场景里没找到这些元素（检查 id 和 sceneId）");
       const pick = (e: any) => ({ id: e.id, x: e.x ?? 50, y: e.y ?? 52, size: e.size ?? 20 });

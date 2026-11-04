@@ -13,6 +13,7 @@ import {
   api,
   fmtSummary,
   resolveProject,
+  sceneMissingMessage,
 } from "./_shared";
 import type { ToolDef } from "./_shared";
 
@@ -30,7 +31,7 @@ export const SCENE3D_TOOLS: ToolDef[] = [
     run: async (a) => {
       const p = await resolveProject(a.projectId);
       const s = p.scenes.find((x) => x.id === a.sceneId);
-      if (!s) throw new Error(`找不到场景 ${a.sceneId}`);
+      if (!s) throw new Error(sceneMissingMessage(p, p.scenes, a.sceneId));
       if (s.type !== "scene3d") {
         throw new Error(
           `「${s.name}」是 ${s.type} 版式，没有 3D 场景图。get_graph 只对 scene3d 生效`,
