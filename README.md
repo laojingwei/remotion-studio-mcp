@@ -4,6 +4,7 @@
 因为共用同一个数据源，agent 和用户的编辑天然互通 —— 不是后期加的功能，是架构的结果。
 
 > **版本** 1.1.0（开发线 v1.01）· **MCP 工具** 123 个（4 个常驻 + 119 个按需发现）·
+> **变更** 每一版改了什么见 [CHANGELOG.md](CHANGELOG.md)
 > **许可** 本仓库代码 MIT，依赖里有两个非宽松（Remotion License / AGPL），见 [开源协议](#开源协议)
 
 ---
@@ -203,7 +204,7 @@ get_guide(name="manual", section="…")   → 按需读指南（不常驻）
 | `scene-recipes` | 75 个版式配方（适用场景 / items 建议 / 坑） |
 | `craft` | 画面质感：签名时刻、层次、留白、动效节奏 |
 | `freeform` | 自由画布写法（`add_freeform_element` 的元素/关键帧/fx） |
-| `scene3d` | **3D 场景**：6 个预设、`graph` 全字段、公转/卫星、太阳系完整示例、13 个坑 |
+| `scene3d` | **3D 场景**：6 个预设、`graph` 全字段、世界背景/全景图/地面阴影、公转/卫星、太阳系完整示例、13 个坑 |
 | `external-tools` | **iso 图解**：anatomy 出图 → 落盘 → 套主题 |
 | `sound` | 声音设计：BGM 选择、人声避让、响度配平、卡点 |
 | `narration` | 旁白写法 / TTS 分段 / 时长对齐公式 |
@@ -608,6 +609,9 @@ screen = stageCenter + pan + zoom * localPoint
 - **材质**：`standard`（PBR）/ `physical`（玻璃）/ `basic`（线框、剪影）；支持 `emissive` 自发光、`map` 外部贴图、`opacity`、`side`、`flatShading`
 - **`parent` 层级**：子节点继承父节点的位移/旋转 —— 行星挂在旋转的轨道环下面是"公转"，行星自己的 `rotY` 是"自转"，土星环挂在土星上跟着倾斜
 - **`lights`**：给了它就接管打光（预设的四盏方向光撤掉）。点光放在太阳位置，行星转到哪儿就照到哪儿 —— 昼夜面就对了
+- **`world` 世界**：默认不再是主题底色，而是独立的渐变天空（带 `haze` 空气透视与 `vignette` 暗角）；`mode:"image"` 换成等距柱状全景图，同一张 HDR 同时当环境照明 —— 太阳方位、天光颜色、地面反光都来自照片，这是"像真的"最大的一步
+- **`ground` 自动地面**：不写高度就落在所有节点的最低点，主光自动投影。接触阴影是"落地感"的全部来源；配全景图时用 `mode:"shadow"`，只落影子、让照片里的地透出来
+- **换背景最省事**：`set_graph_scene { worldPreset:"golden-hour" }` —— 12 组题材配方（春夏秋冬 / 晨午黄昏 / 城市夜景 / 银河 / 工业厂房 / 居家），连补光和后处理一起配好；`list_world_skies` 列清单并检查本机文件在不在。素材是 Poly Haven 的 CC0 HDRI，**不进仓库**（`public/` 被忽略），要自己下载或让用户提供
 - 上限：节点 48、每节点动画 8 段、灯 8 盏、粒子 6000。**中文不进 3D**，标题走 `title` / `sub` 的 2D 叠层
 
 写完整参数、套路（公转/卫星、太阳 + 昼夜面、土星环）和一个 18 节点的太阳系示例见
@@ -625,7 +629,7 @@ screen = stageCenter + pan + zoom * localPoint
 三条实现约定值得知道：
 
 - **一次手势 = 一条 `update_graph_node` = 一步撤销**，和自由画布拖拽一致；写请求走 store 的串行队列，不会互相覆盖。
-- **agent 和人是同一批 op**：`get_graph` 看大纲，`update_graph_node` 改单个节点，`set_graph_scene` 改相机/灯光/粒子/辉光。整份 `update_scene({props:{graph}})` 会把面板上的改动一起抹掉，所以文档里明确要求改节点别整份覆盖。
+- **agent 和人是同一批 op**：`get_graph` 看大纲，`update_graph_node` 改单个节点，`set_graph_scene` 改相机/世界/灯光/地面/粒子/辉光。整份 `update_scene({props:{graph}})` 会把面板上的改动一起抹掉，所以文档里明确要求改节点别整份覆盖。
 - **换父级保持世界变换**：把行星拖到另一个枢轴下，位置/角度/大小都不变（矩阵换算在 `shared/scene3dTransform.ts`，不依赖 three，有单测）。
 - 预置场景（没有 `graph`）的面板里有一个「换成可编辑场景图」入口 —— 它**不是**把预设翻译成节点树，而是新建一张最小可编辑的图，文案里写清了。
 

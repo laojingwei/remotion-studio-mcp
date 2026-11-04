@@ -4,7 +4,7 @@
 「我想…」意图速查、落地铁律（为什么没生效）。本页只留最快的域索引：
 
 **两层调用**：常驻核心 4 个（start_guide / get_guide / tool_search / tool_call）；
-其余 118 个工具 `tool_search("意图")` 找 → `tool_call(name, args)` 执行（`all=true` 看全量目录，`names=[...]` 取完整参数表）。
+其余 119 个工具 `tool_search("意图")` 找 → `tool_call(name, args)` 执行（`all=true` 看全量目录，`names=[...]` 取完整参数表）。
 
 - 工程：list / switch / create / get / **archive（收进抽屉，不删文件）** / delete / 模板（含删除）/ 历史 / 导入导出
   （当前工程只在 create / import / switch / 删除当前工程时变；显式 projectId 只影响本次调用）

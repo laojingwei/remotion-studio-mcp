@@ -64,6 +64,25 @@ if (fs.existsSync(readmePath)) {
   }
 }
 
+/* 4) CHANGELOG 顶部必须有当前版本的一节。
+ *
+ * 版本号一致只能说明"改对了数字"，说明不了"这一版做了什么" ——
+ * 升级的人真正需要的是变更内容，所以把它也纳入闸口：忘写就发不出去。 */
+const changelogPath = path.join(ROOT, "CHANGELOG.md");
+if (!fs.existsSync(changelogPath)) {
+  errors.push("缺少 CHANGELOG.md（发版必须写清这一版改了什么）");
+} else {
+  const md = fs.readFileSync(changelogPath, "utf8");
+  const headings = [...md.matchAll(/^##\s+\[?([0-9]+\.[0-9]+\.[0-9]+)\]?/gm)].map((m) => m[1]);
+  if (!headings.includes(version)) {
+    errors.push(`CHANGELOG.md 里没有 ${version} 这一节（发版时在顶部加：新增 / 变更 / 修复）`);
+  } else if (headings[0] !== version) {
+    notes.push(`⚠ CHANGELOG.md 最新一节是 ${headings[0]}，${version} 不在最前（可能忘了置顶）`);
+  } else {
+    notes.push(`CHANGELOG.md 有 ${version} 一节`);
+  }
+}
+
 /* 3) tag 触发时，tag 必须等于 package.json */
 const refType = process.env.GITHUB_REF_TYPE;
 const refName = process.env.GITHUB_REF_NAME;
