@@ -1,11 +1,11 @@
-# Agent 使用全书（119 个工具 = 4 常驻 + 115 按需 + 能力地图 + 铁律）
+# Agent 使用全书（120 个工具 = 4 常驻 + 115 按需 + 能力地图 + 铁律）
 
 给 agent 的完整说明书。**你不需要读源码、不需要试探参数**：这台机器能做什么、怎么组合、
 为什么没生效，全部在这页和另外 17 篇指南里（全 18 篇的索引见本文最后一节）。
 
 **工具分两层（先搞懂这个）**：
 - **常驻核心 4 个**：`start_guide`（开工入口）、`get_guide`（读指南/本书）、`tool_search`（找工具）、`tool_call`（执行工具）
-- **其余 115 个**：不在常驻列表里。用法：`tool_search("画中画")` 找到工具（返回名字/说明/参数表）→ `tool_call(name="move_scene", args={...})` 执行。
+- **其余 116 个**：不在常驻列表里。用法：`tool_search("画中画")` 找到工具（返回名字/说明/参数表）→ `tool_call(name="move_scene", args={...})` 执行。
   全量目录：`tool_search(all=true)`；某几个工具的完整文档：`tool_search(names=["add_element"])`
 - 本书的工具全表（§3）按域列出全部工具（含 4 个核心）——先查表再搜索，比盲搜快
 
@@ -111,7 +111,7 @@
 
 **特效**：`list_effect_types` · `add_effect` · `update_effect` · `remove_effect`
 
-**音频**：`set_audio`（BGM，含 **ducking 人声避让**；volume 1 = 原音、可到 5 = +14dB）· `balance_audio`（**响度配平**：段间大小不一）· `compress_audio`（**段内压缩**：一段里忽大忽小）· `analyze_audio`（测 BPM/拍点 + 响度）· `set_beat_grid`（按 BPM 建卡点网格）· `tts_check`（配音前预检）· `add_audio_track` · `update_audio_track` · `remove_audio_track` · `get_tts_config` · `set_tts_config` · `tts_synthesize` · `tts_narration(segments[], applyToScenes)`
+**音频**：`set_audio`（BGM，含 **ducking 人声避让**；volume 1 = 原音、可到 5 = +14dB）· `balance_audio`（**响度配平**：段间大小不一）· `compress_audio`（**段内压缩**：一段里忽大忽小）· `analyze_audio`（测 BPM/拍点 + 响度）· `set_beat_grid`（按 BPM 建卡点网格）· `tts_check`（配音前预检）· `add_audio_track` · `update_audio_track` · `remove_audio_track` · `get_tts_config` · `set_tts_config` · `tts_synthesize` · `tts_narration(segments[], applyToScenes)` · `revise_script`（**改稿即改片**：改一段台词 → 只重配这段 → 幕长/字幕/分镜/时间骨架跟着走，并报出被幕长变化挤到的元素）
 
 **字幕**：`set_subtitle`（自动拆段：清标点 + 一屏一句，返回拆分预览）· `fix_subtitles`（旧工程/长字幕批量重拆，`dryRun` 预演）· `set_subtitle_style` · `export_subtitles`（SRT / VTT）
 
@@ -153,7 +153,7 @@
 | 口播一听就是 AI 写的 | 四条结构签名：翻案腔（不是…而是…）、三项排比（不仅…也…更…）、结尾升华（让我们一起）、模糊归因（专家指出）。再加黑话与「念不出来的符号」（`get_guide("content","AI 味")`），`save_script` / `save_storyboard` 会自动点名 |
 | 竖屏片被平台 UI 压住 | 上 20% / 内容 60% / 下 20% 三区域，内容垂直居中，字幕上移（`get_guide("craft")` §11） |
 | 精修越改越花 | 精修是减法：先对齐/层级/减色，再加新特效（`get_guide("qa")` 精修与三个肉身测试） |
-| 只改某幕文案 | `update_scene(props)` 或 `update_element`；**改过口播必须重新 `tts_narration` 重量** |
+| 只改某幕文案（片已建好） | `revise_script(changes=[{segment:3, text:"新的一句"}])`——只重配这段、幕长/字幕/分镜/时间骨架同步，回执列出被挤到的元素。**别用 save_script 重写**（整片配音作废）。只改错别字传 `textOnly=true` |
 | 换一种版式 | `set_scene_type` → `get_scene` 回读确认字段迁移 |
 | 加背景音乐 | `set_audio(src)` 基础设置 → `set_audio(volume=0.25)` 压到人声 20–40%（`get_guide("sound")`）。**只传要改的字段就够**（合并语义），其余配置不动；清掉避让/压缩曲线要显式传 `ducking=null` / `gainCurve=null` |
 | 声音太小，想比原音更响 | `set_audio(volume=2.5)` / `update_element(audioVolume=2.5)`：**1 = 原音，上限 5（+14dB）**。回执会算峰值，会削波就警告 |

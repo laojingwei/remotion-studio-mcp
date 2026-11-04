@@ -3,7 +3,7 @@
 一份 `Project JSON`，三个消费方：**Agent 改它、用户在 Web 上拖它、Remotion 渲染它**。
 因为共用同一个数据源，agent 和用户的编辑天然互通 —— 不是后期加的功能，是架构的结果。
 
-> **版本** 1.1.0（开发线 v1.01）· **MCP 工具** 119 个（4 个常驻 + 115 个按需发现）·
+> **版本** 1.1.0（开发线 v1.01）· **MCP 工具** 120 个（4 个常驻 + 116 个按需发现）·
 > **许可** 本仓库代码 MIT，依赖里有两个非宽松（Remotion License / AGPL），见 [开源协议](#开源协议)
 
 ---
@@ -138,9 +138,9 @@ http://127.0.0.1:4380/mcp
 
 > 注意地址要带 `/mcp`：`/` 是编辑器本身的 HTTP API（REST + SSE），不是 MCP 端点。
 
-### 工具清单（119 个 = 4 常驻 + 115 按需）
+### 工具清单（120 个 = 4 常驻 + 116 按需）
 
-**门面模式**：宿主只看到 4 个常驻工具，其余 115 个用 `tool_search` 按意图现找、用 `tool_call` 执行。
+**门面模式**：宿主只看到 4 个常驻工具，其余 116 个用 `tool_search` 按意图现找、用 `tool_call` 执行。
 这样工具描述不占常驻上下文（否则光工具说明就要几万 token）。
 
 ```
@@ -164,7 +164,7 @@ get_guide(name="manual", section="…")   → 按需读指南（不常驻）
 | 特效轨 | `list_effect_types` / `add_effect` / `update_effect` / `remove_effect` |
 | 转场 | `set_transition`（单幕）/ `set_transitions`（批量，给全部或指定场景套同一套） |
 | 音频 | `set_audio`（含 ducking 人声避让）/ `add_audio_track` / `update_audio_track` / `remove_audio_track` / `balance_audio`（响度配平）/ `compress_audio`（动态压缩）/ `analyze_audio`（BPM + 拍点）/ `set_beat_grid`（手填 BPM） |
-| 语音 | `get_tts_config` / `set_tts_config` / `tts_check`（预检，`deep=true` 会真合成一句）/ `tts_synthesize` / `tts_narration`（多段旁白一次合成 + 对齐幕长） |
+| 语音 | `get_tts_config` / `set_tts_config` / `tts_check`（预检，`deep=true` 会真合成一句）/ `tts_synthesize` / `tts_narration`（多段旁白一次合成 + 对齐幕长）/ `revise_script`（**改稿即改片**：只重配改动的段，同步幕长/字幕/分镜/时间骨架） |
 | 字幕 | `set_subtitle` / `set_subtitle_style` / `export_subtitles` |
 | 主题 / 画幅 | `set_theme` / `set_formats` |
 | 渲染 | `preview_frame` / `preview_frames` / `render_video` / `get_render_status` / `cancel_render` / `refresh_bundle` / `cleanup_renders` |
@@ -978,7 +978,7 @@ server/              唯一写入口 + 渲染队列 + MCP 代理
   bundle.service    工程包导入导出（project.json + assets + manifest）
   zip.ts            最小 zip 读写（写 stored，读兼容 deflate）
   render.service    bundle 缓存 + 素材同步 + 渲染队列
-  mcp-tools.ts      工具聚合与门面（119 个 = 4 常驻 + 115 按需）
+  mcp-tools.ts      工具聚合与门面（120 个 = 4 常驻 + 116 按需）
   mcp-proxy.ts      stdio 代理（工具调用转发给 HTTP 服务）
   skills/           18 篇技能指南（list_guides / get_guide 读）
 web/                 编辑器：预览 / 属性面板 / 时间轴 / 素材面板 / 详情浮窗

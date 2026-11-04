@@ -31,6 +31,15 @@ import { readScript, saveScript, confirmScript, scriptToText, estimateSeconds, s
 import { readReview, markReviewRequested, markReviewConfirmed, markNeedsWork, markSelfRender, markProbe, markChosenStyle, reviewToText } from "./review.service";
 import { listStyles, presetOf, readStyle, styleSummary } from "./styles.service";
 import { readStoryboard, saveStoryboard, storyboardToText, type Storyboard } from "./storyboard.service";
+import { readTiming, saveTiming } from "./narration-timing.service";
+import {
+  analyzeReflow,
+  findSceneOf,
+  mergeTiming,
+  patchStoryboard,
+  resolveChanges,
+  type LooseScene,
+} from "./revise.service";
 import { ELEMENT_LIBRARY, elementFromLibrary } from "../shared/elementLibrary";
 import { getMeta, normalizeProps, describeTypeDeep } from "../shared/sceneMetas";
 import {
@@ -543,6 +552,7 @@ const TOOLS: ToolDef[] = [
         "save_storyboard",
         "save_brief",
         "save_script",
+        "revise_script",
         "remove_scene",
         "reorder_scenes",
         "delete_project",
@@ -2964,6 +2974,383 @@ const TOOLS: ToolDef[] = [
         `   用户说「可以」→ confirm_narration(userSaid="他的原话")，之后 build_storyboard / build_film 才放行${nl}` +
         `${nl}下一步：confirm_narration → preview_frames 抽帧自检 → render_video(dryRun=true) 预检 → render_video`
       );
+    },
+  },
+  {
+    name: "revise_script",
+    description:
+      "**改稿即改片**：用户改了一句台词时用它，别用 save_script 重写——那会把整片配音、幕长、字幕全部作废。\n" +
+      "它只重配改动的那几段，然后同步：幕长（按新配音实测帧数）、旁白音频、字幕、分镜表、配音时间骨架；" +
+      "并列出幕长变化会牵动的幕内定时元素、特效轨、音效轨（这几类**不会**自动改，硬拉伸会毁动画节奏）。\n" +
+      "textOnly=true = 只改错别字/标点（读音不变，不重配、不改幕长）；dryRun=true = 只回估算，不动任何文件。\n" +
+      "改完仍要两道确认：新的一段发用户试听 → confirm_narration；稿件已变、上次确认失效 → confirm_script。",
+    shape: {
+      projectId: z.string().optional().describe("要操作的工程 id，不传 = 当前默认工程（list_projects 查）"),
+      changes: z
+        .array(
+          z.object({
+            segment: z
+              .number()
+              .int()
+              .min(1)
+              .optional()
+              .describe("改第几段（1 起，get_script 的编号）；与 sceneId 二选一"),
+            sceneId: z.string().optional().describe("也可以按幕 id 定位（忘了段号时用，先 get_scene / get_project）"),
+            text: z.string().describe("这一段的新文案（整段替换，不是只给改动的几个字）"),
+            note: z.string().optional().describe("新的画面备注；不传保留原备注"),
+          }),
+        )
+        .min(1)
+        .describe("要改的段（可以一次改多段）"),
+      fit: z
+        .enum(["duration", "keep"])
+        .optional()
+        .describe(
+          "duration（默认）= 按新配音实测改幕长；keep = 保留幕长只换音频（新配音更长会被幕尾截断，只在改短句时安全）",
+        ),
+      breathSec: z.number().min(0).max(5).optional().describe("幕尾呼吸位（秒），默认 0.7，与 tts_narration 一致"),
+      voice: z.string().optional().describe("重配用的音色；**不传 = 当前默认音色**，原片如果用了别的音色要显式传，否则这一段和其余段不一样"),
+      speed: z.number().min(0.25).max(4).optional().describe("重配语速；原片调过语速的话要一起传，不然这一段快慢不一致"),
+      textOnly: z.boolean().optional().describe("true = 只改稿件文字与字幕，不重配、不改幕长（错别字/标点修正）"),
+      dryRun: z.boolean().optional().describe("true = 只按字数估算影响，不合成、不写任何文件"),
+    },
+    run: async (a) => {
+      await ensureServer();
+      const p = await resolveProject(a.projectId);
+      const script = readScript(p.id);
+      if (!script?.segments?.length) {
+        throw new Error("还没有稿件分段：先 save_script 写一版（一段一幕）再来改稿");
+      }
+      const nl = String.fromCharCode(10);
+      const sb = readStoryboard(p.id);
+      const changes = resolveChanges(script, sb, (a.changes ?? []) as never);
+      const todo = changes.filter((c) => c.changed);
+      if (!todo.length) {
+        return (
+          `这 ${changes.length} 段的文案和现有稿件完全一致，没有改动。${nl}` +
+          `只是读音/语速不对 → tts_narration(segments=[{text, sceneId}], applyToScenes=true, keepSceneDuration=true)；` +
+          `整篇重写 → save_script`
+        );
+      }
+
+      const fps = Number(p.fps) > 0 ? Number(p.fps) : 30;
+      const breath = a.breathSec === undefined ? 0.7 : Math.max(0, Number(a.breathSec));
+      const fit = a.fit === "keep" ? "keep" : "duration";
+      const textOnly = a.textOnly === true;
+      const scenes = (p.scenes ?? []) as LooseScene[];
+      const oldTotal = totalDuration(p as never);
+      const briefSec = Number(readBrief(p.id)?.durationSec ?? 0);
+
+      // 每条改动落到「幕 + 旧幕长 + 估算新幕长」。幕可能还没建（只改稿与分镜）
+      const plan = todo.map((c) => {
+        const hit = findSceneOf(c.sceneId, scenes);
+        const oldDur = hit ? Math.max(1, Number(hit.scene.durationInFrames ?? 1)) : 0;
+        const estFrames = Math.max(1, Math.ceil((estimateSeconds(c.text) + breath) * fps));
+        return { c, hit, oldDur, estFrames };
+      });
+
+      if (a.dryRun) {
+        const items = plan.map((x, i) => {
+          const dur = x.hit
+            ? ` · 幕「${x.hit.scene.name}」${x.oldDur}f（${(x.oldDur / fps).toFixed(1)}s）→ 约 ${x.estFrames}f（${(x.estFrames / fps).toFixed(1)}s）`
+            : " · 还没建幕（只改稿与分镜，铺开时按新稿）";
+          return `${i + 1}. 第 ${x.c.index + 1} 段 ${scriptChars(x.c.oldText)}字 → ${scriptChars(x.c.text)}字${dur}`;
+        });
+        const delta = plan.reduce((n, x) => n + (x.hit ? x.estFrames - x.oldDur : 0), 0);
+        const after = (oldTotal + delta) / fps;
+        return [
+          `dryRun（什么都没改）：要改 ${plan.length} 段，按字数估算幕长合计 ${delta >= 0 ? "+" : ""}${delta}f（${delta >= 0 ? "+" : ""}${(delta / fps).toFixed(1)}s）`,
+          ...items,
+          `成片 ${(oldTotal / fps).toFixed(1)}s → 约 ${after.toFixed(1)}s${briefSec > 0 ? `（brief 目标 ${briefSec}s）` : ""}`,
+          `估算误差不小（4.5 字/秒 vs 实际念法）；要真数就去掉 dryRun 跑一遍`,
+        ].join(nl);
+      }
+
+      // ── 合成：全部成功才动稿件与工程。中途失败时稿件/工程都还是旧的 ──
+      type Synth = { url: string; frames: number; suggested: number; duration: number };
+      const synth = new Map<number, Synth>();
+      if (!textOnly) {
+        for (const x of plan) {
+          const res = await fetch(`${BASE}/api/tts/synthesize`, {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({ text: x.c.text, voice: a.voice, speed: a.speed, projectId: p.id }),
+          });
+          const data = (await res.json().catch(() => ({}))) as { url?: string; error?: string };
+          if (!res.ok || !data.url) {
+            throw new Error(
+              `第 ${x.c.index + 1} 段合成失败：${data.error ?? `HTTP ${res.status}`}（稿件与工程都还没动，可改完重试）`,
+            );
+          }
+          const probe = await probeOne(data.url, fps, breath);
+          if (!probe) {
+            throw new Error(
+              `第 ${x.c.index + 1} 段合成成功但读不出时长（${data.url}）——稿件与工程都还没动。检查语音服务返回的格式（wav/mp3/ogg）`,
+            );
+          }
+          synth.set(x.c.index, {
+            url: data.url,
+            frames: Number(probe.frames ?? 0),
+            suggested: Math.max(1, Number(probe.suggestedSceneFrames ?? 0)),
+            duration: Number(probe.durationInSeconds ?? 0),
+          });
+        }
+      }
+
+      // ── 只动命中的幕：旧旁白换新、幕长跟随、字幕重写 ──
+      const ops: Record<string, unknown>[] = [];
+      const touched: { index: number; sceneId: string; sceneName: string; oldDur: number; wantDur: number }[] = [];
+      for (const x of plan) {
+        const hit = x.hit;
+        if (!hit) continue;
+        const els = (hit.scene.elements ?? []) as Record<string, unknown>[];
+        const prevNar = els.find((el) => el.kind === "audio" && el.narration === true);
+        // 有人手工挪过旁白位置（from>0），重加不能归零
+        const keepFrom = prevNar ? Math.max(0, Number(prevNar.from ?? 0)) : 0;
+        const s = synth.get(x.c.index);
+        if (!textOnly) {
+          for (const el of els) {
+            if (el.kind === "audio" && el.narration === true) {
+              ops.push({ op: "remove_element", sceneId: hit.scene.id, elementId: el.id });
+            }
+          }
+        }
+        if (s && fit === "duration") {
+          ops.push({ op: "update_scene", sceneId: hit.scene.id, patch: { durationInFrames: s.suggested } });
+        }
+        ops.push({
+          op: "set_subtitle",
+          sceneId: hit.scene.id,
+          text: subtitleToField(normalizeSubtitle(x.c.text, { maxChars: SUBTITLE_LIMITS.max }).lines),
+        });
+        if (s) {
+          // keep：音频比幕长短就按幕长截，比幕长长会被幕尾截（下面会告警）
+          const dur = fit === "duration" ? s.suggested : Math.max(1, Math.min(s.suggested, x.oldDur));
+          ops.push({
+            op: "add_element",
+            sceneId: hit.scene.id,
+            element: {
+              kind: "audio",
+              src: s.url,
+              narration: true,
+              name: "旁白",
+              x: 50,
+              y: 50,
+              size: 6,
+              audioVolume: 1,
+              from: keepFrom,
+              durationInFrames: dur,
+            },
+          });
+        }
+        touched.push({
+          index: x.c.index,
+          sceneId: hit.scene.id,
+          sceneName: hit.scene.name,
+          oldDur: x.oldDur,
+          wantDur: s && fit === "duration" ? s.suggested : x.oldDur,
+        });
+      }
+
+      if (ops.length) {
+        await api(`/api/projects/${p.id}/ops`, {
+          method: "POST",
+          body: JSON.stringify({ actor: "agent", ops }),
+        });
+      }
+
+      // 场景类型有单幕时长上下限，超了会被 clamp —— 那就是"配音比幕长，尾字被吃掉"
+      let clampNote = "";
+      if (touched.some((t) => t.wantDur !== t.oldDur)) {
+        try {
+          const fresh = await api<{ project: { scenes: { id: string; durationInFrames: number }[] } }>(
+            `/api/projects/${p.id}`,
+          );
+          const hitClamp = touched.filter((t) => {
+            const f = fresh.project.scenes.find((s) => s.id === t.sceneId);
+            return f && Math.abs(Number(f.durationInFrames) - t.wantDur) > 1;
+          });
+          if (hitClamp.length) {
+            clampNote =
+              `⚠️ ${hitClamp.length} 幕被场景类型的时长上下限夹住了，配音会被幕尾截断：` +
+              hitClamp
+                .map((t) => {
+                  const f = fresh.project.scenes.find((s) => s.id === t.sceneId);
+                  return `「${t.sceneName}」要 ${t.wantDur}f 实际 ${f?.durationInFrames}f`;
+                })
+                .join("；") +
+              ` —— 拆成两幕，或换时长上限更高的类型`;
+          }
+        } catch {
+          /* 检查失败不影响主流程 */
+        }
+      }
+
+      // ── 稿件（saveScript 会清掉旧确认，这正是要的） ──
+      const nextSegments = (script.segments ?? []).map((seg, i) => {
+        const c = plan.find((x) => x.c.index === i);
+        if (!c) return seg;
+        return { ...seg, text: c.c.text, note: c.c.note, sceneId: seg.sceneId ?? c.c.sceneId };
+      });
+      saveScript(p.id, { ...script, segments: nextSegments });
+
+      // ── 配音时间骨架：只换命中段，其余读数还准 ──
+      let timingNote = "";
+      const timing = readTiming(p.id);
+      if (timing && synth.size) {
+        const merged = mergeTiming(
+          timing,
+          plan
+            .filter((x) => synth.has(x.c.index))
+            .map((x) => {
+              const s = synth.get(x.c.index) as Synth;
+              return {
+                sceneId: x.c.sceneId,
+                index: x.c.index,
+                text: x.c.text,
+                frames: s.frames,
+                suggested: s.suggested,
+                durationSec: s.duration,
+              };
+            }),
+          { allowIndexFallback: (timing.segments ?? []).length === script.segments.length },
+        );
+        if (merged.matched) {
+          saveTiming(p.id, merged.timing);
+          timingNote =
+            `配音时间骨架已同步（${merged.matched} 段，${timing.totalSec.toFixed(1)}s → ${merged.timing.totalSec.toFixed(1)}s）` +
+            `，「用户听过」按新版本自动失效`;
+        } else {
+          timingNote = `⚠️ 时间骨架里没对上这几段（骨架可能是别的稿子），没动它——还要用 useNarrationTiming 就重跑 tts_narration(mode="timing")`;
+        }
+      }
+
+      // ── 分镜表：不跟着改，下次 build 就按旧文案重建 ──
+      const sbPatch = patchStoryboard(
+        sb,
+        plan.map((x) => {
+          const s = synth.get(x.c.index);
+          return {
+            index: x.c.index,
+            sceneId: x.c.sceneId,
+            text: x.c.text,
+            durationInFrames: s && fit === "duration" ? s.suggested : undefined,
+          };
+        }),
+      );
+      if (sbPatch?.matched.length) saveStoryboard(p.id, sbPatch.storyboard);
+
+      // ── 影响面：幕内定时元素 / 全局轨 ──
+      const impacts = plan
+        .filter((x) => x.hit && synth.has(x.c.index) && fit === "duration")
+        .map((x) => {
+          const hit = x.hit as NonNullable<typeof x.hit>;
+          const s = synth.get(x.c.index) as Synth;
+          const r = analyzeReflow(hit.scene, s.suggested);
+          r.sceneIndex = hit.sceneIndex;
+          return r;
+        });
+      const elNotes: string[] = [];
+      for (const r of impacts) {
+        const head = `「${r.sceneName}」${r.oldDur}f → ${r.newDur}f`;
+        for (const el of r.unreachable) {
+          elNotes.push(`${head}：「${el.name}」起点 ${el.from}f 已越过幕尾，整段看不见（要挪回幕内：update_element）`);
+        }
+        for (const el of r.clipped) {
+          elNotes.push(
+            `${head}：「${el.name}」到 ${el.endsAt}f，超幕尾 ${el.endsAt - r.newDur}f，会被截断（想撑满就 durationInFrames=-1）`,
+          );
+        }
+        for (const el of r.earlyEnd) {
+          elNotes.push(`${head}：「${el.name}」在 ${el.endsAt}f 结束，幕尾空 ${r.newDur - el.endsAt}f（要它撑满就 durationInFrames=-1）`);
+        }
+      }
+      const deltaTotal = impacts.reduce((n, r) => n + r.deltaFrames, 0);
+      const newTotal = oldTotal + deltaTotal;
+
+      const spans = sceneSpans(scenes as never[]);
+      const shiftStarts = impacts
+        .filter((r) => r.deltaFrames !== 0 && r.sceneIndex >= 0)
+        .map((r) => Number(spans[r.sceneIndex]?.start ?? 0));
+      const firstShift = shiftStarts.length ? Math.min(...shiftStarts) : -1;
+      const lateTracks = firstShift >= 0 ? ((p.audioTracks ?? []) as { name: string; from: number }[]).filter((t) => t.from >= firstShift) : [];
+      const lateEffects = firstShift >= 0
+        ? ((p.effects ?? []) as { name: string; from: number }[]).filter((e) => e.from >= firstShift)
+        : [];
+      const trackNote =
+        lateTracks.length || lateEffects.length
+          ? `⚠️ 时间轴整体变了 ${(deltaTotal / fps).toFixed(1)}s：${[lateTracks.length ? `${lateTracks.length} 条音效/音乐` : "", lateEffects.length ? `${lateEffects.length} 个特效` : ""]
+              .filter(Boolean)
+              .join("、")}是**按绝对帧**摆的（第一个在 ${firstShift}f 之后），现在相对画面已经错位——要逐个 update_audio_track / update_effect 重摆，或接受错位`
+          : "";
+      const beatNote =
+        p.beatGrid && Math.abs(deltaTotal) > 2
+          ? `⚠️ 有节拍网格（${p.beatGrid.bpm} BPM）：卡点基于旧时间轴，改长/改短后要重新 align 卡点`
+          : "";
+      // keep 模式不改幕长，新配音比幕长就必然被幕尾截断 —— 这是这个模式唯一的坑
+      const keepOver =
+        fit === "keep"
+          ? touched
+              .map((t) => ({ t, s: synth.get(t.index) }))
+              .filter((x) => x.s && (x.s as Synth).suggested > x.t.oldDur)
+          : [];
+      const keepNote = keepOver.length
+        ? `⚠️ fit=keep 但新配音比幕长：` +
+          keepOver
+            .map((x) => `「${x.t.sceneName}」配音 ${(x.s as Synth).suggested}f > 幕长 ${x.t.oldDur}f`)
+            .join("；") +
+          ` —— 尾字会被幕尾切掉。要完整就重跑一次不传 fit（按配音改幕长）`
+        : "";
+      // BGM 若写死了长度，片变长会提前结束（loop 的没这个问题）
+      const bgmFixed = Number((p.audio as { durationInFrames?: number } | undefined)?.durationInFrames ?? 0);
+      const bgmNote =
+        bgmFixed > 0 && newTotal > bgmFixed + 2
+          ? `⚠️ 背景音乐写死了 ${bgmFixed}f，成片现在 ${newTotal}f：后面 ${newTotal - bgmFixed}f 会没声音（要么 set_audio(durationInFrames=null) 让它跟素材，要么开 loop）`
+          : "";
+
+      // ── 回执 ──
+      const items = plan.map((x, i) => {
+        const s = synth.get(x.c.index);
+        const chars = `${scriptChars(x.c.oldText)}字 → ${scriptChars(x.c.text)}字`;
+        const where = x.hit ? ` · 幕「${x.hit.scene.name}」［${x.hit.scene.id}］` : " · 还没建幕（只改稿与分镜）";
+        const dur =
+          s && fit === "duration" && x.hit
+            ? ` ${x.oldDur}f（${(x.oldDur / fps).toFixed(1)}s）→ ${s.suggested}f（${(s.suggested / fps).toFixed(1)}s）`
+            : s
+              ? ` 幕长保持 ${x.oldDur}f`
+              : "";
+        const link = s ? `${nl}   试听：${BASE}${s.url}` : "";
+        return `${i + 1}. 第 ${x.c.index + 1} 段 ${chars}${where}${dur}${link}`;
+      });
+
+      const next = textOnly
+        ? `${nl}下一步：把改后的这一段发给用户过目 → confirm_script（读音没变，不用重配）`
+        : `${nl}⛔ 下一步（顺序别省）：` +
+          `${nl}   ① 把上面的试听链接发给用户，只问三件事：语速对不对 / 有没有读错 / 停顿别扭吗` +
+          `${nl}   ② 他说「可以」→ confirm_narration(userSaid="他的原话")` +
+          `${nl}   ③ 稿件也变了 → confirm_script（旧确认已失效；他没点头之前 build_storyboard 会拒绝）` +
+          `${nl}   ④ 元素被挤到的，用 update_element 挪位置/改时长；要复看画面就 preview_frames`;
+
+      return [
+        `改稿已落地：${plan.length} 段${textOnly ? "（只改字，没重配）" : `，重配 ${synth.size} 段`}`,
+        ...items,
+        textOnly
+          ? ""
+          : `${nl}成片 ${(oldTotal / fps).toFixed(1)}s → ${(newTotal / fps).toFixed(1)}s${briefSec > 0 ? `（brief 目标 ${briefSec}s，差 ${(newTotal / fps - briefSec).toFixed(1)}s）` : ""}`,
+        textOnly ? "" : (sbPatch?.matched.length ? `分镜表已同步（第 ${sbPatch.matched.join("、")} 幕）` : ""),
+        timingNote,
+        clampNote,
+        keepNote,
+        trackNote,
+        bgmNote,
+        beatNote,
+        elNotes.length
+          ? `${nl}幕内元素要跟手（${elNotes.length} 处）：${nl}- ${elNotes.slice(0, 6).join(`${nl}- `)}${elNotes.length > 6 ? `${nl}- …共 ${elNotes.length} 处` : ""}`
+          : "",
+        next,
+      ]
+        .filter(Boolean)
+        .join(nl);
     },
   },
   {
