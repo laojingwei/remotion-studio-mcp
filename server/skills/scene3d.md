@@ -205,6 +205,7 @@
 | `imageLighting` | 同一张图同时当 IBL，默认 true。**这是"像真的"的最大一步**：太阳方位、天光颜色、地面反光全来自照片 |
 | `imageRotation` | 背景绕 Y 轴转（度），把太阳挪到想要的方位 |
 | `imageIntensity` | 背景亮度倍数，默认 1。**主体偏暗先降它（0.7–0.85），别降 exposure** —— 曝光一降，辛苦打的光一起没了 |
+| `envIntensity` | 全景图当照明时的环境强度，默认 1。**城市夜景/室内这种「画面本身就很亮」的图给 0.2–0.4**：HDR 里灯箱和玻璃幕墙是几千尼特的实测值，全强度照进来整张画面直接过曝 |
 | `top` `bottom` `glow` | 天顶色、地平线色、地平线漫射光带的颜色（`mode:gradient` 生效）；`image` 模式下 `bottom` 兼作**雾色** |
 | `haze` | 空气透视（雾）浓度 0–1，默认 0.35。**真实感的一大半在这**：远处必须淡进背景。星空/天文给 0 |
 | `vignette` | 四角压暗 0–1，默认 0.32，0 = 关 |
@@ -218,8 +219,14 @@
 "world": { "mode": "image", "image": "/assets/library/world/belfast_sunset_2k.hdr", "imageLighting": true, "imageRotation": 0, "haze": 0.15 }
 ```
 
-- 素材来自 Poly Haven（CC0，可商用），本项目已有：`/assets/library/world/belfast_sunset_2k.hdr`（2048×1024，黄昏草原天际线）
+- 素材来自 Poly Haven（CC0，可商用），本项目已有两张：
+  - `/assets/library/world/belfast_sunset_2k.hdr` —— 黄昏草原，暖调逆光
+  - `/assets/library/world/modern_buildings_night_2k.hdr` —— 城市夜景（玻璃中庭 + 远景楼宇灯火）
 - 开了 `imageLighting` 就把 `lights` 调少：照片本身已经是主光。留一盏 ambient（1.2–1.8）补暗部 + 一两盏 directional 补轮廓
+- **城市夜景/室内全景要压环境强度**：`envIntensity: 0.2–0.4`、`imageIntensity: 0.3–0.4`、`bloom: 0.12–0.2`。
+  不压的话整张画面直接白掉（玻璃幕墙在 HDR 里是几千尼特）
+- **`imageRotation` 同时转背景和 IBL**：转背景不转光，会出现"窗在右、光从左边来"。夜景里一眼能看出来
+- 转一圈找一个**没有巨大灯箱在画面正中**的方位：全景图里的强光点落在主体背后会糊成一团白
 - **地面用 `"ground": { "mode": "shadow" }`**：照片自己有地面，只让影子落上去，别铺实体平面
 - 机位要低（相机 y ≈ 1.2–1.6）：照片是站在地面上拍的，机位一高，地平线就跑到画面顶上去了
 - **金属度别给太高**：真实载具是"漆面"（metalness 0.2–0.35、roughness 0.5 上下），

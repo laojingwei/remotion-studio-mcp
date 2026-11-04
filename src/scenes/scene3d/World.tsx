@@ -229,11 +229,20 @@ export const WorldLayer: React.FC<{
     try {
       scene.environment = equirectEnvironment(gl, tex);
       (scene as unknown as { environmentIntensity?: number }).environmentIntensity = envIntensity;
+      /**
+       * 环境也要跟着转：只转背景不转 IBL，会出现"背景里的窗在右、照亮物体的光却来自左"——
+       * 夜景/室内这种有明显光源方位的图，一眼就能看出来。
+       */
+      (scene as unknown as { environmentRotation?: THREE.Euler }).environmentRotation = new THREE.Euler(
+        0,
+        ((w?.imageRotation ?? 0) * Math.PI) / 180,
+        0,
+      );
       advance(performance.now());
     } catch {
       // 软件渲染环境不支持 PMREM 时降级：只有灯，不黑屏
     }
-  }, [tex, src, gl, scene, envIntensity, advance, w?.imageLighting]);
+  }, [tex, src, gl, scene, envIntensity, advance, w?.imageLighting, w?.imageRotation]);
 
   if (tex) return null;
   return <SkyDome colors={colors} />;

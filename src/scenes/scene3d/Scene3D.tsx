@@ -1294,7 +1294,13 @@ export const Scene3DScene: React.FC<Scene3DProps> = ({
              * 就等于把照片里的太阳调暗（金属立刻发闷）。所以 image 模式给满强度 1.0，
              * 亮度靠灯和 exposure 调，不靠压环境。
              */
-            envIntensity={graph!.world?.mode === "image" ? 1 : dslLights ? lookSpec.env * 0.55 : lookSpec.env}
+            envIntensity={
+              graph!.world?.mode === "image"
+                ? (graph!.world.envIntensity ?? 1)
+                : dslLights
+                  ? lookSpec.env * 0.55
+                  : lookSpec.env
+            }
           />
         ) : null}
         {world && haze > 0 ? (
