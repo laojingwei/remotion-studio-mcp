@@ -7,14 +7,34 @@
 - **次版本**：新增工具 / 新增场景类型 / 新增能力，老调用照旧能用
 - **修订号**：修 bug、改文案、补文档，不动契约
 
-发版流程：改 `package.json` 的 `version` → 在本文件顶部加一节 → `npm run check-version` → 打 tag。
-`scripts/check-version.mjs` 会校验「本文件里有当前版本的标题」，漏写会红。
+## 怎么发一版
+
+**版本号永远以 `package.json` 为准**，tag 只是它的镜像。两者不一致时流水线会直接失败。
+
+1. 改 `package.json` 的 `version`，在本文件顶部加一节（`## [x.y.z] - 日期`）
+2. `npm run check-version` 自检（它会校验本文件里有当前版本的标题，漏写会红）
+3. 提交并推送 `main`
+4. **推 tag —— 这一步才是发版**：
+
+   ```bash
+   git tag -a vx.y.z -m "x.y.z"
+   git push origin vx.y.z
+   ```
+
+5. `publish.yml` 自动跑：版本一致 → 类型检查 → 核心测试 → `npm pack` 预检 → `npm publish` → 回查 registry
+6. （可选）去 GitHub 的 `Releases → Draft a new release`，`Choose a tag` 里**选刚推的那个 tag**，
+   标题填 `x.y.z`，说明里贴本文件对应那一节，然后 `Publish release`。
+   **这一步只是补一份带说明的发布记录，不参与发版。**
+
+> ⚠️ 顺序别反：Release 页面里如果**新建** tag（而不是选已有 tag），GitHub 会真的推一个 tag 出去，
+> 那会触发一次发版。所以先推 tag 发版，再去 Releases 页面选它写说明。
+>
+> `publish.yml` 只监听 `push: tags: v*` 和手动触发（`workflow_dispatch`），不监听 release 事件 ——
+> 手动发 Release 不会重复发布 npm 包。
 
 ---
 
-## [1.1.0] - 未发布
-
-> `package.json` 已置为 1.1.0，这批改动合并后打 tag。
+## [1.1.0] - 2026-11-05
 
 ### 新增
 
