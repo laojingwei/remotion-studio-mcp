@@ -656,7 +656,9 @@ export async function composeElement(
   }
 
   const text = str("text");
-  const src = str("videoSrc") ?? str("audioSrc") ?? str("imageSrc") ?? str("imageSeqSrc");
+  // 顺序必须与下面 kind 的判定一致：同时给 imageSrc 和 imageSeqSrc 时，
+  // 以前 src 取前者、kind 判后者，会得到一个「序列帧元素却贴着静态图」的静默错配
+  const src = str("videoSrc") ?? str("audioSrc") ?? str("imageSeqSrc") ?? str("imageSrc");
   const kind =
     text !== undefined
       ? "text"

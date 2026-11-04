@@ -1236,7 +1236,7 @@ export default function App() {
           <button
             className={`ghost outputs-toggle ${resourcesOpen ? "is-on" : ""}`}
             onClick={() => setResourcesOpen((v) => !v)}
-            title="本地素材库：按类别登记文件夹，浏览并复制引用地址（文件不复制）"
+            title="本地素材库：按类别登记文件夹，agent 自己搜自己引用（文件不复制）"
             aria-haspopup="dialog"
             aria-expanded={resourcesOpen}
           >

@@ -58,6 +58,13 @@ const cachePut = (key: string, t: THREE.Texture | null): void => {
   }
 };
 
+/** 命中也要刷新插入顺序，否则 LRU 会逐出「最常用」的那张，反复 dispose/重传 */
+const cacheTouch = (key: string): void => {
+  const t = cache.get(key);
+  cache.delete(key);
+  cache.set(key, t ?? null);
+};
+
 const cacheKey = (src: string, sig: string) => `${src}?${sig}`;
 
 const uvSig = (m: DslTextureSpec): string =>
@@ -114,6 +121,7 @@ export const useDslTexture = (map: DslTextureSpec | undefined): THREE.Texture | 
     }
     const key = cacheKey(src, sig);
     if (cache.has(key)) {
+      cacheTouch(key);
       setTex(cache.get(key) ?? null);
       return;
     }

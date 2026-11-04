@@ -117,6 +117,9 @@
 
 **素材**：`upload_asset`（`registerToLibrary` 决定进库还是进本工程目录）· `list_assets`（**只列共用库**）· `list_project_assets`（本工程目录）· `delete_project_asset` · `organize_assets`（把旧版散在 assets 根下的文件归位，默认 dryRun）· `rename_asset` · `delete_asset`（被工程引用的文件只删条目、保留文件）· `get_asset_info`（纯 Node 读文件头，不依赖外部工具）
 
+**本地资源库**（文件不复制）：用户在编辑器「资源库」面板按类别登记自己的素材文件夹，`search_local_assets` 在里面按名搜索并直接给出可引用的 URL（图片 → `material.map` / `world.image`，音频 → `add_audio_track`）。
+fx 类的序列帧文件夹会整体成一个结果，直接给带 `{frame}` 的 `pattern` + `seqFrom`/`seqTo`/`frameDigits`，原样粘进 `add_element{imageSeqSrc}` 或 `material.map.src` 即可，不用从首末帧名反推。引用只在 server 正在运行的那台机器上有效。
+
 > **文件落在哪**：`public/assets/library/` 是「我的素材」（跨工程、删工程不动）；
 > `public/assets/projects/<工程id>/` 只属于那个工程，**删工程时连带清**（被别的工程/素材库引用的会留下并写进回执）。
 > 旧版散在 `public/assets/` 根下的文件用 `organize_assets` 一次性归位（先 dryRun 看方案）。

@@ -303,6 +303,24 @@ export const ResourcesPopover: React.FC<{
               )}
               <span className="res-crumb-sub">{browse.path ? `${browse.path} · ` : ""}{browse.entries.length} 项</span>
             </div>
+            {browse.sequence ? (
+              <>
+                <div className="res-hint">
+                  序列帧文件夹：{browse.sequence.frames} 帧（{browse.sequence.firstFrame} … {browse.sequence.lastFrame}）
+                  {browse.sequence.continuous ? "" : "，编号有跳号"}。
+                  agent 用 search_local_assets(fx) 直接拿模式串引用，不用逐张挑；下面只预览前 8 帧。
+                </div>
+                <div className="res-grid">
+                  {browse.preview?.map((u) => (
+                    <span key={u} className="res-cell">
+                      <span className="res-thumb">
+                        <img src={resourceThumbUrl(u)} alt="" loading="lazy" />
+                      </span>
+                    </span>
+                  ))}
+                </div>
+              </>
+            ) : null}
             <div className="res-grid">
               {browse.entries.map((ent) =>
                 ent.dir ? (

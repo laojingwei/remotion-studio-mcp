@@ -2465,6 +2465,7 @@ export const Scene3DViewport: React.FC<{
           spec={graph}
           frame={frame}
           t={frame / fps}
+          fps={fps}
           theme={theme}
           camera={IDENTITY_CAMERA}
           selectedId={selectedId}

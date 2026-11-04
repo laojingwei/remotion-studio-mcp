@@ -1,8 +1,9 @@
 import { serve } from "@hono/node-server";
+import { getConnInfo } from "@hono/node-server/conninfo";
 import { serveStatic } from "@hono/node-server/serve-static";
 import { cleanupLegacyBundles } from "./bundle-cache";
 import { serveFiles } from "./static.service";
-import { Hono } from "hono";
+import { Hono, type Context } from "hono";
 import { streamSSE } from "hono/streaming";
 import fs from "node:fs";
 import path from "node:path";
@@ -75,7 +76,7 @@ import { analyzeBeats } from "./audio-analysis.service";
 import { measureLoudness } from "./loudness.service";
 import { buildCompressCurve, summarizeCurve } from "../shared/audio";
 import { MAX_VOLUME } from "../shared/schema";
-import { checkRequest, corsAllowOrigin } from "./security";
+import { checkRequest, corsAllowOrigin, hostnameOf, isLoopbackAddress } from "./security";
 import { VERSION } from "./version";
 import { installRuntimeGuards } from "./runtime";
 import { logToolCall, pruneToolLogs } from "./tool-log.service";
@@ -778,13 +779,35 @@ app.put("/api/ui-prefs", async (c) => {
 
 /* ───────────── 本地资源库（详见 resources.service.ts 顶部的设计说明） ───────────── */
 
-/** 能枚举磁盘内容的接口只对本机开放；LAN 模式（HOST=0.0.0.0）下同网段机器调不了 */
-const isLoopbackHost = (host: string | undefined): boolean => {
-  const h = (host ?? "").split(":")[0]?.toLowerCase() ?? "";
-  return h === "127.0.0.1" || h === "localhost" || h === "::1" || h === "[::1]";
+/** 本机连接的判定收敛在 security.isLoopbackAddress（纯函数、可单测） */
+
+/**
+ * 资源库管理面（能枚举磁盘、能改根目录配置）只认**连接来源**，不认 Host 头。
+ *
+ * Host 是客户端随手可伪造的（`curl -H 'Host: localhost'`）；而 LAN 模式下全局闸
+ * 会跳过 Host/Origin 校验（用户显式选了对外），只靠 Host 等于没挡 —— 同网段设备
+ * 能把资源根目录改成任意路径，再借 /resources/ 流出（带 ACAO:*）读走文件。
+ * socket 的来源地址伪造不了。拿不到 conninfo（非标准适配器/单测）时才退回 Host 名兜底。
+ */
+const isLocalRequest = (c: Context): boolean => {
+  try {
+    const addr = getConnInfo(c).remote.address ?? "";
+    if (addr) return isLoopbackAddress(addr);
+  } catch {
+    // 适配器不提供 conninfo，走下面的兜底
+  }
+  return ["localhost", "127.0.0.1", "::1", "[::1]"].includes(hostnameOf(c.req.header("host") ?? ""));
+};
+
+/** 管理面统一回执：LAN 那头访问时给一句能看懂的话，别只丢 403 */
+const localOnly = (c: Context, what: string): Response | null => {
+  if (isLocalRequest(c)) return null;
+  return c.json({ error: `${what}只允许在本机操作（LAN 模式下请回到装服务的那台机器上配）` }, 403);
 };
 
 app.get("/api/resources/config", (c) => {
+  const blocked = localOnly(c, "读取资源库配置");
+  if (blocked) return blocked;
   const dirs = readResourceDirs();
   return c.json({
     origin: `http://127.0.0.1:${PORT}`,
@@ -798,6 +821,8 @@ app.get("/api/resources/config", (c) => {
 });
 
 app.put("/api/resources/config", async (c) => {
+  const blocked = localOnly(c, "修改资源库配置");
+  if (blocked) return blocked;
   const body = (await c.req.json().catch(() => null)) as { category?: string; dir?: string | null } | null;
   if (!body?.category) return c.json({ error: "需要 category" }, 400);
   // dir 为空/null = 清除该类的目录配置（配错了或不想用了）
@@ -818,7 +843,8 @@ app.put("/api/resources/config", async (c) => {
 });
 
 app.post("/api/resources/browse", async (c) => {
-  if (!isLoopbackHost(c.req.header("host"))) return c.json({ error: "资源浏览只允许本机使用" }, 403);
+  const blocked = localOnly(c, "资源浏览");
+  if (blocked) return blocked;
   const body = (await c.req.json().catch(() => ({}))) as { category?: string; sub?: string };
   if (!body.category) return c.json({ error: "需要 category" }, 400);
   try {
@@ -830,7 +856,8 @@ app.post("/api/resources/browse", async (c) => {
 
 /** 目录选择器：从盘符逐级往下走，给「浏览…」按钮用。能枚举磁盘 → 只对本机开放 */
 app.post("/api/resources/pick", async (c) => {
-  if (!isLoopbackHost(c.req.header("host"))) return c.json({ error: "目录选择只允许本机使用" }, 403);
+  const blocked = localOnly(c, "目录选择");
+  if (blocked) return blocked;
   const body = (await c.req.json().catch(() => ({}))) as { path?: string };
   try {
     return c.json(pickDir(body.path ?? ""));
@@ -839,7 +866,9 @@ app.post("/api/resources/pick", async (c) => {
   }
 });
 
-app.post("/api/resources/search", async (c) => {  if (!isLoopbackHost(c.req.header("host"))) return c.json({ error: "资源搜索只允许本机使用" }, 403);
+app.post("/api/resources/search", async (c) => {
+  const blocked = localOnly(c, "资源搜索");
+  if (blocked) return blocked;
   const body = (await c.req.json().catch(() => ({}))) as {
     category?: string;
     keyword?: string;
@@ -858,7 +887,8 @@ app.post("/api/resources/search", async (c) => {  if (!isLoopbackHost(c.req.head
 
 /** M1 直接流出原图当缩略图（编解码依赖太重，真缩略图是 M2）；p 是站内 /resources/… 引用 */
 app.get("/api/resources/thumb", (c) => {
-  if (!isLoopbackHost(c.req.header("host"))) return c.json({ error: "缩略图只允许本机使用" }, 403);
+  const blocked = localOnly(c, "缩略图");
+  if (blocked) return blocked;
   const raw = c.req.query("p") ?? "";
   let p: string;
   try {
@@ -868,12 +898,25 @@ app.get("/api/resources/thumb", (c) => {
   }
   const m = /^\/resources\/([a-z]+)\/(.+)$/.exec(p.replace(/^https?:\/\/[^/]+/, ""));
   if (!m) return c.json({ error: "p 要是 /resources/<类>/<路径> 形式" }, 400);
-  return serveResourceFile(c, m[1], m[2]);
+  // 引用 URL 的路径段是 encodeURIComponent 过的（中文/空格/#），这里按段解回来，
+  // 和 /resources/:category/* 流出路由的处理保持一致，否则带中文的路径会 404
+  const rel = m[2]
+    .split("/")
+    .map((seg) => {
+      try {
+        return decodeURIComponent(seg);
+      } catch {
+        return seg;
+      }
+    })
+    .join("/");
+  return serveResourceFile(c, m[1], rel);
 });
 
 // 文件流出：编辑器预览（同源）和渲染（按 URL 拉取）都走这里。
 // 有意不做 loopback 限制——LAN 模式下别的机器的编辑器页面也要能显示素材；
-// 但拉文件必须知道精确路径，能枚举目录的 browse/search 已经挡在本机后面。
+// 但拉文件必须知道精确路径，且**管理面（config/browse/search/pick/thumb）按连接来源
+// 限本机**，同网段设备改不了根目录、也枚举不了目录，所以拿不到"精确路径"。
 app.get("/resources/:category/*", (c) => {
   const catId = c.req.param("category");
   const rel = c.req.path

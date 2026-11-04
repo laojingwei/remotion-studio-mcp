@@ -269,6 +269,10 @@ export const materialSchema = z.object({
       seqFrom: z.number().int().min(0).optional().describe("序列起始帧编号（含）"),
       seqTo: z.number().int().min(0).optional().describe("序列结束帧编号（含）"),
       seqFps: z.number().min(1).max(120).optional().describe("序列播放速率（帧/秒），默认 30"),
+      loop: z
+        .boolean()
+        .optional()
+        .describe("序列贴图画完是否回绕循环：默认 false = 停末帧（爆炸/破碎）；流动岩浆/循环烟雾设 true"),
     })
     .optional()
     .describe(

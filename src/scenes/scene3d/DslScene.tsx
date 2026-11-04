@@ -320,9 +320,9 @@ const geometryOf = (g: DslNode["geometry"]): React.ReactElement | null => {
  * **贴图规则**：map 存在时 color 强制白色、body 失效。three 里 map 与 color 是
  * 相乘关系，body 的降饱和压暗会把整张贴图染成脏色——这是果冻球问题的翻版。
  * metalness/roughness 照常生效（贴图金属是合理需求）。
- * transparent 在有 map 时放宽为 true：带 alpha 通道的 PNG（镂空 Logo、剪影）
- * 必须开 transparent 才不渲成实心块；对不透明的 JPG 无视觉影响，只是进了
- * 透明渲染队列——节点数 ≤48 的场景里排序开销可忽略。
+ * transparent 按「实际不透明度」判断，静态贴图默认不进透明队列（曾因 `op<1 || hasMap`
+ * 把土星塞进透明列表、被环的深度剔掉半张脸）。只有两种例外才开：序列帧贴图
+ * （src 带 {frame}，PNG 的 alpha 必须生效）和显式 `material.transparent:true`（镂空 Logo）。
  */
 const materialOf = (
   node: DslNode,
@@ -379,7 +379,7 @@ const materialOf = (
         side={side}
         transparent={transparent}
         opacity={op}
-        depthWrite={op >= 1}
+        depthWrite={op >= 1 && !transparent}
       />
     );
   }
@@ -421,12 +421,12 @@ const materialOf = (
       transparent={transparent}
       opacity={op}
       /**
-       * depthWrite 按**实际不透明度**判断，不能按 transparent 标记：
-       * 带贴图的行星 transparent 恒为 true（map 分支自动开透明），但 opacity=1 时
-       * 它必须写深度——否则土星环的背半会整个透过球体显示出来（实测踩过）。
-       * 真正的半透明（op<1）才不写，让环能透出后面的行星。
+       * depthWrite 看「实际不透明度 + 是否真透明材质」：
+       * 不透明的贴图行星（transparent=false）必须写深度，否则土星环的背半会整个透出来；
+       * 序列帧特效 / 镂空 Logo 虽然 transparent=true，透明像素却不该写深度挡住后面的物体，
+       * 所以也关掉 depthWrite。depthTest 仍开着，前方物体照常遮挡它。
        */
-      depthWrite={op >= 1}
+      depthWrite={op >= 1 && !transparent}
       flatShading={m?.flatShading ?? false}
     />
   );
@@ -454,8 +454,9 @@ const NodeView: React.FC<{
   // hook 必须无条件调用（不能挂在 if 上）：没配 map 时返回 null，材质走纯色
   /**
    * 序列帧贴图：src 带 {frame} 时按当前帧算出具体地址，每帧换一张贴图。
-   * 帧号计算在 shared/seqFrame.ts（2D imageSeq 同一份逻辑）；loop=true——
-   * 3D 贴图动画（流动岩浆/循环烟雾）回绕比停在末帧常见。
+   * 帧号计算在 shared/seqFrame.ts（2D imageSeq 同一份逻辑）；
+   * loop 默认 false —— 与 2D 一致，爆炸/破碎这类一次性特效播完停末帧，
+   * 循环烟雾/流动岩浆才由 agent 显式设 map.loop:true（过去硬编码 true 会把特效反复重播）。
    */
   const mapSpec = node.material?.map;
   const mapSrc =
@@ -466,7 +467,7 @@ const NodeView: React.FC<{
             seqFrom: mapSpec.seqFrom ?? 1,
             seqTo: mapSpec.seqTo ?? 1,
             seqFps: mapSpec.seqFps ?? 30,
-            loop: true,
+            loop: mapSpec.loop ?? false,
           },
           frame,
           fps,

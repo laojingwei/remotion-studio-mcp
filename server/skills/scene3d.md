@@ -189,18 +189,21 @@
 
 ### 序列帧贴图（特效叠层）
 
-`material.map.src` 带 `{frame}` 占位符就是序列帧贴图——每一帧换一张图，爆炸/烟雾/光效叠在 3D 物体上：
+`material.map.src` 带 `{frame}` 占位符就是序列帧贴图——每一帧换一张图，爆炸/烟雾/光效叠在 3D 物体上。
+**不要自己拼 src**：`search_local_assets(fx)` 的序列帧结果直接给 `pattern`（带 `{frame}` 的完整 URL）、
+`seqFrom` / `seqTo` / `frameDigits`，原样抄进来即可（真实帧名常带前缀，写成 `<文件夹url>/{frame}.png` 会 404）：
 
 ```json
-"material": { "map": { "src": "<search_local_assets 给的文件夹url>/{frame}.png",
+"material": { "map": { "src": "<结果里的 pattern>",
                         "seqFrom": 1, "seqTo": 240, "frameDigits": 4, "seqFps": 30 } }
 ```
 
-- seqFrom/seqTo/frameDigits 直接抄 `search_local_assets(fx)` 序列帧结果里给的首末帧和位数
+- 结果里的 `continuous: false` 表示中间跳号，别按「首帧 + N」盲推帧名，先用 keyword 核对实际文件
 - 透明自动开（PNG 的 alpha 生效，透明区域透出背景）；静态镂空 Logo 用 `material.transparent: true` 显式开
-- 循环回绕；`seqFps` 控制快慢（工程 30fps + seqFps 30 = 1:1）
-- 序列帧在**2D 场景**里用 `add_element { imageSeqSrc: "<url>/{frame}.png", seqFrom, seqTo, frameDigits, seqFps }`，
-  一样是透明叠层，x/y/size 照常给
+- **默认播完停末帧**（爆炸/破碎这类一次性特效）；循环烟雾/流动岩浆才加 `map.loop: true`
+- `seqFps` 控制快慢（工程 30fps + seqFps 30 = 1:1）
+- 序列帧在**2D 场景**里用 `add_element { imageSeqSrc: "<结果里的 pattern>", seqFrom, seqTo, frameDigits }`，
+  一样是透明叠层、默认停末帧，x/y/size 照常给；忘写 `{frame}` 或 `seqTo` 会被直接报错，不会静默静止
 
 漏写 `ambient` 时内置兜底只有 0.35（只是"别纯黑"），写图回执会提示——**别等抽帧才发现车是黑的**。
 

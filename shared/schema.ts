@@ -362,6 +362,35 @@ export const elementSchema = z.object({
 });
 export type OverlayElement = z.infer<typeof elementSchema>;
 
+/**
+ * imageSeq 的跨字段校验（zod 表达不了，parse 之外再过一道）。
+ *
+ * 「src 忘写 {frame}」「忘给 seqTo（默认 1）」都会让序列静默变成一张静止图：
+ * 接口报成功、画面纹丝不动，agent 完全看不出配置错了。3D 侧 dslIssues 早有同款拦截，
+ * 2D 这里补齐——add_element 与 update_element 两条写路径都会调用（见 ops.ts 的 parseElement）。
+ */
+export const imageSeqIssues = (raw: {
+  kind?: string;
+  src?: string;
+  seqFrom?: number;
+  seqTo?: number;
+}): string[] => {
+  if (raw.kind !== "imageSeq") return [];
+  const issues: string[] = [];
+  const src = raw.src ?? "";
+  if (!src.includes("{frame}")) {
+    issues.push("src 必须带 {frame} 占位符（如 .../seq/{frame}.png），否则序列不会动");
+  }
+  const from = raw.seqFrom ?? 1;
+  const to = raw.seqTo ?? 1;
+  if (to <= from) {
+    issues.push(
+      `seqTo(${to}) 必须 > seqFrom(${from})——首末帧编号在 search_local_assets(fx) 的序列帧结果里直接给了`,
+    );
+  }
+  return issues;
+};
+
 /** 字幕样式（单拎出来：ops 写入时要按它校验，导出前也要能单独验） */
 export const subtitleStyleSchema = z.object({
   fontSize: z.number().optional().describe("字号（短边百分比，默认 2.6）"),

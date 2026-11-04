@@ -1045,6 +1045,18 @@ export type ResourceBrowse = {
   path: string;
   parent: string | null;
   entries: ResourceEntry[];
+  /** 当前层是序列帧文件夹（fx 类）：面板显示摘要而不是空白网格 */
+  sequence?: {
+    pattern: string;
+    frames: number;
+    seqFrom: number;
+    seqTo: number;
+    frameDigits: number;
+    continuous: boolean;
+    firstFrame: string;
+    lastFrame: string;
+  };
+  preview?: string[];
 };
 
 export type ResourceHit = {
@@ -1054,6 +1066,15 @@ export type ResourceHit = {
   size: number;
   mtime: number;
   url: string;
+  kind?: "sequence";
+  frames?: number;
+  firstFrame?: string;
+  lastFrame?: string;
+  pattern?: string;
+  seqFrom?: number;
+  seqTo?: number;
+  frameDigits?: number;
+  continuous?: boolean;
 };
 
 export async function fetchResourcesConfig(): Promise<{

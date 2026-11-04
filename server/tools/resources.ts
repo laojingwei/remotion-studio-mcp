@@ -24,19 +24,25 @@ type SearchRes = {
     frames?: number;
     firstFrame?: string;
     lastFrame?: string;
+    /** 序列帧：可直接粘进 imageSeqSrc / material.map.src 的模式串 URL */
+    pattern?: string;
+    seqFrom?: number;
+    seqTo?: number;
+    frameDigits?: number;
+    continuous?: boolean;
   }[];
 };
 
 const fmtSize = (n: number) =>
-  n > 1024 * 1024 ? `${(n / 1024 / 1024).toFixed(1)} MB` : `${Math.max(1, Math.round(n / 1024))} KB`;
+  n === 0 ? "0 KB" : n > 1024 * 1024 ? `${(n / 1024 / 1024).toFixed(1)} MB` : `${Math.max(1, Math.round(n / 1024))} KB`;
 
 /** 每类的引用去处：回执里直接告诉 agent「拿到 URL 之后写进哪个字段」 */
 const USAGE_HINT: Record<string, string> = {
-  image: "scene3d 贴图 → material.map:{src:<url>}；全景图 → set_graph_world world:{mode:\"image\", image:<url>}；2D 图片元素可直接用",
+  image: "scene3d 贴图 → material.map:{src:<url>}；全景图 → set_graph_world world:{mode:\"image\", image:<url>}；2D 图片 → add_element{imageSrc:<url>}",
   bgm: "add_audio_track（或 set_audio）的 src",
   sfx: "add_audio_track 的 src（音效轨）",
   video: "视频元素的 src",
-  fx: "特效元素。lottie json 直接引用；**序列帧文件夹**是一个结果——逐帧 URL = 文件夹 url + / + 帧名（首末帧已给出）， Remotion 里用 for 循环 + staticFile/getStaticFiles 逐帧取",
+  fx: "**序列帧结果直接给 pattern（带 {frame}）和 seqFrom/seqTo/frameDigits**：2D → add_element{imageSeqSrc:pattern, seqFrom, seqTo, frameDigits}；3D → material.map{src:pattern, seqFrom, seqTo, frameDigits}。lottie json 直接引用 url，别用 staticFile/getStaticFiles（那是 bundle 内文件，对 /resources/ 地址无效）",
   other: "仅作登记引用",
 };
 
@@ -48,6 +54,8 @@ export const RESOURCE_TOOLS: ToolDef[] = [
       "类别（用户在各分类下配置了自己的文件夹）：image 图片 / bgm 配乐 / sfx 音效 / video 视频 / fx 特效（lottie、序列帧）/ other 其它。\n" +
       "**文件不复制、不搬运**：拿到 url 直接写进对应字段（图片 → material.map / world.image；音频 → add_audio_track 的 src），\n" +
       "渲染时由本机 server 按地址流出 —— 所以这些引用只在「server 正在运行的那台机器」上有效。\n" +
+      "fx 类里的**序列帧文件夹**会整体返回一个结果，并直接给出带 {frame} 的模式串 + seqFrom/seqTo/frameDigits，\n" +
+      "可直接粘进 add_element{imageSeqSrc} 或 material.map.src，不用自己从首末帧名反推。\n" +
       "分类路径是用户在编辑器「资源库」面板里配置的；没配置的类别会报错提示先去配置。\n" +
       "模型（glb 等）暂不支持——scene3d 还没有加载外部模型的节点，搜了也用不上。",
     shape: {
@@ -78,15 +86,21 @@ export const RESOURCE_TOOLS: ToolDef[] = [
         );
       }
       const lines = res.hits.map((h) => {
-        const when = new Date(h.mtime).toISOString().slice(0, 10);
         if (h.kind === "sequence") {
+          const gap = h.continuous
+            ? ""
+            : " ⚠️ 编号不连续（中间跳号），按 frames 递增推算会拼出不存在的帧，先用 keyword 核对实际帧名";
           return (
-            `· [序列帧] ${h.name}（${h.frames} 帧：${h.firstFrame} … ${h.lastFrame}，${when}）\n` +
-            `  逐帧引用：${h.url}<帧名>，帧名从 ${h.firstFrame} 连续编号到 ${h.lastFrame}\n` +
+            `· [序列帧] ${h.name}（${h.frames} 帧：${h.firstFrame} … ${h.lastFrame}${gap}）\n` +
+            `  模式串（直接粘）：${h.pattern}\n` +
+            `  参数：seqFrom=${h.seqFrom} seqTo=${h.seqTo} frameDigits=${h.frameDigits} seqFps=30（默认，工程 30fps 时 1:1）\n` +
+            `  用法：2D add_element{imageSeqSrc:模式串, seqFrom, seqTo, frameDigits}；` +
+            `3D material.map{src:模式串, seqFrom, seqTo, frameDigits}\n` +
             `  位置：${h.abs}`
           );
         }
-        return `· ${h.name}（${fmtSize(h.size)}，${when}）\n  引用：${h.url}\n  位置：${h.abs}`;
+        const when = h.mtime ? new Date(h.mtime).toISOString().slice(0, 10) : "";
+        return `· ${h.name}（${fmtSize(h.size)}${when ? `，${when}` : ""}）\n  引用：${h.url}\n  位置：${h.abs}`;
       });
       const head =
         `在「${a.category}」找到 ${res.hits.length} 个${res.truncated ? `（结果截断到 ${res.hits.length} 条，可加 limit 或换更具体的关键词）` : ""}：\n` +

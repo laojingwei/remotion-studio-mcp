@@ -19,10 +19,12 @@ import { readUiPrefs, writeUiPrefs } from "./store";
  * 因为 Remotion 渲染的 bundle 在另一个 origin，相对路径会指错地方）。
  *
  * 三条安全线：
- *   1. 一切读取都先 resolve，再确认仍落在该类别配置的根目录内（防 .. 与软链越界）
- *   2. browse / search / thumb 这类「能枚举你磁盘内容」的接口只对本机（loopback Host）开放，
- *      LAN 模式（HOST=0.0.0.0）下同网段机器调不了 —— 文件流出仍开放（LAN 下编辑器预览需要），
- *      但攻击者必须知道精确路径才能拉到文件
+ *   1. 一切读取都先 resolve，再确认仍落在该类别配置的根目录内（防 .. 越界）；
+ *      真正流出文件内容前再用 realpath 复核一次，符号链接/junction 指到根外也拦
+ *   2. config / browse / search / thumb / pick 这类「能枚举磁盘内容、能改根目录」的管理接口
+ *      按**连接来源**只对 127.0.0.1 / ::1 开放（见 index.ts 的 isLocalRequest）——
+ *      LAN 模式下同网段机器既枚举不了，也改不了配置；文件流出仍开放（LAN 下编辑器预览需要），
+ *      但攻击者必须知道精确路径，而精确路径只能从本机管理面拿到
  *   3. 未配置的类别一律「还没配置」，不回退到全盘
  */
 
@@ -131,7 +133,9 @@ const RES_MIME: Record<string, string> = {
 
 const resMimeOf = (file: string): string => RES_MIME[path.extname(file).toLowerCase()] ?? mimeOf(file);
 
-/** rel（/ 分隔、已 decode）→ 绝对路径；越界返回 null。Windows 大小写不敏感盘也安全 */
+/** rel（/ 分隔、已 decode）→ 绝对路径；`..` 越界返回 null。
+ * 符号链接指向根目录外的情况这里看不出来（`path.resolve` 不解析链接），
+ * 由 serveResourceFile 在真正读内容前用 realpath 复核。 */
 function safeJoin(root: string, rel: string): string | null {
   const rootAbs = path.resolve(root);
   const full = path.resolve(rootAbs, ...rel.split("/").filter((p) => p && p !== "."));
@@ -154,6 +158,10 @@ export function browseCategory(catId: string, sub = ""): {
   path: string;
   parent: string | null;
   entries: ResourceEntry[];
+  /** 当前这一层就是序列帧文件夹时给出识别结果（fx 类），前端据此显示摘要而不是空白网格 */
+  sequence?: DetectedSequence;
+  /** 序列帧文件夹的前几帧 URL，给面板预览用（只给 8 张，别把几百张原图一起拉出来） */
+  preview?: string[];
 } {
   const cat = resourceCategoryOf(catId);
   if (!cat) throw new Error(`没有「${catId}」这个资源类别`);
@@ -205,7 +213,20 @@ export function browseCategory(catId: string, sub = ""): {
   entries.sort((a, b) => (a.dir !== b.dir ? (a.dir ? -1 : 1) : a.name.localeCompare(b.name, "zh")));
 
   const parent = sub ? (sub.includes("/") ? sub.slice(0, sub.lastIndexOf("/")) : "") : null;
-  return { root, path: sub, parent, entries };
+
+  /**
+   * fx 类目录里的单帧 PNG 不在 exts 白名单内（整夹才是结果），所以按普通规则列出来
+   * 会是「0 项」——用户点开自己的特效库以为读不出东西。这里复用同一次 readdir 的条目
+   * 就地识别，返回摘要 + 少量预览帧（不额外读盘，也不在前端铺几百张原图）。
+   */
+  const sequence = cat.id === "fx" ? (detectSequenceFromEntries(list) ?? undefined) : undefined;
+  const preview = sequence
+    ? list
+        .filter((e) => e.isFile() && SEQ_IMAGE_EXTS.has(path.extname(e.name).toLowerCase()))
+        .slice(0, 8)
+        .map((e) => resourceUrl(catId, sub ? `${sub}/${e.name}` : e.name))
+    : undefined;
+  return { root, path: sub, parent, entries, ...(sequence ? { sequence, preview } : {}) };
 }
 
 /* ───────────── 目录选择器（「浏览…」按钮的后端） ───────────── */
@@ -279,9 +300,16 @@ export function pickDir(abs = ""): { path: string; parent: string | null; entrie
   return { path: full, parent: parent === full ? "" : parent, entries };
 }
 
+/**
+ * 逐段编码：中文/空格/#/?/% 直接拼进 URL 会截断或 404。
+ * 但 `{frame}` 是序列帧模式串的占位符，必须原样留给渲染端替换，不能被编码成 %7Bframe%7D。
+ */
+const encodeSegment = (s: string): string =>
+  s.split("{frame}").map((p) => encodeURIComponent(p)).join("{frame}");
+
 /** 站内相对引用（/resources/<类>/<相对路径>） */
 export const resourceRelUrl = (catId: string, rel: string): string =>
-  `/resources/${catId}/${rel.split(path.sep).join("/")}`;
+  `/resources/${catId}/${rel.split(/[\\/]/).filter((p) => p && p !== ".").map(encodeSegment).join("/")}`;
 
 /** 完整引用（写进工程字段 / 渲染用这个）：本机 origin + 站内相对引用 */
 export const resourceUrl = (catId: string, rel: string): string =>
@@ -295,13 +323,20 @@ export type ResourceHit = {
   abs: string;
   size: number;
   mtime: number;
-  /** 引用地址（完整 URL，可直接写进 material.map / world.image / 音频轨） */
+  /** 站内引用 URL：普通文件直达；kind=sequence 时指向文件夹（逐帧用下面的 pattern） */
   url: string;
-  /** 序列帧文件夹专用：kind=sequence 时 url 指向文件夹，逐帧 = url + "/" + 帧名 */
+  /** 序列帧文件夹专用 */
   kind?: "sequence";
   frames?: number;
   firstFrame?: string;
   lastFrame?: string;
+  /** 可直接粘进 imageSeqSrc / material.map.src 的模式串 URL（含 {frame}，已编码） */
+  pattern?: string;
+  seqFrom?: number;
+  seqTo?: number;
+  frameDigits?: number;
+  /** 编号是否连续；false = 中间跳号，不能按「首帧 + N」盲拼 */
+  continuous?: boolean;
 };
 
 /* ───────────── 序列帧识别（特效类） ───────────── */
@@ -322,12 +357,29 @@ const SEQ_MIN_FRAMES = 8;
 
 /**
  * 在**已经读到手的目录条目**里做序列帧识别（不重新读盘）。
- * 规则：某「前缀+编号」组的图片 ≥8 张即认定；返回帧数与首末帧文件名。
+ * 规则：某「前缀+编号」组的图片 ≥8 张即认定；返回可直接用的模式串与参数。
+ *
+ * 保留文件名的原始大小写（分组 key 才小写）：Windows 大盘不敏感看不出差别，
+ * 但在大小写敏感的文件系统上，把 `Explosion_0001.png` 回执成 `explosion_…` 会 404。
+ * 同时返回 continuous：编号跳号时不能让 agent 按「首帧 + N」盲拼出并不存在的帧。
  */
-function detectSequenceFromEntries(
-  list: fs.Dirent[],
-): { frames: number; firstFrame: string; lastFrame: string } | null {
-  const groups = new Map<string, { count: number; min: number; max: number; pad: number; ext: string }>();
+export type DetectedSequence = {
+  /** 帧文件名模式串（不含目录）：前缀 + {frame} + 扩展名 */
+  pattern: string;
+  frames: number;
+  seqFrom: number;
+  seqTo: number;
+  frameDigits: number;
+  continuous: boolean;
+  firstFrame: string;
+  lastFrame: string;
+};
+
+export function detectSequenceFromEntries(list: fs.Dirent[]): DetectedSequence | null {
+  const groups = new Map<
+    string,
+    { count: number; min: number; max: number; pad: number; ext: string; rawPrefix: string }
+  >();
   let files = 0;
   for (const e of list) {
     if (!e.isFile()) continue;
@@ -346,22 +398,27 @@ function detectSequenceFromEntries(
       g.max = Math.max(g.max, num);
       g.pad = Math.max(g.pad, m[2].length);
     } else {
-      groups.set(key, { count: 1, min: num, max: num, pad: m[2].length, ext });
+      groups.set(key, { count: 1, min: num, max: num, pad: m[2].length, ext, rawPrefix: m[1] });
     }
   }
   if (files < SEQ_MIN_FRAMES) return null;
-  let best: { count: number; min: number; max: number; pad: number; ext: string } | null = null;
-  let bestPrefix = "";
-  for (const [key, g] of groups) {
+  let best: { count: number; min: number; max: number; pad: number; ext: string; rawPrefix: string } | null = null;
+  for (const g of groups.values()) {
     if (g.count < SEQ_MIN_FRAMES) continue;
-    if (!best || g.count > best.count) {
-      best = g;
-      bestPrefix = key;
-    }
+    if (!best || g.count > best.count) best = g;
   }
   if (!best) return null;
-  const fmt = (n: number) => bestPrefix + String(n).padStart(best!.pad, "0") + best!.ext;
-  return { frames: best.count, firstFrame: fmt(best.min), lastFrame: fmt(best.max) };
+  const fmt = (n: number) => best!.rawPrefix + String(n).padStart(best!.pad, "0") + best!.ext;
+  return {
+    pattern: `${best.rawPrefix}{frame}${best.ext}`,
+    frames: best.count,
+    seqFrom: best.min,
+    seqTo: best.max,
+    frameDigits: best.pad,
+    continuous: best.count === best.max - best.min + 1,
+    firstFrame: fmt(best.min),
+    lastFrame: fmt(best.max),
+  };
 }
 
 export function searchCategory(
@@ -394,7 +451,13 @@ export function searchCategory(
    * 是则整体成一个结果、不再展开子项（几百帧逐个列既无意义又白烧扫描量）；
    * 否则才遍历子项：文件过滤，子目录入队。
    */
-  while (queue.length && hits.length < limit) {
+  while (queue.length) {
+    // 队列里还有没扫的目录 = 结果不全。不能让「hits 恰好等于 limit」悄悄退出后
+    // 还回 truncated:false，agent 会以为已经列全了。
+    if (hits.length >= limit || visited > 50_000) {
+      truncated = queue.length > 0;
+      break;
+    }
     const { abs, rel } = queue.shift()!;
     let list: fs.Dirent[];
     try {
@@ -405,19 +468,36 @@ export function searchCategory(
 
     if (cat.id === "fx") {
       const seq = detectSequenceFromEntries(list);
-      if (seq) {
+      const name = path.basename(abs);
+      // 序列帧文件夹是「一个结果」，也必须吃 keyword / ext 过滤：
+      // 否则搜「碎石」会把全部 298 个序列夹塞满 limit，回执还劝 agent 换关键词（无效）
+      const matchesKw = !kw || name.toLowerCase().includes(kw) || rel.toLowerCase().includes(kw);
+      // ext 对文件夹按帧的扩展名判定：找 json/lottie 时不该混进一堆 PNG 序列
+      const matchesExt = !extFilter.length || extFilter.some((e) => SEQ_IMAGE_EXTS.has(e));
+      if (seq && matchesKw && matchesExt) {
+        visited++;
         hits.push({
-          name: path.basename(abs),
+          name,
           rel,
           abs,
           size: 0,
           mtime: 0,
           url: `${resourceUrl(catId, rel)}/`,
           kind: "sequence",
-          ...seq,
+          // 直接给可粘贴的模式串，别让 agent 从首末帧名反推前缀/位数/起点
+          pattern: resourceUrl(catId, rel ? `${rel}/${seq.pattern}` : seq.pattern),
+          frames: seq.frames,
+          firstFrame: seq.firstFrame,
+          lastFrame: seq.lastFrame,
+          seqFrom: seq.seqFrom,
+          seqTo: seq.seqTo,
+          frameDigits: seq.frameDigits,
+          continuous: seq.continuous,
         });
         continue; // 序列帧内部不再展开
       }
+      // 关键词不匹配时不整夹跳过：里面可能还有 json/lottie 命中。
+      // fx 白名单不收单帧图片，几百张 PNG 只计 visited、不进结果，也不额外读盘。
     }
 
     for (const ent of list) {
@@ -425,10 +505,7 @@ export function searchCategory(
         truncated = true;
         break;
       }
-      if (visited++ > 50_000) {
-        truncated = true;
-        break;
-      }
+      visited++;
       if (ent.name.startsWith(".")) continue;
       const childRel = rel ? `${rel}/${ent.name}` : ent.name;
       if (ent.isDirectory()) {
@@ -460,6 +537,18 @@ export function searchCategory(
   return { root, total: hits.length, truncated, hits };
 }
 
+/** realpath(root) 缓存：序列帧每帧都要复核越界，别每次都做一次磁盘解析 */
+const realRootCache = new Map<string, string>();
+
+const realRootOf = (root: string): string => {
+  const hit = realRootCache.get(root);
+  if (hit) return hit;
+  const real = fs.realpathSync(root);
+  if (realRootCache.size > 32) realRootCache.clear();
+  realRootCache.set(root, real);
+  return real;
+};
+
 /**
  * 把 `/resources/<类>/<相对路径>` 的文件流出去。
  * 复用 static.service 的 MIME 表和 Range 逻辑（音视频要能拖进度条），
@@ -474,6 +563,20 @@ export function serveResourceFile(c: Context, catId: string, rel: string): Respo
 
   const full = safeJoin(root, rel);
   if (!full) return c.json({ error: "路径越界" }, 403);
+
+  /**
+   * 符号链接 / Windows junction 能把字符串上「在根内」的路径指到根外，
+   * safeJoin 的 path.resolve 看不见这一层。真正读内容之前用 realpath 复核一次；
+   * root 自己也 realpath（允许配置的根目录本身是链接），并缓存避免每帧重复 syscall。
+   */
+  try {
+    const realRoot = realRootOf(root);
+    const realFull = fs.realpathSync(full);
+    const inside = path.relative(realRoot, realFull);
+    if (inside.startsWith("..") || path.isAbsolute(inside)) return c.json({ error: "路径越界" }, 403);
+  } catch {
+    return c.notFound();
+  }
 
   let stat: fs.Stats;
   try {
