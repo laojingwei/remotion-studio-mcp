@@ -16,6 +16,7 @@ import { cancelRender, fetchHistory, fetchTask, fetchTasks, requestRender, reque
 import { PROJ_SORT_DEFAULT, countArchived, filterProjects, nextSort, readProjSort, timeOf, type ProjSort, type ProjSortKey } from "./projectFilter";
 import { OutputsDialog } from "./panels/OutputsDialog";
 import { OutputsPopover } from "./panels/OutputsPopover";
+import { ResourcesPopover } from "./panels/ResourcesPopover";
 import { LogDrawer } from "./panels/LogDrawer";
 import { RenderDialog, type RenderFormat, type RenderQuality } from "./panels/RenderDialog";
 import { TtsDialog } from "./panels/TtsDialog";
@@ -308,6 +309,9 @@ export default function App() {
   const [outputsOpen, setOutputsOpen] = useState(false);
   /** 「产物」按钮所在的容器：弹层靠它把自己的触发器排除在"点外面"之外 */
   const outputsAnchorRef = useRef<HTMLDivElement | null>(null);
+  /** 资源库浮框（本地素材目录，按类别登记；文件不复制，引用直出） */
+  const resourcesAnchorRef = useRef<HTMLDivElement | null>(null);
+  const [resourcesOpen, setResourcesOpen] = useState(false);
   /** 浮框的重拉信号：抽完帧、渲染完就 +1 */
   const [outputsRefresh, setOutputsRefresh] = useState(0);
   const [workspaceOpen, setWorkspaceOpen] = useState(false);
@@ -1227,6 +1231,18 @@ export default function App() {
               </button>
             </div>
           ) : null}
+        </div>
+        <div className="topbar-outputs" ref={resourcesAnchorRef}>
+          <button
+            className={`ghost outputs-toggle ${resourcesOpen ? "is-on" : ""}`}
+            onClick={() => setResourcesOpen((v) => !v)}
+            title="本地素材库：按类别登记文件夹，浏览并复制引用地址（文件不复制）"
+            aria-haspopup="dialog"
+            aria-expanded={resourcesOpen}
+          >
+            资源库
+          </button>
+          <ResourcesPopover open={resourcesOpen} onClose={() => setResourcesOpen(false)} anchorRef={resourcesAnchorRef} />
         </div>
         <div className="topbar-outputs" ref={outputsAnchorRef}>
           <button

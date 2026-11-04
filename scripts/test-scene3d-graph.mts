@@ -309,6 +309,39 @@ test("findWorldSky 认 id / Poly Haven 资产名 / 文件名", async () => {
   }
 });
 
+
+test("dslIssues:序列帧贴图的参数校验", () => {
+  // 缺 seqTo/seqTo<=seqFrom → 报
+  const bad = dslIssues({
+    nodes: [
+      { id: "a", geometry: { type: "box" }, material: { map: { src: "http://x/{frame}.png" } } },
+      { id: "b", geometry: { type: "box" }, material: { map: { src: "http://x/{frame}.png", seqFrom: 10, seqTo: 5 } } },
+    ],
+  } as never);
+  assert.ok(bad.some((x) => x.includes("a") && x.includes("seqTo")));
+  assert.ok(bad.some((x) => x.includes("b") && x.includes("seqTo")));
+
+  // 给了 seqFrom/seqTo 但 src 没写 {frame} → 提醒序列不会动
+  const noPattern = dslIssues({
+    nodes: [
+      { id: "c", geometry: { type: "box" }, material: { map: { src: "http://x/t.png", seqFrom: 1, seqTo: 10 } } },
+    ],
+  } as never);
+  assert.ok(noPattern.some((x) => x.includes("c") && x.includes("{frame}")));
+
+  // 参数齐全 → 不报
+  const ok = dslIssues({
+    nodes: [
+      {
+        id: "d",
+        geometry: { type: "box" },
+        material: { map: { src: "http://x/{frame}.png", seqFrom: 1, seqTo: 240, frameDigits: 4, seqFps: 30 } },
+      },
+    ],
+  } as never);
+  assert.ok(!ok.some((x) => x.includes("d")));
+});
+
 console.log("");
 if (failures.length) {
   console.log(`✗ ${failures.length} 项失败：`);

@@ -8,6 +8,7 @@ import { hasCurve, pathAt, type Vec3 } from "../../../shared/scene3dPath";
 import { explicitBody, glowTexture, hash01, metalBody, resolveColor, shade } from "./color";
 import { Ground } from "./World";
 import { useDslTexture } from "./texture";
+import { seqSrcAt } from "../../../shared/seqFrame";
 
 /**
  * 场景图 DSL 的渲染器（M2）。
@@ -353,9 +354,12 @@ const materialOf = (
    * 贴图本身不透明（行星纹理），op=1 时走 opaque 列表先画、写深度；
    * 曾经写成 `op < 1 || hasMap`，土星因此被塞进透明列表、排在不透明的环之后，
    * 被环写下的深度剔掉半张脸——背半环整个"透"过球体显示（太阳系示例实测）。
-   * 真带 alpha 通道的镂空贴图将来要单独开 transparent，别在这里顺手指望。
+   *
+   * 例外就是当年的"将来"：**序列帧贴图 = 特效叠层**（src 带 {frame}），alpha 必须生效，
+   * 否则 PNG 的透明区域渲成黑块；agent 也可以用 material.transparent 显式开（静态镂空 Logo）。
    */
-  const transparent = op < 1;
+  const transparent =
+    m?.transparent ?? (op < 1 || Boolean(hasMap && node.material?.map?.src?.includes("{frame}")));
   /**
    * 自发光也吃同一张贴图（three 的 emissiveMap）：自发光是**直接叠加**的纯色，
    * 有 map 却不给 emissiveMap 时，太阳这种"贴图 + 高强度自发光"的球会被那层纯色
@@ -434,6 +438,8 @@ const NodeView: React.FC<{
   node: DslNode;
   childrenOf: Map<string, DslNode[]>;
   frame: number;
+  /** 工程 fps：序列帧贴图按 seqFps / fps 换算进度（不传按 30） */
+  fps?: number;
   theme: Theme;
   /** 编辑器交互（成片渲染时全都不传，行为与之前一致） */
   onPick?: (id: string) => void;
@@ -443,10 +449,31 @@ const NodeView: React.FC<{
   /** 相机当前锁定的节点：罩一层区别于选中色的线框（成片不传） */
   lockedId?: string | null;
   onNodeObject?: (id: string, obj: THREE.Object3D | null) => void;
-}> = ({ node, childrenOf, frame, theme, onPick, selectedId, lockedId, onNodeObject, onNodeDoubleClick }) => {
+}> = ({ node, childrenOf, frame, fps = 30, theme, onPick, selectedId, lockedId, onNodeObject, onNodeDoubleClick }) => {
   const tr = evalNode(node, frame);
   // hook 必须无条件调用（不能挂在 if 上）：没配 map 时返回 null，材质走纯色
-  const map = useDslTexture(node.material?.map);
+  /**
+   * 序列帧贴图：src 带 {frame} 时按当前帧算出具体地址，每帧换一张贴图。
+   * 帧号计算在 shared/seqFrame.ts（2D imageSeq 同一份逻辑）；loop=true——
+   * 3D 贴图动画（流动岩浆/循环烟雾）回绕比停在末帧常见。
+   */
+  const mapSpec = node.material?.map;
+  const mapSrc =
+    mapSpec?.src?.includes("{frame}")
+      ? seqSrcAt(
+          mapSpec.src,
+          {
+            seqFrom: mapSpec.seqFrom ?? 1,
+            seqTo: mapSpec.seqTo ?? 1,
+            seqFps: mapSpec.seqFps ?? 30,
+            loop: true,
+          },
+          frame,
+          fps,
+          mapSpec.frameDigits ?? 4,
+        )
+      : mapSpec?.src;
+  const map = useDslTexture(mapSpec && mapSrc ? { ...mapSpec, src: mapSrc } : undefined);
   const kids = childrenOf.get(node.id) ?? [];
   /*
    * **弧度**：schema 里 rotX/rotY/rotZ 写的是度（人写"23.5 度"而不是"0.41 弧度"），
@@ -588,6 +615,7 @@ const NodeView: React.FC<{
           node={c}
           childrenOf={childrenOf}
           frame={frame}
+          fps={fps}
           theme={theme}
           onPick={onPick}
           selectedId={selectedId}
@@ -762,6 +790,8 @@ export const DslScene: React.FC<{
   spec: Scene3DDsl;
   frame: number;
   t: number;
+  /** 工程 fps：序列帧贴图换算进度用（不传按 30） */
+  fps?: number;
   theme: Theme;
   camera: DslCamera;
   /** 背景交给 Scene3D 画（它要区分"自己当底"和"叠在内容上"两种情况） */
@@ -778,6 +808,7 @@ export const DslScene: React.FC<{
   spec,
   frame,
   t,
+  fps = 30,
   theme,
   camera,
   onPick,
@@ -818,6 +849,7 @@ export const DslScene: React.FC<{
             node={n}
             childrenOf={childrenOf}
             frame={frame}
+            fps={fps}
             theme={theme}
             onPick={onPick}
             selectedId={selectedId}

@@ -1338,6 +1338,7 @@ export const Scene3DScene: React.FC<Scene3DProps> = ({
             spec={graph}
             frame={frame}
             t={t}
+            fps={fps}
             theme={theme}
             camera={dslCam!}
             shadowRange={shadowRange}

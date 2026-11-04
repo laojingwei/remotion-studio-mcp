@@ -1022,3 +1022,112 @@ export async function fetchCompressCurve(
   if (!res.ok) throw new Error(data.error ?? "生成压缩曲线失败");
   return data.result as CompressResult;
 }
+
+/* ───────────── 本地资源库（文件留在用户自己的目录，引用直出，不复制） ───────────── */
+
+export type ResourceCategory = {
+  id: string;
+  label: string;
+  exts: string[];
+  dir: string | null;
+};
+
+export type ResourceEntry = {
+  name: string;
+  dir: boolean;
+  size?: number;
+  mtime?: number;
+  url?: string;
+};
+
+export type ResourceBrowse = {
+  root: string;
+  path: string;
+  parent: string | null;
+  entries: ResourceEntry[];
+};
+
+export type ResourceHit = {
+  name: string;
+  rel: string;
+  abs: string;
+  size: number;
+  mtime: number;
+  url: string;
+};
+
+export async function fetchResourcesConfig(): Promise<{
+  origin: string;
+  categories: ResourceCategory[];
+}> {
+  const res = await jfetch("/api/resources/config");
+  const data = await res.json();
+  if (!res.ok) throw new Error(data.error ?? "读不到资源库配置");
+  return data;
+}
+
+export async function saveResourceDir(category: string, dir: string): Promise<{ ok: true; dir: string }> {
+  const res = await jfetch("/api/resources/config", {
+    method: "PUT",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ category, dir }),
+  });
+  const data = await res.json();
+  if (!res.ok) throw new Error(data.error ?? "保存失败");
+  return data;
+}
+
+export async function browseResources(category: string, sub = ""): Promise<ResourceBrowse> {
+  const res = await jfetch("/api/resources/browse", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ category, sub }),
+  });
+  const data = await res.json();
+  if (!res.ok) throw new Error(data.error ?? "浏览失败");
+  return data;
+}
+
+export async function searchResources(
+  category: string,
+  opts: { keyword?: string; ext?: string[]; limit?: number } = {},
+): Promise<{ root: string; total: number; truncated: boolean; hits: ResourceHit[] }> {
+  const res = await jfetch("/api/resources/search", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ category, ...opts }),
+  });
+  const data = await res.json();
+  if (!res.ok) throw new Error(data.error ?? "搜索失败");
+  return data;
+}
+
+/** 站内 /resources/… 引用 → 缩略图接口（M1 直接流原图） */
+export const resourceThumbUrl = (url: string): string =>
+  `/api/resources/thumb?p=${encodeURIComponent(url)}`;
+
+/** 目录选择器：从盘符逐级往下走。path 为空 = 列盘符 */
+export async function pickResourceDir(
+  path = "",
+): Promise<{ path: string; parent: string | null; entries: { name: string; dir: true; path: string }[] }> {
+  const res = await jfetch("/api/resources/pick", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ path }),
+  });
+  const data = await res.json();
+  if (!res.ok) throw new Error(data.error ?? "浏览目录失败");
+  return data;
+}
+
+/** 清除某类的目录配置（dir 传空即清除，幂等） */
+export async function clearResourceDir(category: string): Promise<{ ok: true; dir: null }> {
+  const res = await jfetch("/api/resources/config", {
+    method: "PUT",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ category, dir: null }),
+  });
+  const data = await res.json();
+  if (!res.ok) throw new Error(data.error ?? "清除失败");
+  return data;
+}

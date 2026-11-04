@@ -28,6 +28,16 @@ import {
   removeProjectAssets,
   writeProjectAsset,
 } from "./assets.service";
+import {
+  RESOURCE_CATEGORIES,
+  browseCategory,
+  pickDir,
+  readResourceDirs,
+  searchCategory,
+  serveResourceFile,
+  clearResourceDir,
+  setResourceDir,
+} from "./resources.service";
 import { assetNameOf } from "../shared/customTemplate";
 import { addMessage, listMessages, markUserMessagesRead } from "./agentBridge.service";
 import {
@@ -764,6 +774,120 @@ app.put("/api/ui-prefs", async (c) => {
   }
   writeUiPrefs(clean);
   return c.json({ ok: true, count: Object.keys(clean).length });
+});
+
+/* ───────────── 本地资源库（详见 resources.service.ts 顶部的设计说明） ───────────── */
+
+/** 能枚举磁盘内容的接口只对本机开放；LAN 模式（HOST=0.0.0.0）下同网段机器调不了 */
+const isLoopbackHost = (host: string | undefined): boolean => {
+  const h = (host ?? "").split(":")[0]?.toLowerCase() ?? "";
+  return h === "127.0.0.1" || h === "localhost" || h === "::1" || h === "[::1]";
+};
+
+app.get("/api/resources/config", (c) => {
+  const dirs = readResourceDirs();
+  return c.json({
+    origin: `http://127.0.0.1:${PORT}`,
+    categories: RESOURCE_CATEGORIES.map((cat) => ({
+      id: cat.id,
+      label: cat.label,
+      exts: cat.exts,
+      dir: dirs[cat.id] ?? null,
+    })),
+  });
+});
+
+app.put("/api/resources/config", async (c) => {
+  const body = (await c.req.json().catch(() => null)) as { category?: string; dir?: string | null } | null;
+  if (!body?.category) return c.json({ error: "需要 category" }, 400);
+  // dir 为空/null = 清除该类的目录配置（配错了或不想用了）
+  if (body.dir == null || body.dir === "") {
+    try {
+      clearResourceDir(body.category);
+      return c.json({ ok: true, category: body.category, dir: null });
+    } catch (err) {
+      return c.json({ error: err instanceof Error ? err.message : String(err) }, 400);
+    }
+  }
+  try {
+    const dir = setResourceDir(body.category, body.dir);
+    return c.json({ ok: true, category: body.category, dir });
+  } catch (err) {
+    return c.json({ error: err instanceof Error ? err.message : String(err) }, 400);
+  }
+});
+
+app.post("/api/resources/browse", async (c) => {
+  if (!isLoopbackHost(c.req.header("host"))) return c.json({ error: "资源浏览只允许本机使用" }, 403);
+  const body = (await c.req.json().catch(() => ({}))) as { category?: string; sub?: string };
+  if (!body.category) return c.json({ error: "需要 category" }, 400);
+  try {
+    return c.json(browseCategory(body.category, body.sub ?? ""));
+  } catch (err) {
+    return c.json({ error: err instanceof Error ? err.message : String(err) }, 400);
+  }
+});
+
+/** 目录选择器：从盘符逐级往下走，给「浏览…」按钮用。能枚举磁盘 → 只对本机开放 */
+app.post("/api/resources/pick", async (c) => {
+  if (!isLoopbackHost(c.req.header("host"))) return c.json({ error: "目录选择只允许本机使用" }, 403);
+  const body = (await c.req.json().catch(() => ({}))) as { path?: string };
+  try {
+    return c.json(pickDir(body.path ?? ""));
+  } catch (err) {
+    return c.json({ error: err instanceof Error ? err.message : String(err) }, 400);
+  }
+});
+
+app.post("/api/resources/search", async (c) => {  if (!isLoopbackHost(c.req.header("host"))) return c.json({ error: "资源搜索只允许本机使用" }, 403);
+  const body = (await c.req.json().catch(() => ({}))) as {
+    category?: string;
+    keyword?: string;
+    ext?: string[];
+    limit?: number;
+  };
+  if (!body.category) return c.json({ error: "需要 category" }, 400);
+  try {
+    return c.json(
+      searchCategory(body.category, { keyword: body.keyword, ext: body.ext, limit: body.limit }),
+    );
+  } catch (err) {
+    return c.json({ error: err instanceof Error ? err.message : String(err) }, 400);
+  }
+});
+
+/** M1 直接流出原图当缩略图（编解码依赖太重，真缩略图是 M2）；p 是站内 /resources/… 引用 */
+app.get("/api/resources/thumb", (c) => {
+  if (!isLoopbackHost(c.req.header("host"))) return c.json({ error: "缩略图只允许本机使用" }, 403);
+  const raw = c.req.query("p") ?? "";
+  let p: string;
+  try {
+    p = decodeURIComponent(raw);
+  } catch {
+    p = raw;
+  }
+  const m = /^\/resources\/([a-z]+)\/(.+)$/.exec(p.replace(/^https?:\/\/[^/]+/, ""));
+  if (!m) return c.json({ error: "p 要是 /resources/<类>/<路径> 形式" }, 400);
+  return serveResourceFile(c, m[1], m[2]);
+});
+
+// 文件流出：编辑器预览（同源）和渲染（按 URL 拉取）都走这里。
+// 有意不做 loopback 限制——LAN 模式下别的机器的编辑器页面也要能显示素材；
+// 但拉文件必须知道精确路径，能枚举目录的 browse/search 已经挡在本机后面。
+app.get("/resources/:category/*", (c) => {
+  const catId = c.req.param("category");
+  const rel = c.req.path
+    .replace(/^\/resources\/[a-z]+\/?/, "")
+    .split("/")
+    .map((seg) => {
+      try {
+        return decodeURIComponent(seg);
+      } catch {
+        return seg;
+      }
+    })
+    .join("/");
+  return serveResourceFile(c, catId, rel);
 });
 
 /**

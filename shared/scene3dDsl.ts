@@ -220,6 +220,13 @@ export const materialSchema = z.object({
     ),
   emissive: colorToken.optional().describe("自发光颜色，给了才发光（辉光只吃够亮的部分）"),
   emissiveIntensity: z.number().min(0).max(4).default(1),
+  transparent: z
+    .boolean()
+    .optional()
+    .describe(
+      "透明材质：贴**带 alpha 通道的 PNG**（序列帧特效、镂空 Logo）时开，透明区域不显示；" +
+        "不写 = 序列帧贴图（src 带 {frame}）自动开，其余按 opacity<1 判断",
+    ),
   transmission: z.number().min(0).max(1).default(0.9).describe("physical 有效：0=实心 1=全透明"),
   thickness: z.number().positive().default(0.4).describe("physical 有效：玻璃厚度感"),
   ior: z.number().min(1).max(2.5).default(1.5).describe("physical 有效：折射率"),
@@ -246,7 +253,10 @@ export const materialSchema = z.object({
       src: z
         .string()
         .min(1)
-        .describe("贴图地址：/assets/xxx（先 upload_asset）、https:// 或 data:；PNG 自带透明可做镂空"),
+        .describe(
+          "贴图地址：/assets/xxx（先 upload_asset）、https:// 或 data:；PNG 自带透明可做镂空。" +
+            "**序列帧贴图**：src 带 {frame} 占位符，如 /assets/fx/爆炸/{frame}.png，配合 seqFrom/seqTo/frameDigits/seqFps 逐帧换图",
+        ),
       repeat: z
         .tuple([z.number().positive(), z.number().positive()])
         .default([1, 1])
@@ -254,6 +264,11 @@ export const materialSchema = z.object({
       offset: vec2.default([0, 0]).describe("UV 偏移，0–1 为一个完整周期"),
       rotation: deg.default(0).describe("UV 旋转（度），绕 center 转"),
       center: vec2.default([0.5, 0.5]).describe("UV 旋转中心，[0.5,0.5] 即贴图中心"),
+      /* 序列帧贴图（src 含 {frame} 时生效） */
+      frameDigits: z.number().int().min(1).max(8).optional().describe("帧编号补零位数：xxx_0001.png 是 4"),
+      seqFrom: z.number().int().min(0).optional().describe("序列起始帧编号（含）"),
+      seqTo: z.number().int().min(0).optional().describe("序列结束帧编号（含）"),
+      seqFps: z.number().min(1).max(120).optional().describe("序列播放速率（帧/秒），默认 30"),
     })
     .optional()
     .describe(
@@ -701,6 +716,32 @@ export function dslIssues(spec: Scene3DDsl): string[] {
     if (!ok) {
       issues.push(
         `节点「${n.id}」的贴图 src「${src}」不合法（可用：/assets/xxx 先 upload_asset、https://、data:）`,
+      );
+    }
+    /**
+     * 序列帧贴图：src 带 {frame} 才按序列处理，参数不全在这里报——
+     * 渲染端对缺参数只能按"单帧"兜底，画面上完全看不出来是配置错了。
+     */
+    if (src.includes("{frame}")) {
+      const seqFrom = map.seqFrom ?? 1;
+      const seqTo = map.seqTo ?? 1;
+      if (seqTo <= seqFrom) {
+        issues.push(
+          `节点「${n.id}」的贴图是序列帧（src 带 {frame}），但 seqTo(${seqTo}) 必须 > seqFrom(${seqFrom})` +
+            `——首末帧编号 search_local_assets 的序列帧结果里直接给了`,
+        );
+      }
+      if ((map.frameDigits ?? 4) < 1 || (map.frameDigits ?? 4) > 8) {
+        issues.push(`节点「${n.id}」的贴图 frameDigits 要在 1–8 之间（0001.png 是 4）`);
+      }
+      if ((map.seqFps ?? 30) < 1 || (map.seqFps ?? 30) > 120) {
+        issues.push(`节点「${n.id}」的贴图 seqFps 要在 1–120 之间`);
+      }
+    } else if (map.seqTo !== undefined && map.seqTo !== (map.seqFrom ?? 1)) {
+      // 常见笔误：给了 seqFrom/seqTo 但 src 忘了写 {frame}，序列会静默变成一张静态图
+      issues.push(
+        `节点「${n.id}」的贴图给了 seqFrom/seqTo 但 src 里没有 {frame} 占位符——` +
+          `序列帧不会动。src 要写成 xxx/{frame}.png 这种模式串`,
       );
     }
   }

@@ -129,6 +129,7 @@ import { BRIEF_TOOLS } from "./tools/brief";
 import { SCRIPT_TOOLS } from "./tools/script";
 import { STORYBOARD_TOOLS } from "./tools/storyboard";
 import { CLEANUP_TOOLS } from "./tools/cleanup";
+import { RESOURCE_TOOLS } from "./tools/resources";
 
 // 老调用方（server/index.ts）从这里引，保持导出面不变
 export { validateToolArgs } from "./tools/_shared";
@@ -5215,7 +5216,7 @@ const TOOLS: ToolDef[] = [
   {
     name: "add_element",
     description:
-      "往场景里放一个自由元素（贴纸 / 图标 / 标签 / 图片 / 视频 / 音频）。可以用 libraryId 取素材库现成的，也可以自己给 svg（矢量）、text（文字）、imageSrc（图片）、videoSrc（视频）、audioSrc（音频）——素材库没有合适的就自己造。放进去之后用户可以正常拖动/旋转/缩放/删除。视频默认有声、不循环；音频/视频没给 durationInFrames 会按素材真实时长。支持背景色 bg、入场 enter / 出场 exit 特效、场景内时间 from / durationInFrames。\n" +
+      "往场景里放一个自由元素（贴纸 / 图标 / 标签 / 图片 / 视频 / 音频 / **序列帧特效**）。可以用 libraryId 取素材库现成的，也可以自己给 svg（矢量）、text（文字）、imageSrc（图片）、videoSrc（视频）、audioSrc（音频）、imageSeqSrc（序列帧：src 带 {frame} 占位符 + seqFrom/seqTo/frameDigits，每帧换一张透明 PNG 叠画面上，爆炸/烟雾/光效就用它）——素材库没有合适的就自己造。放进去之后用户可以正常拖动/旋转/缩放/删除。视频默认有声、不循环；音频/视频没给 durationInFrames 会按素材真实时长。支持背景色 bg、入场 enter / 出场 exit 特效、场景内时间 from / durationInFrames。\n" +
       "**x/y 是元素中心点**（不是左上角）：贴边放时元素有一半会被裁掉。文字宽度随字数×字号变化，长句别往 x>80 放，否则右侧超出画面（回执会算给你）。",
     shape: {
       projectId: z.string().optional().describe("要操作的工程 id，不传 = 当前默认工程（list_projects 查）"),
@@ -5233,6 +5234,17 @@ const TOOLS: ToolDef[] = [
       strokeWidth: z.number().optional(),
       text: z.string().optional().describe("文字元素的内容"),
       imageSrc: z.string().optional().describe("图片元素：/assets/xxx（先 upload_asset）或 https 地址"),
+      imageSeqSrc: z
+        .string()
+        .optional()
+        .describe(
+          "**序列帧元素**：带 {frame} 占位符的模式串（配合 search_local_assets(fx) 返回的文件夹 url 和首末帧），" +
+            "如 http://127.0.0.1:4380/resources/fx/爆炸/seq/{frame}.png —— 每帧换一张透明 PNG 叠在画面上",
+        ),
+      frameDigits: z.number().int().optional().describe("序列帧编号补零位数（0001.png 是 4）"),
+      seqFrom: z.number().int().optional().describe("序列起始帧编号（含）"),
+      seqTo: z.number().int().optional().describe("序列结束帧编号（含）"),
+      seqFps: z.number().optional().describe("序列播放速率（帧/秒），默认 30；工程 30fps 时 1:1 逐帧"),
       videoSrc: z
         .string()
         .optional()
@@ -5543,6 +5555,7 @@ const TOOLS: ToolDef[] = [
   ...SCRIPT_TOOLS,
   ...STORYBOARD_TOOLS,
   ...CLEANUP_TOOLS,
+  ...RESOURCE_TOOLS,
 
   /* ───────────── 工具门面：按需发现与执行（其余工具经这两层调用） ───────────── */
   {

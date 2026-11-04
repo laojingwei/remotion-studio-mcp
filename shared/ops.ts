@@ -359,11 +359,13 @@ function clampDurationWithNote(type: string, n: number, summary: string[]): numb
  * 早先 schema 里 `muted` 一律 default(true)，结果音频元素不显式传 `muted:false`
  * 就被静音成 0 —— 渲染出来连音轨都不生成，而且零报错（实测 mean_volume -90dB）。
  */
-export const withElementDefaults = <T extends { kind: OverlayElement["kind"]; muted?: boolean }>(
+export const withElementDefaults = <T extends { kind: OverlayElement["kind"]; muted?: boolean; loop?: boolean }>(
   raw: T,
-): T & { muted: boolean } => ({
+): T & { muted: boolean; loop?: boolean } => ({
   ...raw,
   muted: raw.muted ?? raw.kind === "video",
+  // 序列帧默认播一次停末帧（爆炸/破碎这类一次性特效循环回第一帧很怪）；视频默认不循环由 schema 管着
+  ...(raw.kind === "imageSeq" && raw.loop === undefined ? { loop: false } : {}),
 });
 
 /* ────────────────────────────── Reducer（纯函数）────────────────────────────── */

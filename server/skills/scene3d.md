@@ -187,6 +187,21 @@
 | 天文 / 夜景（要昼夜面） | **0.1–0.35** | 夜面就是要黑；ambient 一高，昼夜对比全没了 |
 | 玻璃 / 大气 / 纯自发光 | 0.3–0.8 | 主要靠 transmission 与 emissive，光只负责轮廓 |
 
+### 序列帧贴图（特效叠层）
+
+`material.map.src` 带 `{frame}` 占位符就是序列帧贴图——每一帧换一张图，爆炸/烟雾/光效叠在 3D 物体上：
+
+```json
+"material": { "map": { "src": "<search_local_assets 给的文件夹url>/{frame}.png",
+                        "seqFrom": 1, "seqTo": 240, "frameDigits": 4, "seqFps": 30 } }
+```
+
+- seqFrom/seqTo/frameDigits 直接抄 `search_local_assets(fx)` 序列帧结果里给的首末帧和位数
+- 透明自动开（PNG 的 alpha 生效，透明区域透出背景）；静态镂空 Logo 用 `material.transparent: true` 显式开
+- 循环回绕；`seqFps` 控制快慢（工程 30fps + seqFps 30 = 1:1）
+- 序列帧在**2D 场景**里用 `add_element { imageSeqSrc: "<url>/{frame}.png", seqFrom, seqTo, frameDigits, seqFps }`，
+  一样是透明叠层，x/y/size 照常给
+
 漏写 `ambient` 时内置兜底只有 0.35（只是"别纯黑"），写图回执会提示——**别等抽帧才发现车是黑的**。
 
 ### world（世界背景）

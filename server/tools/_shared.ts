@@ -656,7 +656,7 @@ export async function composeElement(
   }
 
   const text = str("text");
-  const src = str("videoSrc") ?? str("audioSrc") ?? str("imageSrc");
+  const src = str("videoSrc") ?? str("audioSrc") ?? str("imageSrc") ?? str("imageSeqSrc");
   const kind =
     text !== undefined
       ? "text"
@@ -664,14 +664,16 @@ export async function composeElement(
         ? "video"
         : str("audioSrc")
           ? "audio"
-          : str("imageSrc")
-            ? "image"
-            : str("svg")
-              ? "svg"
-              : (base.kind as string | undefined);
+          : str("imageSeqSrc")
+            ? "imageSeq"
+            : str("imageSrc")
+              ? "image"
+              : str("svg")
+                ? "svg"
+                : (base.kind as string | undefined);
   if (!kind) {
     throw new Error(
-      "add_element 需要 libraryId / svg / text / imageSrc / videoSrc / audioSrc 至少一个" +
+      "add_element 需要 libraryId / svg / text / imageSrc / videoSrc / audioSrc / imageSeqSrc 至少一个" +
         "（批量里也可以直接写 element:{...} 包裹，两种写法都认）",
     );
   }
@@ -692,6 +694,7 @@ export async function composeElement(
     "size", "rotate", "scale", "opacity", "z", "fill", "bg", "weight",
     "radius", "border", "borderColor", "shadow", "filter", "blendMode",
     "clipPath", "fit", "fontFamily", "lineHeight", "letterSpacing",
+    "frameDigits", "seqFrom", "seqTo", "seqFps",
     "textAlign", "fontStyle", "underline", "maxWidth", "strokeLinecap",
     "strokeLinejoin", "style", "enter", "exit", "from", "durationInFrames",
     "muted", "loop", "startFrom", "audioVolume",
