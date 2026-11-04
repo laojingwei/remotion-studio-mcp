@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import { ROOT as PROJECT_ROOT } from "./root";
+import { PROJECTS_ROOT } from "./paths";
 import path from "node:path";
 
 /**
@@ -28,7 +29,7 @@ export type Review = {
   updatedAt?: string;
 };
 
-const ROOT = path.join(PROJECT_ROOT, "data", "projects");
+const ROOT = PROJECTS_ROOT;
 
 const fileOf = (projectId: string): string => {
   if (!/^[\w-]+$/.test(projectId)) throw new Error("非法的工程 id");

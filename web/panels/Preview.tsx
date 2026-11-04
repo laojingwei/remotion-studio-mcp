@@ -1,6 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { Player, type PlayerRef } from "@remotion/player";
-import { Scene3DViewport } from "./Scene3DViewport";
 import { Video } from "../../src/Video";
 import { totalDuration, sceneOffsets, sceneSpans, type OverlayElement, type Transform } from "@shared/schema";
 import { normalizeSceneBox, type SceneBox } from "@shared/sceneBox";
@@ -16,6 +15,7 @@ import {
   type CustomAsset,
 } from "@shared/assetLibrary";
 import { EditOverlay, type Box } from "./EditOverlay";
+import { AnnotationLayer } from "./AnnotationLayer";
 import { SceneBoxOverlay } from "./SceneBoxOverlay";
 import { editRegistry } from "../../src/scenes/ui";
 import { framesForAsset } from "../assetDuration";
@@ -34,6 +34,18 @@ type Props = {
 
 const ZOOM_MIN = 0.2;
 const ZOOM_MAX = 5;
+
+/**
+ * 3D 编辑视口按需加载。
+ *
+ * 这个文件近 2800 行，带 TransformControls / OrbitControls 和整套手柄逻辑，
+ * 但只有用户**点进 3D 场景**时才用得上。静态 import 会把它塞进首屏 bundle，
+ * 让只想改字幕的人也多下载几百 KB。React.lazy 之后它独立成 chunk，
+ * 用不到就永远不下载。
+ */
+const Scene3DViewport = React.lazy(() =>
+  import("./Scene3DViewport").then((m) => ({ default: m.Scene3DViewport })),
+);
 
 const IDENTITY: Transform = { x: 0, y: 0, rotate: 0, scale: 1, z: 0 };
 
@@ -1200,13 +1212,32 @@ export const Preview: React.FC<Props> = ({ playerRef }) => {
       >
         {view3d && scene ? (
           <div className="canvas-shell" style={{ width, height }}>
-            <Scene3DViewport
-              scene={scene}
-              fps={project.fps}
-              sceneStart={sceneStart}
-              aspect={fmt.width / fmt.height}
-              onExit={() => setView3d(false)}
-            />
+            <React.Suspense
+              fallback={
+                <div
+                  className="canvas-shell"
+                  style={{
+                    width,
+                    height,
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "center",
+                    color: "var(--text-dim)",
+                    fontSize: 13,
+                  }}
+                >
+                  正在加载 3D 视口…
+                </div>
+              }
+            >
+              <Scene3DViewport
+                scene={scene}
+                fps={project.fps}
+                sceneStart={sceneStart}
+                aspect={fmt.width / fmt.height}
+                onExit={() => setView3d(false)}
+              />
+            </React.Suspense>
             {/*
               Player 隐藏挂载而不卸载：时间轴的 seek / 播放头 / 空格播放全靠 playerRef，
               卸载了整条时间轴就拖不动（实测踩过）。visibility:hidden 保留布局尺寸，
@@ -1297,6 +1328,14 @@ export const Preview: React.FC<Props> = ({ playerRef }) => {
         </div>
         )}
       </div>
+
+      {/* 时间码批注：挂在当前幕的当前帧上，agent 用 get_annotations 读 */}
+      <AnnotationLayer
+        projectId={project.id}
+        fps={project.fps}
+        scenes={project.scenes}
+        selectedSceneId={selectedId ?? ""}
+      />
 
       {/* 排列条常驻：没选中时按钮置灰而不是整条消失，免得"找个功能还要先选中" */}
       <div className={`arrange-bar ${selection.length ? "" : "is-idle"} ${view3d && can3d ? "is-hidden-3d" : ""}`}>

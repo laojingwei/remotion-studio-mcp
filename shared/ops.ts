@@ -23,7 +23,8 @@ import {
 } from "./schema";
 import { describeSceneBox, normalizeSceneBox, type SceneBox } from "./sceneBox";
 import { droppedProps, getMeta, MIN_SCENE_FRAMES, normalizeProps } from "./sceneMetas";
-import { dslIssues, dslSchema, nodeSchema, type DslNode, type Scene3DDsl } from "./scene3dDsl";
+import { dslIssues, dslSchema, dslWarnings, nodeSchema, type DslNode, type Scene3DDsl } from "./scene3dDsl";
+import { WORLD_SKIES, findWorldSky, hdriPath } from "./worldPresets";
 import { hasAnimatedChain, reparentLocalTrs, type Trs } from "./scene3dTransform";
 import { effectLabel, effectSummaryText } from "./effects";
 import { TRANSITION_TYPES } from "./transitions";
@@ -247,6 +248,21 @@ export type Op =
   | { op: "set_graph_particles"; sceneId: string; particles: Record<string, unknown> | null }
   /** 后期（辉光）。null = 回到 look 的默认值 */
   | { op: "set_graph_post"; sceneId: string; post: Record<string, unknown> | null }
+  /** 世界背景（渐变天空 + 空气透视）。null = 回到 auto */
+  | {
+      op: "set_graph_world";
+      sceneId: string;
+      /** null = 回到 auto */
+      world?: Record<string, unknown> | null;
+      /**
+       * 世界预设 id（`list_world_skies` 查，如 `golden-hour`）。
+       * 给了就**整组套用**：world + lights + ground + post 一起换，`world` 里的字段再覆盖预设。
+       * 存在的意义是亮度标定：每张全景图的绝对亮度差几十倍，让 agent 自己猜 envIntensity 必翻车。
+       */
+      preset?: string;
+    }
+  /** 自动地面（接投影）。null = 撤掉地面 */
+  | { op: "set_graph_ground"; sceneId: string; ground: Record<string, unknown> | null }
   | {
       op: "reorder_scenes";
       sceneIds: string[];
@@ -513,6 +529,8 @@ export const OP_FIELDS: Record<string, readonly string[]> = {
   set_graph_lights: ["op", "sceneId", "lights"],
   set_graph_particles: ["op", "sceneId", "particles"],
   set_graph_post: ["op", "sceneId", "post"],
+  set_graph_world: ["op", "sceneId", "world", "preset"],
+  set_graph_ground: ["op", "sceneId", "ground"],
   reorder_scenes: ["op", "sceneIds", "reflow"],
   compact_main_track: ["op"],
   remove_scene: ["op", "sceneId"],
@@ -767,7 +785,7 @@ function graphOf(scene: Scene, opName: string): GraphDoc {
 }
 
 /** 校验并落库。任何不合法都在**写进去之前**报出来，不留半成品场景 */
-function saveGraph(scene: Scene, graph: GraphDoc, opName: string): GraphDoc {
+function saveGraph(scene: Scene, graph: GraphDoc, opName: string, warn?: string[]): GraphDoc {
   const parsed = dslSchema.safeParse(graph);
   if (!parsed.success) {
     const errs = parsed.error.issues.slice(0, 4).map((i) => describeIssue(i as unknown as Record<string, unknown>));
@@ -777,6 +795,12 @@ function saveGraph(scene: Scene, graph: GraphDoc, opName: string): GraphDoc {
   if (issues.length) {
     throw new Error(`${opName} 改完的场景图有结构问题（**没有写入**）：\n- ${issues.slice(0, 4).join("\n- ")}`);
   }
+  /**
+   * 软提示（不拦写入）：空枢轴、枢轴上的材质、自定义灯把场景压黑。
+   * 走回执而不是 throw —— 这些是"骨架搭到一半"的正常中间态，
+   * 拦下来等于不让 agent 分步搭场景。
+   */
+  warn?.push(...dslWarnings(parsed.data).map((m) => `⚠️ ${m}`));
   // 返回**归一化后**的图：调用方要用它写回执（未归一化的对象缺 schema 默认值，
   // 回执里就会出现 "fov undefined"、"size undefined" 这种半句话）
   const props = normalizeProps("scene3d", {
@@ -832,6 +856,19 @@ function transformFromTrs(trs: Trs): Record<string, unknown> {
   return out;
 }
 
+/**
+ * 「这条 op 到底改了没有」的检测成本很高：要拿写入前后的整份文档序列化对比，
+ * 每条 op 两次全量 JSON.stringify = O(文档大小 × op 数)。
+ *
+ * 实测（本机）：34KB 工程 100 条 op 26ms 还能忽略；1.1MB 的 3D 工程 100 条 op 要 831ms，
+ * 而且这个开销随工程变大是平方级恶化 —— Web 端一次拖拽就是一条 op，体感会明显发涩。
+ *
+ * 取舍：单条/少量 op（agent 的常态，也是这条守卫最有用的时候——它能把
+ * "字段层级写错、值本来就等于目标"抓出来提示）保留检测；批量超过这个阈值就跳过，
+ * 批量的价值在吞吐，不在逐条诊断。
+ */
+const NOOP_DETECT_MAX_OPS = 8;
+
 export function applyOps(project: Project, ops: Op[]): OpResult {
   assertKnownOpFields(ops);
   let next: Project = structuredClone(project);
@@ -839,16 +876,17 @@ export function applyOps(project: Project, ops: Op[]): OpResult {
   const summary: string[] = [];
   const aliases = new Map<string, string>();
   const createdIds: Record<string, string> = {};
+  const detectNoop = ops.length <= NOOP_DETECT_MAX_OPS;
 
   for (let opIndex = 0; opIndex < ops.length; opIndex++) {
     // `as` 不参与落库，只用来把"刚建出来的东西"记到别名表里
     const { as: aliasName, ...restOp } = ops[opIndex] as Op & { as?: string };
     const op = resolveAliasRefs(restOp as Op, aliases);
-    /** 写入前快照：用来断言「这条 op 真的改了东西」（见循环末尾） */
+    /** 写入前快照：用来断言「这条 op 真的改了东西」（见循环末尾）；批量时为空串 */
     let beforeJson = "";
     const aliasBefore = aliasName ? idsOf(next) : null;
     try {
-    beforeJson = JSON.stringify(next);
+    if (detectNoop) beforeJson = JSON.stringify(next);
     switch (op.op) {
       case "add_scene": {
         const meta = getMeta(op.type);
@@ -1773,13 +1811,27 @@ export function applyOps(project: Project, ops: Op[]): OpResult {
           }
         }
 
-        if (isPlainObject(patch.geometry)) {
-          const cur = node.geometry as unknown as Record<string, unknown>;
+        if ("geometry" in patch && patch.geometry === null) {
+          // null = 退回纯枢轴（不渲染，只带子节点）。默认值就是 group，这里显式写出来
+          node.geometry = { type: "group" } as never;
+          changed.push("几何体改成纯枢轴（group，不再渲染实体）");
+        } else if (isPlainObject(patch.geometry)) {
+          const cur = (node.geometry ?? { type: "group" }) as unknown as Record<string, unknown>;
           const g = patch.geometry;
           if (typeof g.type === "string" && g.type !== cur.type) {
             // 换形状：整份替换（旧形状的 radius/segments 对新形状没有意义）
             node.geometry = g as never;
             changed.push(`几何体换成 ${g.type}`);
+          } else if (cur.type === "group") {
+            /**
+             * 纯枢轴没有任何形状参数。不拦的话 deepMerge 会产出一个
+             * `{type:"group", radius:1}` —— zod 把多余键静默剥掉，写完回执却说"几何体已改"，
+             * agent 会以为生效了（这是"改了没变化"里最难查的一类）。
+             */
+            throw new Error(
+              `update_graph_node：节点「${node.id}」是纯枢轴（group），没有形状参数可改。` +
+                `要给它一个实体，传 patch:{geometry:{type:"sphere", radius:0.5}}（必须带 type）`,
+            );
           } else {
             node.geometry = deepMerge(cur, g) as never;
             changed.push("几何体");
@@ -1857,7 +1909,7 @@ export function applyOps(project: Project, ops: Op[]): OpResult {
           summary.push(`「${scene.name}」节点「${name}」没有需要改的东西（patch 为空或与原值相同）`);
           break;
         }
-        saveGraph(scene, graph, "update_graph_node");
+        saveGraph(scene, graph, "update_graph_node", summary);
         summary.push(`「${scene.name}」节点「${name}」：${changed.join("、")}`);
         break;
       }
@@ -1865,7 +1917,7 @@ export function applyOps(project: Project, ops: Op[]): OpResult {
       case "add_graph_node": {
         const scene = mustFind(next, op.sceneId);
         const graph = graphOf(scene, "add_graph_node");
-        if (!isPlainObject(op.node)) throw new Error("add_graph_node：node 必须是对象（至少给 geometry）");
+        if (!isPlainObject(op.node)) throw new Error("add_graph_node：node 必须是对象（geometry 省略即纯枢轴 group）");
         if (graph.nodes.length >= 48) {
           throw new Error(`add_graph_node：节点已到上限 48 个（「${scene.name}」）。先删掉不用的节点`);
         }
@@ -1894,10 +1946,10 @@ export function applyOps(project: Project, ops: Op[]): OpResult {
           at = i + 1;
         }
         graph.nodes.splice(at, 0, nodeIn as unknown as DslNode);
-        saveGraph(scene, graph, "add_graph_node");
+        saveGraph(scene, graph, "add_graph_node", summary);
         const g = nodeIn.geometry as { type?: string } | undefined;
         summary.push(
-          `「${scene.name}」加了节点「${id}」（${g?.type ?? "?"}${nodeIn.parent ? `，挂在 ${nodeIn.parent} 下` : ""}）`,
+          `「${scene.name}」加了节点「${id}」（${g?.type ?? "group 纯枢轴"}${nodeIn.parent ? `，挂在 ${nodeIn.parent} 下` : ""}）`,
         );
         break;
       }
@@ -1919,7 +1971,7 @@ export function applyOps(project: Project, ops: Op[]): OpResult {
           throw new Error(`remove_graph_node：场景图至少要留一个节点（现在共 ${graph.nodes.length} 个）`);
         }
         graph.nodes = graph.nodes.filter((n) => !drop.has(n.id));
-        saveGraph(scene, graph, "remove_graph_node");
+        saveGraph(scene, graph, "remove_graph_node", summary);
         summary.push(
           `「${scene.name}」删了节点「${node.label ?? node.id}」` + (kids.length ? `及其 ${kids.length} 个子节点` : ""),
         );
@@ -1931,7 +1983,7 @@ export function applyOps(project: Project, ops: Op[]): OpResult {
         const graph = graphOf(scene, "set_graph_camera");
         if (op.camera === null) {
           delete graph.camera;
-          saveGraph(scene, graph, "set_graph_camera");
+          saveGraph(scene, graph, "set_graph_camera", summary);
           summary.push(`「${scene.name}」相机交还给自动取景`);
           break;
         }
@@ -1941,7 +1993,7 @@ export function applyOps(project: Project, ops: Op[]): OpResult {
           op.camera,
         ) as unknown as NonNullable<Scene3DDsl["camera"]>;
         graph.camera = cam;
-        const savedCam = saveGraph(scene, graph, "set_graph_camera").camera!;
+        const savedCam = saveGraph(scene, graph, "set_graph_camera", summary).camera!;
         const lockSegs = (savedCam.anim ?? []).filter((a) => a.lookAt);
         summary.push(
           `「${scene.name}」相机：位置 [${savedCam.position.join(", ")}] → 看向 [${savedCam.target.join(", ")}]` +
@@ -1959,7 +2011,7 @@ export function applyOps(project: Project, ops: Op[]): OpResult {
         const graph = graphOf(scene, "set_graph_lights");
         if (op.lights === null || (Array.isArray(op.lights) && op.lights.length === 0)) {
           delete graph.lights;
-          saveGraph(scene, graph, "set_graph_lights");
+          saveGraph(scene, graph, "set_graph_lights", summary);
           summary.push(`「${scene.name}」撤掉自定义光源，回到 look 的默认打光`);
           break;
         }
@@ -1969,7 +2021,7 @@ export function applyOps(project: Project, ops: Op[]): OpResult {
         }
         const lights = op.lights as unknown as NonNullable<Scene3DDsl["lights"]>;
         graph.lights = lights;
-        const savedLights = saveGraph(scene, graph, "set_graph_lights").lights ?? [];
+        const savedLights = saveGraph(scene, graph, "set_graph_lights", summary).lights ?? [];
         summary.push(
           `「${scene.name}」光源：${savedLights
             .map((l) => `${l.type}@[${l.position.join(", ")}] i=${l.intensity}`)
@@ -1983,7 +2035,7 @@ export function applyOps(project: Project, ops: Op[]): OpResult {
         const graph = graphOf(scene, "set_graph_particles");
         if (op.particles === null) {
           delete graph.particles;
-          saveGraph(scene, graph, "set_graph_particles");
+          saveGraph(scene, graph, "set_graph_particles", summary);
           summary.push(`「${scene.name}」关掉粒子层`);
           break;
         }
@@ -1993,7 +2045,7 @@ export function applyOps(project: Project, ops: Op[]): OpResult {
           op.particles,
         ) as unknown as NonNullable<Scene3DDsl["particles"]>;
         graph.particles = parts;
-        const savedParts = saveGraph(scene, graph, "set_graph_particles").particles!;
+        const savedParts = saveGraph(scene, graph, "set_graph_particles", summary).particles!;
         summary.push(`「${scene.name}」粒子：${savedParts.count} 个，size ${savedParts.size}`);
         break;
       }
@@ -2003,7 +2055,7 @@ export function applyOps(project: Project, ops: Op[]): OpResult {
         const graph = graphOf(scene, "set_graph_post");
         if (op.post === null) {
           delete graph.post;
-          saveGraph(scene, graph, "set_graph_post");
+          saveGraph(scene, graph, "set_graph_post", summary);
           summary.push(`「${scene.name}」辉光回到 look 默认值`);
           break;
         }
@@ -2013,8 +2065,117 @@ export function applyOps(project: Project, ops: Op[]): OpResult {
           op.post,
         ) as unknown as NonNullable<Scene3DDsl["post"]>;
         graph.post = post;
-        const savedPost = saveGraph(scene, graph, "set_graph_post").post!;
+        const savedPost = saveGraph(scene, graph, "set_graph_post", summary).post!;
         summary.push(`「${scene.name}」辉光强度 ×${savedPost.bloom}`);
+        break;
+      }
+
+      case "set_graph_world": {
+        const scene = mustFind(next, op.sceneId);
+        const graph = graphOf(scene, "set_graph_world");
+
+        /**
+         * 世界预设：整组套用（world + lights + ground + post）。
+         *
+         * 之所以要一起换而不是只换背景图：**灯和地面是配着那张图调的**。
+         * 城市夜景的灯是 4.0 的暖主光 + 1.9 的冷环境，换成雪地还照抄就是一片惨白；
+         * 全景图的世界一定要 `ground.mode=shadow`，不然实体地面会盖掉照片里的地。
+         */
+        // 两种写法都收：`preset` 在 op 上，或塞在 `world.preset` 里（agent 很容易这么写）
+        const presetId =
+          op.preset ?? (isPlainObject(op.world) && typeof op.world.preset === "string" ? op.world.preset : undefined);
+        if (presetId) {
+          const sky = findWorldSky(presetId);
+          if (!sky) {
+            throw new Error(
+              `set_graph_world：没有这个世界预设「${presetId}」。` +
+                `可选：${WORLD_SKIES.map((s) => s.id).join("、")}（详情用 list_world_skies）`,
+            );
+          }
+          const override = isPlainObject(op.world) ? { ...op.world } : {};
+          delete override.preset;
+          const merged = deepMerge(
+            {
+              mode: "image",
+              image: hdriPath(sky.asset),
+              imageLighting: true,
+              imageRotation: sky.world.imageRotation ?? 0,
+              imageIntensity: sky.world.imageIntensity,
+              envIntensity: sky.world.envIntensity,
+              haze: sky.world.haze,
+              vignette: sky.world.vignette,
+            },
+            override,
+          );
+          graph.world = merged as unknown as NonNullable<Scene3DDsl["world"]>;
+          const savedSky = saveGraph(scene, graph, "set_graph_world", summary).world!;
+          if (sky.lights?.length) graph.lights = sky.lights as unknown as NonNullable<Scene3DDsl["lights"]>;
+          else delete graph.lights;
+          if (sky.ground) {
+            graph.ground = (graph.ground ?? {}) as NonNullable<Scene3DDsl["ground"]>;
+            graph.ground.mode = sky.ground.mode;
+            if (sky.ground.shadowOpacity !== undefined) graph.ground.shadowOpacity = sky.ground.shadowOpacity;
+          }
+          if (sky.post) graph.post = { ...(graph.post ?? {}), ...sky.post } as NonNullable<Scene3DDsl["post"]>;
+          saveGraph(scene, graph, "set_graph_world", summary);
+          summary.push(
+            `「${scene.name}」世界套用预设 ${sky.id}（${sky.label}）：${sky.note}。` +
+              `起始档位 背景 ${savedSky.imageIntensity}× / 环境 ${savedSky.envIntensity}× / 雾 ${savedSky.haze} / 暗角 ${savedSky.vignette}` +
+              (sky.lights?.length ? `，补光 ${sky.lights.length} 盏` : "，不额外打灯") +
+              `，地面 ${sky.ground?.mode ?? "shadow"}` +
+              (override && Object.keys(override).length
+                ? `（你另外指定的 ${Object.keys(override).join("、")} 已覆盖预设）`
+                : ""),
+          );
+          summary.push(
+            `⚠️ 这是**起点不是保证值**：抽一帧看三件事 —— 背景有没有过曝、主体还读不读得出来、影子和照片里的太阳方向对不对。` +
+              `不对就调 imageIntensity（压背景）和 envIntensity（压环境照明），别急着加灯。` +
+              `素材不在本机时背景会静默退回渐变天空（用 list_world_skies 确认文件在不在）。`,
+          );
+          break;
+        }
+
+        if (op.world === null) {
+          delete graph.world;
+          saveGraph(scene, graph, "set_graph_world", summary);
+          summary.push(`「${scene.name}」世界背景回到 auto（按主题明暗挑中性色）`);
+          break;
+        }
+        if (!isPlainObject(op.world)) throw new Error("set_graph_world：world 必须是对象或 null，或给 preset");
+        const world = deepMerge((graph.world ?? {}) as Record<string, unknown>, op.world) as unknown as NonNullable<
+          Scene3DDsl["world"]
+        >;
+        graph.world = world;
+        const savedWorld = saveGraph(scene, graph, "set_graph_world", summary).world!;
+        summary.push(
+          `「${scene.name}」世界：${savedWorld.mode}` +
+            (savedWorld.mode === "gradient"
+              ? `（${savedWorld.top ?? "auto"} → ${savedWorld.bottom ?? "auto"}）`
+              : "") +
+            `，雾 ${savedWorld.haze}，暗角 ${savedWorld.vignette}`,
+        );
+        break;
+      }
+
+      case "set_graph_ground": {
+        const scene = mustFind(next, op.sceneId);
+        const graph = graphOf(scene, "set_graph_ground");
+        if (op.ground === null) {
+          delete graph.ground;
+          saveGraph(scene, graph, "set_graph_ground", summary);
+          summary.push(`「${scene.name}」撤掉地面（物体不再有落地阴影）`);
+          break;
+        }
+        if (!isPlainObject(op.ground)) throw new Error("set_graph_ground：ground 必须是对象或 null");
+        const ground = deepMerge((graph.ground ?? {}) as Record<string, unknown>, op.ground) as unknown as NonNullable<
+          Scene3DDsl["ground"]
+        >;
+        graph.ground = ground;
+        const savedGround = saveGraph(scene, graph, "set_graph_ground", summary).ground!;
+        summary.push(
+          `「${scene.name}」地面：y=${savedGround.y ?? "自动（取节点最低点）"}，` +
+            `${savedGround.size}×${savedGround.size}，${savedGround.shadow ? "接投影" : "不接投影"}`,
+        );
         break;
       }
 
@@ -2365,8 +2526,9 @@ export function applyOps(project: Project, ops: Op[]): OpResult {
      * 数据前后完全一致就说明这条 op 白跑了。逐个字段去测漏得太多——
      * update_scene 写错层级、add_element 字段拼错、值本来就等于目标，全都能被这一条抓住。
      * 不抛错（幂等重试本来就是合法的），但必须说出来，不能让它静默通过。
+     * 批量（> NOOP_DETECT_MAX_OPS）时不做：检测本身的代价是平方级的，见函数开头说明。
      */
-    if (JSON.stringify(next) === beforeJson) {
+    if (detectNoop && JSON.stringify(next) === beforeJson) {
       const head = ops.length > 1 ? `第 ${opIndex + 1}/${ops.length} 个操作（${op.op}）` : `操作（${op.op}）`;
       summary.push(
         `⚠️${head}没有产生任何数据变更：写入前后工程完全相同。` +

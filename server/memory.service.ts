@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import { ROOT as PROJECT_ROOT } from "./root";
+import { DATA_ROOT } from "./paths";
 import path from "node:path";
 
 /**
@@ -8,7 +9,7 @@ import path from "node:path";
  * 为什么按类分：片子越做越多，混在一个文件里会越来越长，检索也越来越不准。
  * 作用域：全局（跨工程）+ 工程级（只对当前片子有用）。
  */
-export const MEMORY_ROOT = path.join(PROJECT_ROOT, "data", "memory");
+export const MEMORY_ROOT = path.join(DATA_ROOT, "memory");
 
 export type MemoryKind = "pitfall" | "preference" | "recipe";
 export type MemoryScope = "global" | "project";

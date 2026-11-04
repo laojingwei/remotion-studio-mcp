@@ -1,11 +1,11 @@
-# Agent 使用全书（112 个工具 = 4 常驻 + 108 按需 + 能力地图 + 铁律）
+# Agent 使用全书（123 个工具 = 4 常驻 + 119 按需 + 能力地图 + 铁律）
 
 给 agent 的完整说明书。**你不需要读源码、不需要试探参数**：这台机器能做什么、怎么组合、
 为什么没生效，全部在这页和另外 17 篇指南里（全 18 篇的索引见本文最后一节）。
 
 **工具分两层（先搞懂这个）**：
 - **常驻核心 4 个**：`start_guide`（开工入口）、`get_guide`（读指南/本书）、`tool_search`（找工具）、`tool_call`（执行工具）
-- **其余 108 个**：不在常驻列表里。用法：`tool_search("画中画")` 找到工具（返回名字/说明/参数表）→ `tool_call(name="move_scene", args={...})` 执行。
+- **其余 117 个**：不在常驻列表里。用法：`tool_search("画中画")` 找到工具（返回名字/说明/参数表）→ `tool_call(name="move_scene", args={...})` 执行。
   全量目录：`tool_search(all=true)`；某几个工具的完整文档：`tool_search(names=["add_element"])`
 - 本书的工具全表（§3）按域列出全部工具（含 4 个核心）——先查表再搜索，比盲搜快
 
@@ -89,7 +89,7 @@
 
 **入口与指南**：`start_guide`（开工入口，必先调）· `list_guides` · `get_guide(name, section?)`
 
-**工程**：`list_projects`（★ = 当前）· `switch_project` · `create_project` · `get_project` · `delete_project` · `list_templates` · `save_template` · `delete_template` · `export_project` · `import_project` · `get_history` · `restore_rev`
+**工程**：`list_projects`（★ = 当前，**已归档默认不列**）· `switch_project` · `create_project` · `get_project` · `archive_project`（从列表收起来，不删文件）· `delete_project` · `list_templates` · `save_template` · `delete_template` · `export_project` · `import_project` · `get_history` · `restore_rev`
 
 > **当前工程怎么变**：只有 `create_project` / `import_project` / `switch_project` /「删掉的正好是当前工程」这四种情况会改。**其余工具即使显式传了 `projectId`，也只影响这一次调用，不会改当前工程**——所以「先 `get_project(别的工程)` 看一眼，再回来干活」是安全的。
 
@@ -101,7 +101,7 @@
 
 **稿件**：`save_script(segments[])`（一段一幕，带每段预估秒数；改稿会让确认失效）· `get_script` · `confirm_script`（稿子没确认不能写分镜，`scriptType=无稿` 除外）
 
-**3D 场景图**：`get_graph`（节点大纲：id/形状/颜色/父级，改之前先看）· `update_graph_node`（按节点局部写回，**改单个物体不要整份覆盖 graph**）· `add_graph_node` · `remove_graph_node` · `set_graph_scene`（相机/灯光/粒子/辉光）
+**3D 场景图**：`get_graph`（节点大纲：id/形状/颜色/父级，改之前先看）· `update_graph_node`（按节点局部写回，**改单个物体不要整份覆盖 graph**）· `add_graph_node` · `remove_graph_node` · `set_graph_scene`（相机/世界/灯光/粒子/辉光）· `list_world_skies`（世界全景图配方，**顺带检查本机有没有那张图**，再用 `set_graph_scene { worldPreset }` 套用）
 
 **场景**：`list_scene_types` · `add_scene` · `update_scene` · `set_scene_type`（换版式，同名 key 迁移）· `set_scene_timing` · `duplicate_scene` · `reorder_scenes`（**幕序的真相是分镜表**；有被 `move_scene` 钉死的幕时必须带 `reflow:true`，否则时间轴不动） · `remove_scene` · `move_scene`（绝对帧/换轨；会给这一幕**钉死起点**）· `set_scene_box`（画中画）· `set_transition` · `set_transitions`（批量）
 
@@ -111,7 +111,7 @@
 
 **特效**：`list_effect_types` · `add_effect` · `update_effect` · `remove_effect`
 
-**音频**：`set_audio`（BGM，含 **ducking 人声避让**；volume 1 = 原音、可到 5 = +14dB）· `balance_audio`（**响度配平**：段间大小不一）· `compress_audio`（**段内压缩**：一段里忽大忽小）· `analyze_audio`（测 BPM/拍点 + 响度）· `set_beat_grid`（按 BPM 建卡点网格）· `tts_check`（配音前预检）· `add_audio_track` · `update_audio_track` · `remove_audio_track` · `get_tts_config` · `set_tts_config` · `tts_synthesize` · `tts_narration(segments[], applyToScenes)`
+**音频**：`set_audio`（BGM，含 **ducking 人声避让**；volume 1 = 原音、可到 5 = +14dB）· `balance_audio`（**响度配平**：段间大小不一）· `compress_audio`（**段内压缩**：一段里忽大忽小）· `analyze_audio`（测 BPM/拍点 + 响度）· `set_beat_grid`（按 BPM 建卡点网格）· `tts_check`（配音前预检）· `add_audio_track` · `update_audio_track` · `remove_audio_track` · `get_tts_config` · `set_tts_config` · `tts_synthesize` · `tts_narration(segments[], applyToScenes)` · `revise_script`（**改稿即改片**：改一段台词 → 只重配这段 → 幕长/字幕/分镜/时间骨架跟着走，并报出被幕长变化挤到的元素）
 
 **字幕**：`set_subtitle`（自动拆段：清标点 + 一屏一句，返回拆分预览）· `fix_subtitles`（旧工程/长字幕批量重拆，`dryRun` 预演）· `set_subtitle_style` · `export_subtitles`（SRT / VTT）
 
@@ -153,7 +153,7 @@
 | 口播一听就是 AI 写的 | 四条结构签名：翻案腔（不是…而是…）、三项排比（不仅…也…更…）、结尾升华（让我们一起）、模糊归因（专家指出）。再加黑话与「念不出来的符号」（`get_guide("content","AI 味")`），`save_script` / `save_storyboard` 会自动点名 |
 | 竖屏片被平台 UI 压住 | 上 20% / 内容 60% / 下 20% 三区域，内容垂直居中，字幕上移（`get_guide("craft")` §11） |
 | 精修越改越花 | 精修是减法：先对齐/层级/减色，再加新特效（`get_guide("qa")` 精修与三个肉身测试） |
-| 只改某幕文案 | `update_scene(props)` 或 `update_element`；**改过口播必须重新 `tts_narration` 重量** |
+| 只改某幕文案（片已建好） | `revise_script(changes=[{segment:3, text:"新的一句"}])`——只重配这段、幕长/字幕/分镜/时间骨架同步，回执列出被挤到的元素。**别用 save_script 重写**（整片配音作废）。只改错别字传 `textOnly=true` |
 | 换一种版式 | `set_scene_type` → `get_scene` 回读确认字段迁移 |
 | 加背景音乐 | `set_audio(src)` 基础设置 → `set_audio(volume=0.25)` 压到人声 20–40%（`get_guide("sound")`）。**只传要改的字段就够**（合并语义），其余配置不动；清掉避让/压缩曲线要显式传 `ducking=null` / `gainCurve=null` |
 | 声音太小，想比原音更响 | `set_audio(volume=2.5)` / `update_element(audioVolume=2.5)`：**1 = 原音，上限 5（+14dB）**。回执会算峰值，会削波就警告 |

@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { ROOT } from "./root";
+import { DATA_ROOT, isDataRootOverridden } from "./paths";
 
 /**
  * 工作空间：把 `data/`、`public/`、`out/` 三块"会长大的"目录搬到用户指定的磁盘。
@@ -39,6 +40,8 @@ export type DirStatus = {
 export type WorkspaceStatus = {
   /** 工程根目录 */
   root: string;
+  /** 设了 STUDIO_DATA_ROOT 时：数据实际所在目录（此时 data/public/out 的统计仅供参考） */
+  dataRootOverride?: string;
   /** 自定义工作空间；null = 三块都在工程目录里 */
   workspaceDir: string | null;
   dirs: DirStatus[];
@@ -174,6 +177,8 @@ export function getWorkspaceStatus(): WorkspaceStatus {
   const wsDir = cfg.workspaceDir;
   return {
     root: ROOT,
+    // 覆盖模式下 data 不在 ROOT 里，三块目录的统计没有意义，明确标出来
+    ...(isDataRootOverridden ? { dataRootOverride: DATA_ROOT } : {}),
     workspaceDir: wsDir,
     dirs,
     totalBytes,
@@ -235,6 +240,17 @@ export function relocateWorkspace(
   targetDir: string,
   opts: { dryRun?: boolean } = {},
 ): RelocateResult {
+  /**
+   * 与 STUDIO_DATA_ROOT 互斥：那套是"直接指到别处"，这套是"留链接骗过代码"。
+   * 同时开会让状态页报告的位置和实际读写的目录不是同一个，用户会看到
+   * 「搬完了但数据没过去」。宁可明确拒绝。
+   */
+  if (isDataRootOverridden) {
+    throw new Error(
+      `当前用 STUDIO_DATA_ROOT 指定了数据目录（${DATA_ROOT}），不能再迁移工作空间——` +
+        `去掉该环境变量重启后，才用「工作空间」页签迁移 data/public/out`,
+    );
+  }
   const dryRun = !!opts.dryRun;
   const raw = String(targetDir ?? "").trim();
   if (!raw) throw new Error("要给一个目标目录，比如 D:/remotion-workspace");

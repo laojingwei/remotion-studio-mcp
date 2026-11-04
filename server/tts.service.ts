@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import { spawnSync } from "node:child_process";
 import { ROOT as PROJECT_ROOT } from "./root";
+import { DATA_ROOT } from "./paths";
 import path from "node:path";
 import { assetUrlOf } from "../shared/customTemplate";
 import { escapeForTts } from "../shared/ttsText";
@@ -42,7 +43,7 @@ const DEFAULTS: TtsConfig = {
   customBody: "",
 };
 
-const DATA_DIR = path.join(PROJECT_ROOT, "data");
+const DATA_DIR = DATA_ROOT;
 const FILE = path.join(DATA_DIR, "tts-config.json");
 
 export function getTtsConfig(): TtsConfig {

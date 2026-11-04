@@ -1,18 +1,29 @@
 /**
- * MCP 薄代理：只做参数搬运，所有写操作转发到常驻服务。
- * 绝不自己读写 project.json —— 否则会形成第二个状态源，Web 端就看不到 agent 的修改。
+ * MCP 工具总表（聚合层）。
+ *
+ * 历史：这个文件曾经是 8900 行（工具定义 + 服务探活 + 参数校验 + 文档生成全在里面），
+ * 改任何一个工具都要在近万行里跳转，diff 噪音大、review 难、多人并行必冲突。
+ *
+ * 现在分三层：
+ *   server/tools/_shared.ts   共享底座（api / resolveProject / 校验 / 文档）
+ *   server/tools/*.ts         按能力分组的工具定义
+ *   本文件                    把分组拼成 TOOLS，并暴露 MCP Server 与门面
+ *
+ * 顺序有意义：TOOLS 的顺序会体现在 tools/list 与 tool_search 的结果里，
+ * 所以分组是按原文件中的位置用 spread 拼回去的，不要随意调整。
  */
-import { spawn } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
 import { z } from "zod";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { listSkills, readSkill } from "./skills.service";
+import { formatProjectList } from "./projects-text";
+import { loadUploadFile } from "./upload-path";
 import { recallAll, remember, type MemoryKind } from "./memory.service";
 import { ROOT as PROJECT_ROOT } from "./root";
 import { BACKDROP_TYPES } from "../shared/sceneKinds";
 import { BRIEF_STEPS, CONFIRM_GROUPS, CORE_STEPS, briefCoverage, briefProgress, briefToText, confirmBrief, legacyFieldNotice, readBrief, recomputeDesignLock, saveBrief, sceneCountHint, stepMissingFields, type Brief } from "./brief.service";
+import { listAnnotations, resolveAnnotations } from "./annotation.service";
 import { FORM_SPECS, designLockSummary, lockViolations, normalizeForm } from "../shared/designLock";
 import { auditBriefAgainstProject, auditToText } from "./brief-audit.service";
 import { listNarrationClips, markVoiceHeard, narrationFingerprint, voiceHeardState } from "./narration-voice.service";
@@ -22,15 +33,26 @@ import { readScript, saveScript, confirmScript, scriptToText, estimateSeconds, s
 import { readReview, markReviewRequested, markReviewConfirmed, markNeedsWork, markSelfRender, markProbe, markChosenStyle, reviewToText } from "./review.service";
 import { listStyles, presetOf, readStyle, styleSummary } from "./styles.service";
 import { readStoryboard, saveStoryboard, storyboardToText, type Storyboard } from "./storyboard.service";
+import { readTiming, saveTiming } from "./narration-timing.service";
+import {
+  analyzeReflow,
+  findSceneOf,
+  mergeTiming,
+  patchStoryboard,
+  resolveChanges,
+  type LooseScene,
+} from "./revise.service";
 import { ELEMENT_LIBRARY, elementFromLibrary } from "../shared/elementLibrary";
 import { getMeta, normalizeProps, describeTypeDeep } from "../shared/sceneMetas";
 import {
   assetIdOf,
   assetToElement,
   isAssetLibraryId,
+  toAssetId,
   type CustomAsset,
 } from "../shared/assetLibrary";
 import { TRANSITION_TYPES } from "../shared/transitions";
+import { seamBlendWindows } from "../shared/transitions";
 import {
   CUSTOM_EASES,
   EFFECT_CURVES,
@@ -47,1137 +69,102 @@ import { detectFlavor } from "../shared/aiFlavor";
 import { lintCopyLines, lintScriptLines } from "../shared/copyLint";
 import { beatFrames, beatTimes, buildCompressCurve, DEFAULT_DUCKING, gainForTarget, nearestBeat, summarizeCurve } from "../shared/audio";
 import { analyzeBeats, BEAT_CONFIDENCE_MIN } from "./audio-analysis.service";
+import { VERSION } from "./version";
+import { logToolCall, toolStats, toolStatsToText } from "./tool-log.service";
+import {
+  EFFECT_DESC,
+  BASE,
+  BRK,
+  TRANSITION_DEFAULT_FRAMES,
+  processGateBypass,
+  SKIPPED_NOTE,
+  FORCE_QUOTE_MIN,
+  pickReviewFormat,
+  platformSafeArea,
+  auditSubtitles,
+  ROOT,
+  ensureServer,
+  dirtySincePreview,
+  DIRTY_HINT,
+  fmtSummary,
+  liftWarnings,
+  needsDirtyHint,
+  api,
+  ProjectLite,
+  lastProjectId,
+  setCurrentProject,
+  refreshPointer,
+  assertNarrationHeard,
+  resolveProject,
+  composeElement,
+  normalizeOps,
+  brief,
+  alignScenesToStoryboard,
+  probeAssets,
+  probeOne,
+  ToolDef,
+  text,
+  FORMAT_PRESETS,
+  briefImpactLog,
+  describeBriefImpact,
+  rememberDeliveryPreferences,
+  firstLine,
+  Role,
+  collectAudioEntries,
+  ProjectAssetLite,
+  OrganizeResultLite,
+  formatBytes,
+  LoudnessLite,
+  loudnessOf,
+  clipWarning,
+  validateToolArgs,
+  fullDoc,
+  clearDirty,
+  probedDurationFrames,
+  sceneMissingMessage,
+} from "./tools/_shared";
+import { SCENE3D_TOOLS } from "./tools/scene3d";
+import { PROJECT_TOOLS } from "./tools/project";
+import { BRIEF_TOOLS } from "./tools/brief";
+import { SCRIPT_TOOLS } from "./tools/script";
+import { STORYBOARD_TOOLS } from "./tools/storyboard";
+import { CLEANUP_TOOLS } from "./tools/cleanup";
 
-/** 元素入场/出场特效的 zod 结构 */
-const EFFECT_DESC = z.object({
-  type: z.enum(TRANSITION_TYPES),
-  durationInFrames: z.number().int().min(0),
-});
+// 老调用方（server/index.ts）从这里引，保持导出面不变
+export { validateToolArgs } from "./tools/_shared";
 
-const BASE = process.env.SERVER_URL ?? "http://127.0.0.1:4380";
-const BRK = String.fromCharCode(10);
+/** 工具门面：常驻暴露的核心工具；其余工具经 tool_search 发现、tool_call 执行 */
+export const CORE_TOOL_NAMES = new Set(["start_guide", "get_guide", "tool_search", "tool_call"]);
 
-/**
- * 转场时长默认值（帧）。此前散落 4 处各自写死 12、描述又都不声明，
- * agent 想统一调整节奏时感知不到这个默认 —— 收敛成一处，描述统一引用。
- */
-const TRANSITION_DEFAULT_FRAMES = 12;
-
-/**
- * 流程闸口旁路（build_storyboard / build_film 的 skipChecks 参数）。
- *
- * 分级原则：**验收（confirm_review）与契约（mustInfo/禁词）是交付硬闸**，走各自的 force 机制；
- * 需求问诊 / 风格样张 / 稿件确认 / 配音试听是**流程性闸口**——用户明确说「直接建 / 不用问了」时
- * 应该放行，但必须附用户原话（≥2 字），跳过要在回执里留痕，风险说清由用户自担。
- */
-function processGateBypass(a: { skipChecks?: boolean; skipReason?: string }): string | null {
-  if (!a.skipChecks) return null;
-  if (!a.skipReason || [...a.skipReason.trim()].length < 2) {
-    throw new Error(
-      "skipChecks=true 必须同时给 skipReason（用户让你跳过的原话，至少 2 字）——没有原话不能跳过流程闸口",
-    );
-  }
-  return a.skipReason.trim();
-}
-const SKIPPED_NOTE = (gates: string[], by: string) =>
-  `⚠ 已按用户要求跳过流程闸口：${gates.join("、")}（用户原话：「${by}」）——这些环节没走完，质量风险由用户自担。`;
-
-/** force 旁路原话的最短长度。原话由 agent 转述、无法验真，卡长度只会增加摩擦，能对上口径即可 */
-const FORCE_QUOTE_MIN = 2;
-
-/**
- * 平台 UI 遮挡区（画面百分比，经验值，只用于提醒，绝不硬裁）。
- *
- * 为什么只提醒：元素出框经常是有意设计（大字标题、延伸色块、出血图）。
- * 但字幕/二维码/联系方式这类"必须被看见"的东西压进按钮区，是真事故。
- */
-/** 样张最多 3 个：多了用户挑不动，也浪费渲染（probe_style 入口处已限） */
-
-/**
- * 选「画幅相关体检」按哪个画幅算（安全区 / 竖屏构图 / 字幕距底）。
- *
- * 多画幅工程（横 + 竖一起出）不能一律按竖屏判：横屏交付的片子会被竖屏规则刷出几十条误报，
- * 真问题反而被埋掉。顺序：显式 format → brief.aspect 对应的那个 → 工程第一个画幅。
- */
-function pickReviewFormat(
-  formats: { key?: string; width?: number; height?: number }[],
-  formatKey?: string,
-  briefAspect?: string,
-): { fmt?: { key?: string; width?: number; height?: number }; others: string[]; why: string } {
-  const list = formats.filter((f) => Number(f.width) > 0 && Number(f.height) > 0);
-  if (!list.length) return { fmt: undefined, others: [], why: "工程没设画幅" };
-
-  if (formatKey) {
-    const hit = list.find((f) => f.key === formatKey);
-    if (!hit) {
-      throw new Error(`没有画幅「${formatKey}」。这个工程有：${list.map((f) => f.key).join("、")}`);
-    }
-    return { fmt: hit, others: list.filter((f) => f !== hit).map((f) => String(f.key)), why: "按指定的 format" };
-  }
-
-  const m = /(\d+(?:\.\d+)?)\s*[:：/]\s*(\d+(?:\.\d+)?)/.exec(String(briefAspect ?? ""));
-  if (m) {
-    const want = Number(m[1]) / Number(m[2]);
-    const scored = list
-      .map((f) => ({ f, d: Math.abs(Number(f.width) / Number(f.height) - want) }))
-      .sort((x, y) => x.d - y.d);
-    // 容差 6%：16:9 与 1.85:1 这种近似比例要能对上，差一半以上的说明 brief 说错了
-    if (scored[0] && scored[0].d < want * 0.06) {
-      const hit = scored[0].f;
-      return {
-        fmt: hit,
-        others: list.filter((f) => f !== hit).map((f) => String(f.key)),
-        why: `按 brief 里的画幅 ${m[1]}:${m[2]}`,
-      };
-    }
-  }
-
-  return { fmt: list[0], others: list.slice(1).map((f) => String(f.key)), why: "按工程第一个画幅（brief 里没写画幅）" };
-}
-
-function platformSafeArea(platform: string | undefined, aspect: string) {
-  const portrait = /^(9:16|3:4|4:5|1:1)/.test(String(aspect ?? "9:16"));
-  const p = String(platform ?? "");
-  // 横屏没有右侧按钮栏、也没有顶部状态栏（那是竖屏 App 才有的）。
-  // 只有底部播放器控件会压一点——按竖屏口径判横屏片，等于给横屏交付的片子刷一屏假警报。
-  if (!portrait) {
-    return {
-      right: 0,
-      bottom: 8,
-      top: 0,
-      note: "横屏：只有底部约 8% 是播放器控件区；右侧/顶部不会被平台 UI 压（网页与投屏播放甚至完全不遮）",
-    };
-  }
-  if (/小红书/.test(p)) return { right: 0, bottom: 16, top: 8, note: "小红书竖屏：底部 16% / 顶部 8%" };
-  return {
-    right: 12,
-    bottom: 16,
-    top: 7,
-    note: "竖屏短视频（抖音/快手/视频号）：右侧约 12% 按钮栏 / 底部约 16% 文案区 / 顶部约 7% 状态栏",
-  };
-}
+/** MCP_EXPOSE=all 时恢复全量暴露（调试用） */
+export const exposeAllTools = () => (process.env.MCP_EXPOSE ?? "").trim().toLowerCase() === "all";
 
 /**
- * 字幕体检：字幕是「又臭又长」的重灾区，而它只在成片里暴露。
+ * 文字元素出界粗判（x/y 是中心点）。
  *
- * 判两件事：
- *   1. 存的原文（scene.subtitle）有没有长句 / 标点 —— 渲染时会自动拆，但存着长句意味着
- *      断句点是机器猜的，节奏不一定对；SRT 也会跟着碎。
- *   2. 按当前幕长算，一屏停留时间够不够读（字/秒）——太快等于没字幕。
- *
- * 返回的 `hard` 是必须在渲染前修的（一屏读不完），其余是提醒。
+ * 本地实测：x=85 放 7 个字的标签，右边被裁掉一截，而抽帧之前完全看不出来。
+ * 宽度只能估（真实排版在浏览器里），所以这里是「大概会出界」的提醒，不是断言。
  */
-function auditSubtitles(project: any): { issues: string[]; hard: string[] } {
-  const issues: string[] = [];
-  const hard: string[] = [];
-  const fps = Number(project?.fps ?? 30) || 30;
-  const spans = sceneSpans(project?.scenes ?? []);
-  (project?.scenes ?? []).forEach((sc: any, i: number) => {
-    const raw = String(sc.subtitle ?? "").trim();
-    if (!raw) return;
-    const max = subtitleMaxChars(sc);
-    const lines = raw.split("\n").map((x: string) => x.trim()).filter(Boolean);
-    const long = lines.filter((l) => [...l].length > SUBTITLE_LIMITS.hard);
-    if (long.length) {
-      hard.push(
-        `「${sc.name}」有 ${long.length} 句超过 ${SUBTITLE_LIMITS.hard} 字（最长 ${Math.max(
-          ...[...long].map((l) => [...l].length),
-        )} 字）：一屏读不完，观众只顾着读字`,
-      );
-      return;
-    }
-    const over = lines.filter((l) => [...l].length > max);
-    if (over.length) {
-      issues.push(
-        `ℹ️「${sc.name}」有 ${over.length} 句超过一屏 ${max} 字（最长 ${Math.max(
-          ...[...over].map((l) => [...l].length),
-        )} 字）：上屏会自动拆，但建议存之前就拆好`,
-      );
-    }
-    if (lines.some((l) => /[。，、；：！？…,;:!?]/.test(l))) {
-      issues.push(`ℹ️「${sc.name}」字幕带标点：标点只用于断句，上屏会自动清掉（想干净就 fix_subtitles）`);
-    }
-    // 字/秒：字幕停留时间不够读，等于没有
-    const span = spans[i];
-    if (span) {
-      const chars = sceneSubtitleLines(sc).reduce((n, l) => n + [...l.text].length, 0);
-      const sec = span.dur / fps;
-      const cps = sec > 0 ? chars / sec : 99;
-      if (chars >= 8 && cps > 9) {
-        issues.push(
-          `ℹ️「${sc.name}」字幕 ${chars} 字 / ${sec.toFixed(1)}s ≈ ${cps.toFixed(1)} 字/秒（超过 9 就来不及读）：要么加时长，要么减字`,
-        );
-      }
-    }
-  });
-  return { issues, hard };
-}
-
-/** 量音频/视频真实时长（帧）；量不出来返回 null */async function probedDurationFrames(src: string, fps = 30): Promise<number | null> {
-  try {
-    const res = await fetch(
-      `${BASE}/api/assets/probe?src=${encodeURI(src)}`,
-      { signal: AbortSignal.timeout(8000) },
-    );
-    const data = (await res.json()) as {
-      probes?: { durationInSeconds?: number }[];
-    };
-    const d = data.probes?.[0]?.durationInSeconds;
-    if (d && d > 0) return Math.max(1, Math.round(d * fps));
-  } catch {
-    /* 量不出来就让元素按默认（到场景结尾） */
-  }
-  return null;
-}
-/** 用脚本自身位置推工程根目录，不依赖 MCP 宿主的 cwd */
-const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
-
-const log = (...args: unknown[]) => console.error("[mcp]", ...args);
-
-/* ────────────────────────────── 服务拉起 ────────────────────────────── */
-
-/**
- * 记录「最近一次确认服务活着」的时间，而不是一次性布尔值。
- * 服务进程可能被杀、崩溃或重启（用户在编辑器里改动、机器休眠等），
- * 用布尔缓存会导致此后所有调用都直接打到死端口。
- */
-let ensuredAt = 0;
-const ENSURE_TTL = 4000;
-
-async function health(): Promise<boolean> {
-  try {
-    const res = await fetch(`${BASE}/api/health`, { signal: AbortSignal.timeout(1200) });
-    return res.ok;
-  } catch {
-    return false;
-  }
-}
-
-async function ensureServer(force = false) {
-  if (!force && Date.now() - ensuredAt < ENSURE_TTL) return;
-  if (await health()) {
-    ensuredAt = Date.now();
-    return;
-  }
-  log("服务未启动，尝试拉起 server/index.ts …");
-  // 用工程内的 tsx + 当前 node 启动，避免依赖全局 npx / PATH
-  const tsxCli = path.join(ROOT, "node_modules", "tsx", "dist", "cli.mjs");
-  const child = spawn(process.execPath, [tsxCli, path.join(ROOT, "server", "index.ts")], {
-    cwd: ROOT,
-    detached: true,
-    stdio: "ignore",
-  });
-  child.unref();
-
-  for (let i = 0; i < 40; i++) {
-    await new Promise((r) => setTimeout(r, 500));
-    if (await health()) {
-      log("服务已就绪");
-      ensuredAt = Date.now();
-      return;
-    }
-  }
-  throw new Error("无法启动本地服务，请先手动执行 `npm run dev`");
-}
-
-/**
- * 「改完还没抽帧看过」的脏标记。
- *
- * 为什么要有：agent 改完一幕就直接往下做（继续改 / 渲染），用户从头到尾没看过效果，
- * 等到成片才发现不对——返工成本最高的一种。所以写操作会置脏，抽帧（preview_*）才清脏；
- * 脏着的时候 render / request_review 直接拒绝，其余写工具在返回里挂一句提醒。
- *
- * 只看"画面类"写入：brief / 稿件 / 分镜表这类文本配置不算——它们不需要看画面。
- */
-let dirtySincePreview = false;
-const DIRTY_PATH_RE = /\/ops$|\/theme$|\/formats$/;
-
-function markDirty(pathname: string): void {
-  if (DIRTY_PATH_RE.test(pathname)) dirtySincePreview = true;
-}
-
-const DIRTY_HINT =
-  String.fromCharCode(10) +
-  "⚠️ 这一轮改动还没抽帧确认：preview_frame / preview_frames 看一眼（并把图发给用户），再往下走。";
-
-/**
- * ops 回执的统一拼装：⚠️ 开头的项**单独成行排在最前**。
- *
- * 以前一律 `summary.join("；")`，警告就埋在长句尾巴上——agent 扫一眼以为全成功，
- * 实际问题（比如「5 幕有自定义起点，时间位置不变」）就在那行末尾，被漏掉过一次。
- */
-function fmtSummary(summary: string[] | undefined): string {
-  const list = (summary ?? []).filter((s) => String(s).trim());
-  if (!list.length) return "";
-  const isWarn = (s: string) => s.includes("⚠");
-  const warns = list.filter(isWarn);
-  const rest = list.filter((s) => !isWarn(s));
-  if (!warns.length) return list.join("；");
-  return [warns.join("\n"), rest.join("；")].filter(Boolean).join("\n");
-}
-
-/** 把输出里带 ⚠️ 的行提到最前（第一行标题保持不动） */
-function liftWarnings(out: string): string {
-  if (!out.includes("⚠️")) return out;
-  const lines = out.split("\n");
-  if (lines.length < 3) return out;
-  const isWarnLine = (s: string) => s.includes("⚠️");
-  const warn = lines.slice(1).filter(isWarnLine);
-  if (!warn.length) return out;
-  const rest = lines.slice(1).filter((s) => !isWarnLine(s));
-  return [lines[0], ...warn, ...rest].join("\n");
-}
-
-/** 清脏的工具（看过画面的都算） */
-const PREVIEW_TOOLS = new Set(["preview_frame", "preview_frames", "render_cover", "probe_style"]);
-
-/** 不该挂提醒的工具：只读类 + 预览类 + 闸口类 */
-function needsDirtyHint(name: string): boolean {
-  if (PREVIEW_TOOLS.has(name)) return false;
-  return !/^(get_|list_|render_|cancel_|check_|tool_|start_|export_|import_|recall|remember|intake|confirm_|request_)/.test(
-    name,
+function elementEdgeWarn(el: {
+  kind?: string;
+  text?: string;
+  size?: number;
+  x?: number;
+  maxWidth?: number;
+}): string | null {
+  if (el?.kind !== "text" || !el.text) return null;
+  const size = Number(el.size ?? 4);
+  const chars = [...el.text];
+  const cjk = chars.filter((c) => /[\u3000-\u31ff\u4e00-\u9fff\uff00-\uffef]/.test(c)).length;
+  const est = (cjk * size + (chars.length - cjk) * size * 0.58) * 1.12; // 1.12 ≈ 内边距
+  const width = el.maxWidth ? Math.min(est, el.maxWidth) : est;
+  const x = Number(el.x ?? 50);
+  const right = x + width / 2;
+  if (right <= 100.5) return null;
+  return (
+    `这段文字约 ${width.toFixed(0)}% 宽、中心在 ${x}%，右边缘到 ${right.toFixed(0)}%，会被裁掉约 ${(right - 100).toFixed(0)}%。` +
+    `x 是中心点，改到 ≤ ${Math.max(2, Math.round(100 - width / 2 - 3))}，或加 maxWidth 让它折行`
   );
-}
-
-async function api<T>(pathname: string, init?: RequestInit): Promise<T> {
-  await ensureServer();
-
-  const request = () =>
-    fetch(`${BASE}${pathname}`, {
-      ...init,
-      headers: { "content-type": "application/json", ...(init?.headers ?? {}) },
-    });
-
-  let res: Response;
-  try {
-    res = await request();
-  } catch {
-    // 连接层失败说明服务已不在，重新拉起后再试一次
-    await ensureServer(true);
-    res = await request();
-  }
-
-  const text = await res.text();
-  const data = text ? JSON.parse(text) : {};
-  if (!res.ok) throw new Error((data as { error?: string }).error ?? `HTTP ${res.status}`);
-  if (init?.method && init.method !== "GET") markDirty(pathname);
-  return data as T;
-}
-
-/* ────────────────────────────── 类型 ────────────────────────────── */
-
-type ProjectLite = {
-  id: string;
-  name: string;
-  rev: number;
-  fps: number;
-  formats: { key: string; label: string; width: number; height: number }[];
-  theme: { palette: Record<string, string> };
-  audio?: {
-    src: string;
-    volume?: number;
-    fadeIn?: number;
-    fadeOut?: number;
-    from?: number;
-    durationInFrames?: number;
-    loop?: boolean;
-    ducking?: { enabled: boolean; depth: number; attackMs: number; releaseMs: number; padMs: number };
-    gainCurve?: { stepMs: number; values: number[]; targetLufs?: number; ratio?: number };
-  };
-  /** 节拍网格（analyze_audio / set_beat_grid 写入） */
-  beatGrid?: { bpm: number; offsetSec: number; source: "auto" | "manual"; src?: string; confidence?: number };
-  audioTracks?: {
-    id: string;
-    name: string;
-    from: number;
-    volume: number;
-    src: string;
-    gainCurve?: { stepMs: number; values: number[]; targetLufs?: number; ratio?: number };
-  }[];
-  /** 特效轨（get_project 会把它列出来，agent 才知道 effectId） */
-  effects?: { id: string; kind: string; name: string; from: number; durationInFrames: number; intensity?: number; color?: string }[];
-  scenes: {
-    id: string;
-    type: string;
-    name: string;
-    durationInFrames: number;
-    start?: number;
-    track?: number;
-    elements?: {
-      id: string;
-      kind: string;
-      name: string;
-      x: number;
-      y: number;
-      from?: number;
-      durationInFrames?: number;
-      src?: string;
-      muted?: boolean;
-      audioVolume?: number;
-    }[];
-    props: Record<string, unknown>;
-  }[];
-};
-
-/** 最近一次用过的工程 id：没传 projectId 时优先用它（而不是永远取第一个工程）。
- * 落盘到 data/agent-state.json：服务重启后还能接上上次的工程（黑盒验证 N-04）。 */
-let lastProjectId: string | null = null;
-
-const AGENT_STATE_FILE = path.join(ROOT, "data", "agent-state.json");
-
-/** 从盘上读指针。stdio 代理与 HTTP 服务是两个进程，各有一份内存缓存，
- *  指针必须同源，否则「A 通道切换了、B 通道还在旧工程」 */
-function readPointerFromDisk(): string | null {
-  try {
-    if (!fs.existsSync(AGENT_STATE_FILE)) return null;
-    const raw = JSON.parse(fs.readFileSync(AGENT_STATE_FILE, "utf8")) as { currentProjectId?: string | null };
-    return raw?.currentProjectId ?? null;
-  } catch {
-    /* 状态文件坏了就当作没有 */
-    return null;
-  }
-}
-
-function saveAgentState(): void {
-  try {
-    fs.mkdirSync(path.dirname(AGENT_STATE_FILE), { recursive: true });
-    fs.writeFileSync(AGENT_STATE_FILE, JSON.stringify({ currentProjectId: lastProjectId }, null, 2), "utf8");
-  } catch {
-    /* 落盘失败不影响会话内行为 */
-  }
-}
-
-/** 唯一**写**指针的入口。只允许这五处调用：
- *  switch_project / create_project / import_project / 删除当前工程后的回退 / 指针失效自愈。 */
-function setCurrentProject(id: string | null): void {
-  lastProjectId = id;
-  saveAgentState();
-}
-
-/** 把盘上的指针同步进内存（另一个进程可能刚改过） */
-function refreshPointer(): void {
-  const disk = readPointerFromDisk();
-  if (disk && disk !== lastProjectId) lastProjectId = disk;
-}
-
-/**
- * 解析这次调用该作用在哪个工程上。
- *
- * 两条铁律（复验 P0，2026-10-28）：
- * 1. **传了 projectId 就是纯读**——绝不改当前工程指针。
- *    曾经的写法是 `if (lastProjectId !== project.id) setCurrentProject(...)`，
- *    于是任何只读工具（get_project / get_brief / check_project / intake…）只要显式带了
- *    projectId，就把「当前工程」改成它。用户流程「先看一眼前一个工程，再回来继续干」会静默
- *    把后续写操作落到别的工程上，且每次调用都返回成功。
- * 2. **指针失效时自愈并写回**（不是每次读都 fallback）：指针指向已删工程 → 落到第一个存活
- *    工程并落盘，否则 list_projects 永远标不出 ★、get_project 每次都静默换工程。
- */
-/**
- * 建幕前的配音闸口。
- *
- * ## 为什么这个闸口必须存在
- *
- * 事故里 5 段配音合成完、用户一句没听到，agent 就建了 5 幕画面，
- * 并用 `tts_narration(applyToScenes)` 把幕长锁死在这版语音上（301/959/850/733/698 帧）。
- * 后果不是「画面做错了」，而是**画面被锁在未确认的语音上**：改一句台词 → 重新合成
- * → 每幕幕长变 → 所有元素坐标与动画帧位重排。改一段约等于重做。
- *
- * ## 为什么不是布尔闸口
- *
- * 布尔（`acknowledged=true`）只能表达「我确认了」，记录不下**用户到底说了什么**。
- * 而这次翻车的正是语义：用户说「可以，先合成配音试听」，
- * 被记成「稿子确认完毕，可以往下走」。所以这里要求原话，并留痕。
- *
- * 三种情况：
- * - 没合成过 → 放行（无稿类、纯图文片本来就没有配音）
- * - 合成过但没人听过 → 拒绝
- * - 听过的是旧版本（重跑过 TTS）→ 拒绝，让用户重听
- */
-async function assertNarrationHeard(projectId: string, action: string): Promise<void> {
-  const nl = String.fromCharCode(10);
-
-  // ① 先看「事实」：工程里被标记为旁白的音频元素。
-  //    外部音频（真人录音 / 别的 TTS）不会产生 narration-timing，
-  //    以前只看 timing 就会读到 none 直接放行 —— 那是个洞。
-  const fresh = await api<{ project: never }>(`/api/projects/${projectId}`);
-  const vs = voiceHeardState(fresh.project, projectId);
-  if (vs.state === "unheard") {
-    const clips = vs.clips
-      .slice(0, 6)
-      .map((c) => `    · 第 ${c.sceneIndex + 1} 幕 @${c.from} 帧（${(c.durationInFrames ?? 0) / ((fresh.project as { fps?: number }).fps || 30)}s）${c.src}`)
-      .join(nl);
-    throw new Error(
-      `配音已经放进工程了，但用户还没听过这一版 —— 不能${action}。${nl}` +
-        `  ${vs.detail}${nl}` +
-        (clips ? `${nl}  ${clips}${nl}` : "") +
-        `  该做的：把下面这些链接发给用户（点开就能播），问他语速/错字/停顿：${nl}` +
-        vs.clips
-          .slice(0, 6)
-          .map((c) => `    ${BASE}${c.src}`)
-          .join(nl) +
-        `${nl}  他听过之后 → confirm_narration(userSaid="他的原话")。${nl}` +
-        `  为什么必须等：现在建幕会把幕长锁死在这版语音上，改一句台词就要重排全片。`,
-    );
-  }
-  if (vs.state === "heard") return;
-
-  // ② 工程里还没有旁白音频 → 退回 TTS 骨架那条路（先合成、画面还没建）
-  const r = await api<{
-    timing: { at: string; segments: unknown[]; totalSec: number; heardAt?: string; heardOf?: string } | null;
-  }>(`/api/projects/${projectId}/narration-timing`);
-  const t = r.timing;
-  if (!t) return;
-  if (!t.heardAt) {
-    throw new Error(
-      `配音已经合成，但用户还没听过 —— 不能${action}。${nl}` +
-        `  这一版：${(t.segments ?? []).length} 段 / ${Number(t.totalSec ?? 0).toFixed(1)}s（合成于 ${t.at}）${nl}` +
-        `  该做的：把 tts_narration / register_narration 回执里那些「试听：http://…」链接发给用户，` +
-        `问他语速/错字/停顿，他听过之后 → confirm_narration(userSaid="他的原话")。${nl}` +
-        `  为什么必须等：现在建幕会把幕长锁死在这版语音上，改一句台词就要重排全片。`,
-    );
-  }
-  if (t.heardOf !== t.at) {
-    throw new Error(
-      `用户听过的是**旧版本**配音，当前这一版是重新合成的 —— 不能${action}。${nl}` +
-        `  他听的：${t.heardOf}${nl}  现在的：${t.at}${nl}` +
-        `  该做的：把新链接发给他再听一次 → confirm_narration(userSaid="他的原话")。`,
-    );
-  }
-}
-
-async function resolveProject(projectId?: string): Promise<ProjectLite> {
-  if (projectId) {
-    const { project } = await api<{ project: ProjectLite }>(`/api/projects/${projectId}`);
-    return project;
-  }
-  refreshPointer();
-  if (lastProjectId) {
-    try {
-      const { project } = await api<{ project: ProjectLite }>(`/api/projects/${lastProjectId}`);
-      return project;
-    } catch {
-      setCurrentProject(null);
-    }
-  }
-  const { projects } = await api<{ projects: { id: string }[] }>("/api/projects");
-  if (!projects.length) throw new Error("还没有任何工程");
-  const { project } = await api<{ project: ProjectLite }>(`/api/projects/${projects[0].id}`);
-  setCurrentProject(project.id);
-  return project;
-}
-
-/* ────────────────────── 批量 op：参数归一化 ────────────────────── */
-
-/**
- * add_element 的「扁平参数」→ 完整 element 对象。
- *
- * 为什么要有这一层：单独调 `add_element` 工具时参数是扁平的（text / x / svg / libraryId…），
- * 而 op 层要的是 `{ sceneId, element: {...} }`。在 `apply_ops` 里 agent 很自然会把单工具的
- * 字段直接塞进 op，于是 `op.element` 是 undefined，崩出
- * `Cannot read properties of undefined (reading 'id')` ——
- * 这句报错和「你少包一层 element」毫无关系，实测让 agent 完全无法定位，
- * 只能拆成 18 次单调用（批量能力因此被判定为"不可用"）。
- *
- * 组装逻辑只留这一份：字段名、默认值、libraryId 解析、音视频按素材真实时长，
- * 单工具与批量两条路径共用。
- */
-async function composeElement(
-  a: Record<string, unknown>,
-  project: ProjectLite,
-): Promise<{ element: Record<string, unknown>; sceneId: string }> {
-  const str = (k: string) => (a[k] === undefined || a[k] === null ? undefined : String(a[k]));
-  const num = (k: string) => (a[k] === undefined || a[k] === null ? undefined : Number(a[k]));
-
-  const sceneId = str("sceneId") ?? project.scenes[0]?.id;
-  if (!sceneId) throw new Error("工程里还没有场景，先 add_scene 再放元素");
-  // @别名 指向"本批刚建的场景"，此刻还不存在 —— 交给服务端 apply 时解析
-  if (!sceneId.startsWith("@") && !project.scenes.some((s) => s.id === sceneId)) {
-    throw new Error(`找不到场景 ${sceneId}（现有场景：${project.scenes.map((s) => s.id).join("、")}）`);
-  }
-
-  const libraryId = str("libraryId");
-  let base: Record<string, unknown> = {};
-  if (libraryId) {
-    if (isAssetLibraryId(libraryId)) {
-      await ensureServer();
-      const res = await fetch(`${BASE}/api/library`);
-      const data = (await res.json()) as { items?: CustomAsset[] };
-      const asset = (data.items ?? []).find((x) => x.id === assetIdOf(libraryId));
-      if (!asset) {
-        throw new Error(`我的素材里没有 ${libraryId}，先 upload_asset 或看 list_element_library`);
-      }
-      base = assetToElement(asset, {
-        x: num("x") ?? 50,
-        y: num("y") ?? 52,
-      }) as unknown as Record<string, unknown>;
-    } else {
-      base = elementFromLibrary(libraryId) as unknown as Record<string, unknown>;
-    }
-  }
-
-  const text = str("text");
-  const src = str("videoSrc") ?? str("audioSrc") ?? str("imageSrc");
-  const kind =
-    text !== undefined
-      ? "text"
-      : str("videoSrc")
-        ? "video"
-        : str("audioSrc")
-          ? "audio"
-          : str("imageSrc")
-            ? "image"
-            : str("svg")
-              ? "svg"
-              : (base.kind as string | undefined);
-  if (!kind) {
-    throw new Error(
-      "add_element 需要 libraryId / svg / text / imageSrc / videoSrc / audioSrc 至少一个" +
-        "（批量里也可以直接写 element:{...} 包裹，两种写法都认）",
-    );
-  }
-
-  const id = str("id") ?? `el_${Math.random().toString(36).slice(2, 10)}`;
-  const element: Record<string, unknown> = {
-    ...base,
-    kind,
-    id,
-    name: str("name") ?? (base.name as string | undefined) ?? (kind === "text" ? text : "元素"),
-    x: num("x") ?? (base.x as number | undefined) ?? 50,
-    y: num("y") ?? (base.y as number | undefined) ?? 52,
-  };
-  if (src) element.src = src;
-
-  const passthrough = [
-    "svg", "viewBox", "stroke", "strokeWidth", "text",
-    "size", "rotate", "scale", "opacity", "z", "fill", "bg", "weight",
-    "radius", "border", "borderColor", "shadow", "filter", "blendMode",
-    "clipPath", "fit", "fontFamily", "lineHeight", "letterSpacing",
-    "textAlign", "fontStyle", "underline", "maxWidth", "strokeLinecap",
-    "strokeLinejoin", "style", "enter", "exit", "from", "durationInFrames",
-    "muted", "loop", "startFrom", "audioVolume",
-  ];
-  for (const k of passthrough) if (a[k] !== undefined) element[k] = a[k];
-
-  // 音频/视频没显式给时长 → 按素材真实时长（铺满整幕会让 4 秒的素材播到幕尾时静音）
-  if ((kind === "audio" || kind === "video") && element.durationInFrames === undefined) {
-    const frames = src ? await probedDurationFrames(src) : null;
-    if (frames) element.durationInFrames = frames;
-  }
-  if (kind === "video") {
-    if (element.muted === undefined) element.muted = false;
-    if (element.loop === undefined) element.loop = false;
-  }
-  return { element, sceneId };
-}
-
-/** update_element 允许的扁平字段（批量里照抄单工具写法时，这些键要收进 patch） */
-const UPDATE_ELEMENT_KEYS = [
-  "name", "x", "y", "size", "rotate", "scale", "opacity", "z", "fill", "text",
-  "svg", "viewBox", "stroke", "strokeWidth", "bg", "weight", "radius", "border",
-  "borderColor", "shadow", "filter", "blendMode", "clipPath", "fit", "fontFamily",
-  "lineHeight", "letterSpacing", "textAlign", "fontStyle", "underline", "maxWidth",
-  "strokeLinecap", "strokeLinejoin", "style", "imageSrc", "videoSrc", "audioSrc",
-  "audioVolume", "muted", "loop", "startFrom", "from", "durationInFrames",
-  "enter", "exit",
-];
-
-/**
- * 把「单工具形状」的 op 归一化成 op 层认识的结构。
- *
- * 这是 `apply_ops` 的核心补丁：op 名与工具名相同、字段形状却不同（一个要 patch/element 包裹，
- * 一个是扁平），而报错是 `Cannot convert undefined or null to object` 这种天书。
- * 归一只在 MCP 层做，`shared/ops.ts` 的成功路径一行不动 —— 前端零影响。
- */
-async function normalizeOps(
-  raw: Record<string, unknown>[],
-  project: ProjectLite,
-): Promise<Record<string, unknown>[]> {
-  const out: Record<string, unknown>[] = [];
-
-  for (let i = 0; i < raw.length; i++) {
-    const item = raw[i];
-    const where = `第 ${i + 1}/${raw.length} 个操作`;
-    if (!item || typeof item !== "object") throw new Error(`${where}不是对象`);
-    const name = typeof item.op === "string" ? item.op : "";
-    if (!name) throw new Error(`${where}缺少 op 字段（形如 {op:'update_scene', sceneId, patch:{...}}）`);
-
-    // ── add_element：扁平 → element 包裹
-    if (name === "add_element") {
-      if (item.element && typeof item.element === "object" && !Array.isArray(item.element)) {
-        out.push({ op: "add_element", sceneId: item.sceneId ?? project.scenes[0]?.id, element: item.element });
-      } else {
-        const { op: _op, projectId: _pid, ...flat } = item;
-        const { element, sceneId } = await composeElement(flat, project);
-        out.push({ op: "add_element", sceneId, element });
-      }
-      continue;
-    }
-
-    // ── update_element：扁平 → patch 包裹
-    if (name === "update_element") {
-      const sceneId = item.sceneId;
-      const elementId = item.elementId ?? item.id; // `id` 是最常见的笔误，直接认
-      if (!sceneId) throw new Error(`${where}（update_element）缺少 sceneId`);
-      if (!elementId) {
-        throw new Error(
-          `${where}（update_element）缺少 elementId（元素 id 从 get_project 里看）` +
-            `；要改"本批刚加的元素"，在 add_element 上加 as:"e1"，这里写 elementId:"@e1"`,
-        );
-      }
-      if (item.patch && typeof item.patch === "object") {
-        out.push({ op: "update_element", sceneId, elementId, patch: item.patch });
-      } else {
-        const patch: Record<string, unknown> = {};
-        for (const k of UPDATE_ELEMENT_KEYS) if (item[k] !== undefined) patch[k] = item[k];
-        const extras = Object.keys(item).filter(
-          (k) => !["op", "projectId", "sceneId", "elementId", "id"].includes(k) && !UPDATE_ELEMENT_KEYS.includes(k),
-        );
-        if (extras.length) {
-          throw new Error(
-            `${where}（update_element）不认识的字段：${extras.join("、")}` +
-              `（可用字段见 update_element 工具；也可以用 patch:{...} 直接给）`,
-          );
-        }
-        if (!Object.keys(patch).length) {
-          throw new Error(`${where}（update_element）没有要改的字段（要改什么就传什么，如 opacity:0.5）`);
-        }
-        out.push({ op: "update_element", sceneId, elementId, patch });
-      }
-      continue;
-    }
-
-    // ── set_transition / set_transitions：转成 update_scene（op 层没有这俩名字）
-    if (name === "set_transition" || name === "set_transitions") {
-      const type = String(item.type ?? "");
-      if (!type) throw new Error(`${where}（${name}）缺少 type（可选 ${TRANSITION_TYPES.join(" / ")}）`);
-      const t = type === "none" ? null : { type, durationInFrames: Number(item.durationInFrames ?? TRANSITION_DEFAULT_FRAMES) };
-      const dir = String(item.direction ?? "in");
-      const patchFor = () =>
-        dir === "out"
-          ? { transitionOut: t }
-          : dir === "both"
-            ? { transitionIn: t, transitionOut: t }
-            : { transitionIn: t };
-
-      if (name === "set_transition") {
-        const sceneId = item.sceneId;
-        if (!sceneId) throw new Error(`${where}（set_transition）缺少 sceneId（批量给多幕套转场用 set_transitions）`);
-        out.push({ op: "update_scene", sceneId, patch: patchFor() });
-      } else {
-        const ids = Array.isArray(item.sceneIds)
-          ? item.sceneIds.map(String)
-          : project.scenes.map((s) => s.id);
-        if (!ids.length) throw new Error(`${where}（set_transitions）没有可设置的目标场景`);
-        const known = new Set(project.scenes.map((s) => s.id));
-        const unknown = ids.filter((id) => !known.has(id));
-        if (unknown.length) throw new Error(`${where}（set_transitions）找不到场景：${unknown.join("、")}`);
-        for (const sceneId of ids) out.push({ op: "update_scene", sceneId, patch: patchFor() });
-      }
-      continue;
-    }
-
-    // ── set_scene_box：扁平 x/y/scale/radius → box 包裹（画中画最常用，之前扁平写法被静默当"恢复全屏"）
-    if (name === "set_scene_box") {
-      const sceneId = item.sceneId;
-      if (!sceneId) throw new Error(`${where}（set_scene_box）缺少 sceneId`);
-      if (item.box && typeof item.box === "object") {
-        out.push({ op: "set_scene_box", sceneId, box: item.box });
-        continue;
-      }
-      if (item.reset === true || item.box === null) {
-        out.push({ op: "set_scene_box", sceneId, box: null });
-        continue;
-      }
-      const box: Record<string, unknown> = {};
-      for (const k of ["x", "y", "scale", "rotate", "radius", "opacity", "shadow"]) {
-        if (item[k] !== undefined) box[k] = item[k];
-      }
-      if (!Object.keys(box).length) {
-        throw new Error(
-          `${where}（set_scene_box）没有要改的字段：给 x/y/scale/radius…（扁平写法）或 box:{...}，` +
-            `恢复全屏用 reset:true`,
-        );
-      }
-      out.push({ op: "set_scene_box", sceneId, box });
-      continue;
-    }
-
-    // ── update_scene：单工具形状用 props，op 层要 patch
-    //    注意 props **必须留在 patch.props 里**：摊平到 patch 顶层就等于"字段层级写错"，
-    //    op 层只认场景级字段，文案会静默无效（复验 N-A 的根因）
-    if (name === "update_scene") {
-      const sceneId = item.sceneId;
-      if (!sceneId) throw new Error(`${where}（update_scene）缺少 sceneId`);
-      const { props, patch, op: _op, projectId: _pid, sceneId: _sid, ...rest } = item as {
-        props?: unknown;
-        patch?: unknown;
-      } & Record<string, unknown>;
-      if (patch !== undefined && (typeof patch !== "object" || patch === null || Array.isArray(patch))) {
-        throw new Error(`${where}（update_scene）的 patch 必须是对象`);
-      }
-      const patchIn = (patch as Record<string, unknown>) ?? {};
-      // 扁平写法（title:"…"、durationInFrames:60）一并收进 patch，交给 op 层按版式校验
-      const patchOut: Record<string, unknown> = { ...rest, ...patchIn };
-      if (props !== undefined) {
-        if (typeof props !== "object" || props === null || Array.isArray(props)) {
-          throw new Error(`${where}（update_scene）的 props 必须是对象，如 props:{title:"新标题"}`);
-        }
-        patchOut.props = {
-          ...((patchIn.props as Record<string, unknown>) ?? {}),
-          ...(props as Record<string, unknown>),
-        };
-      }
-      if (!Object.keys(patchOut).length) {
-        throw new Error(
-          `${where}（update_scene）没有要改的字段：单工具写法是 props:{...}，批量 op 写法是 patch:{...}，两种都认`,
-        );
-      }
-      out.push({ op: "update_scene", sceneId, patch: patchOut });
-      continue;
-    }
-
-    // ── add_freeform_element：扁平字段 → element 包裹（svg / fx / anim 只有 freeform 通道支持）
-    if (name === "add_freeform_element") {
-      const sceneId = item.sceneId;
-      if (!sceneId) throw new Error(`${where}（add_freeform_element）缺少 sceneId`);
-      if (item.element && typeof item.element === "object" && !Array.isArray(item.element)) {
-        out.push({ op: "add_freeform_element", sceneId, element: item.element });
-      } else {
-        const { op: _op, projectId: _pid, sceneId: _sid, ...flat } = item;
-        if (!Object.keys(flat).length) {
-          throw new Error(
-            `${where}（add_freeform_element）缺少 element（如 element:{type:"svg", svg:"...", viewBox:"..."}` +
-              ` 或扁平写法 type:"fx", kind:"noise"）`,
-          );
-        }
-        out.push({ op: "add_freeform_element", sceneId, element: flat });
-      }
-      continue;
-    }
-
-    // ── update_freeform_element：扁平字段 → patch 包裹
-    if (name === "update_freeform_element") {
-      const sceneId = item.sceneId;
-      if (!sceneId) throw new Error(`${where}（update_freeform_element）缺少 sceneId`);
-      if (item.patch && typeof item.patch === "object") {
-        out.push(item);
-        continue;
-      }
-      const { op: _op, projectId: _pid, sceneId: _sid, elementId, index, ...flat } = item as Record<string, unknown>;
-      const locator: Record<string, unknown> = {};
-      if (elementId !== undefined) locator.elementId = elementId;
-      if (index !== undefined) locator.index = index;
-      if (!Object.keys(locator).length) {
-        throw new Error(`${where}（update_freeform_element）缺少 elementId 或 index`);
-      }
-      if (!Object.keys(flat).length) {
-        throw new Error(`${where}（update_freeform_element）没有要改的字段（patch:{...} 或扁平写字段）`);
-      }
-      out.push({ op: "update_freeform_element", sceneId, ...locator, patch: flat });
-      continue;
-    }
-
-    // 其它 op 原样透传（applyOps 自己校验，报错会带「第 N 个操作」前缀）
-    out.push(item);
-  }
-  // `as` 是批内别名，normalize 会重建对象，这里按索引回填（每个输入最多产出一个 op）
-  if (out.length === raw.length) {
-    for (let i = 0; i < raw.length; i++) {
-      const alias = raw[i]?.as;
-      if (typeof alias === "string" && alias.trim()) out[i].as = alias.trim();
-    }
-  }
-  return out;
-}
-
-const brief = (p: ProjectLite) => {
-  // 多轨之后总时长是"最靠后的那一帧"，不再是时长之和
-  const total = totalDuration(p as never);
-  const lines = [
-    `工程：${p.name}（id=${p.id}，rev=${p.rev}）`,
-    `画幅：${p.formats.map((f) => `${f.key} ${f.width}×${f.height}`).join(" / ")}`,
-    `总时长：${total} 帧 ≈ ${(total / p.fps).toFixed(1)} 秒 @${p.fps}fps`,
-  ];
-  if (p.audio?.src) {
-    const duck = p.audio.ducking;
-    const duckText = duck
-      ? `，人声避让${duck.enabled ? `降到 ${Math.round(duck.depth * 100)}%` : "已关"}`
-      : "";
-    lines.push(`背景音乐：${p.audio.src}（音量 ${Math.round((p.audio.volume ?? 1) * 100)}%${duckText}）`);
-  }
-  if (p.beatGrid) {
-    const g = p.beatGrid;
-    lines.push(
-      `节拍网格：${g.bpm} BPM，首拍 ${g.offsetSec.toFixed(2)}s（${g.source === "auto" ? `自动检测，置信度 ${g.confidence ?? "?"}` : "手动指定"}）`,
-    );
-  }
-  if (p.audioTracks?.length) {
-    lines.push(
-      `音效轨（${p.audioTracks.length}）：` +
-        p.audioTracks.map((t) => `${t.id}「${t.name}」@${t.from}帧 音量${Math.round(t.volume * 100)}%`).join("、"),
-    );
-  }
-  if (p.effects?.length) {
-    lines.push(
-      `特效轨（${p.effects.length}）：` +
-        p.effects
-          .map(
-            (t) =>
-              `${t.id}「${t.name}」@${t.from}帧 +${t.durationInFrames}帧 强度${Math.round((t.intensity ?? 1) * 100)}%`,
-          )
-          .join("、"),
-    );
-  }
-  lines.push(
-    `场景（${p.scenes.length}）：`,
-    ...p.scenes.map((s, i) => {
-      // 自由画布的元素 id/index 必须露出来，否则「改一个字」只能 get_scene 拉全量 props 重发
-      // （那次一支 8 幕片子，每改一版都要重发 8 份 1.5KB 的 props）
-      const freeEls = Array.isArray((s.props as { elements?: unknown })?.elements)
-        ? ((s.props as { elements: Record<string, unknown>[] }).elements ?? [])
-        : [];
-      const freeLine = freeEls.length
-        ? `\n      自由画布元素 ${freeEls.length} 个（update_freeform_element 用 index 或 elementId）：` +
-          freeEls
-            .slice(0, 12)
-            .map((e, k) => `#${k}${e?.id ? `(${String(e.id)})` : ""} ${freeElementLabel(e)}`)
-            .join("、") +
-          (freeEls.length > 12 ? ` …还有 ${freeEls.length - 12} 个（get_scene 看全）` : "")
-        : "";
-      return (
-        `  ${i + 1}. [${s.id}] ${s.name} (${s.type}) ${s.durationInFrames}帧 — ${summarizeProps(s)}` +
-        freeLine +
-        (s.elements?.length
-          ? `
-      叠加层：${s.elements.map((e) => `${e.id}「${e.name}」@${e.from ?? 0}f/${e.durationInFrames ?? "到场景尾"}f`).join("、")}`
-          : "")
-      );
-    }),
-  );
-  return lines.join("\n");
-};
-
-/** 摘要里给元素一行可辨认的标签：有文字给文字，否则给名字/类型 */
-const freeElementLabel = (e: Record<string, unknown>) => {
-  const text = typeof e?.text === "string" ? e.text.trim() : "";
-  if (text) return `「${text.slice(0, 10)}${text.length > 10 ? "…" : ""}」`;
-  const name = typeof e?.name === "string" ? e.name : "";
-  if (name) return name;
-  return String(e?.type ?? "元素");
-};
-
-const summarizeProps = (s: { type?: string; props: Record<string, unknown> }) => {
-  const p = s.props as Record<string, unknown>;
-  const pick =
-    (p.title as string) ??
-    (p.heading as string) ??
-    (p.text as string) ??
-    (Array.isArray(p.items) ? `${p.items.length} 条要点` : "");
-  if (pick) return String(pick).slice(0, 40);
-  // freeform 场景没有 title/text：从元素里抽文字，否则多幕时没法辨认
-  if (s.type === "freeform" || Array.isArray(p.elements)) {
-    const els = (Array.isArray(p.elements) ? p.elements : []) as { text?: unknown; svg?: unknown }[];
-    const texts = els
-      .map((e) => (typeof e?.text === "string" ? e.text.trim() : ""))
-      .filter(Boolean)
-      .slice(0, 3);
-    if (texts.length) return `[自由画布] ${texts.join(" / ")}`.slice(0, 50);
-    if (els.length) return `[自由画布] ${els.length} 个元素`;
-  }
-  return "—";
-};
-
-/* ────────────────────────────── 工具注册 ────────────────────────────── */
-
-/**
- * 让工程幕序对齐分镜表（幕序自愈）。
- *
- * 为什么必须有：build_storyboard 是「按调用顺序 append」的——先建第 1、6 幕当风格样张，
- * 再依次建第 2–18 幕，时间轴就成了 1→6→2→3…。片子于是先抛结论再演推理，钩子全废，
- * 而且**工具全程报成功**（复盘坑 #1，会毁片）。分镜表里每幕都回填了 sceneId，
- * 那个顺序才是用户确认过的唯一真相，不一致就以它为准。
- *
- * 只动顺序、不动内容；不在分镜表里的场景（样张 / 模板残留）保持它原来的位置——
- * 在块前面还在前面，在块后面还在后面。
- */
-async function alignScenesToStoryboard(
-  projectId: string,
-  sb: Storyboard,
-): Promise<{ notes: string[]; extraCount: number }> {
-  const doc = await api<{ project: ProjectLite }>(`/api/projects/${projectId}`);
-  const scenes = (doc.project.scenes ?? []) as { id: string; name?: string }[];
-  const current = scenes.map((s) => s.id);
-  const known = new Set(current);
-  const intended = sb.shots
-    .map((s) => s.sceneId)
-    .filter((id): id is string => !!id && known.has(id));
-  if (intended.length < 2) return { notes: [], extraCount: 0 };
-
-  const intendedSet = new Set(intended);
-  const firstAt = current.indexOf(intended[0]);
-  const extras = current.filter((id) => !intendedSet.has(id));
-  const before = current.slice(0, Math.max(0, firstAt)).filter((id) => !intendedSet.has(id));
-  const after = extras.filter((id) => !before.includes(id));
-  const target = [...before, ...intended, ...after];
-  const already = target.length === current.length && target.every((id, i) => id === current[i]);
-  if (already) return { notes: [], extraCount: extras.length };
-
-  const res = await api<{ summary: string[] }>(`/api/projects/${projectId}/ops`, {
-    method: "POST",
-    body: JSON.stringify({
-      actor: "agent",
-      // reflow:true —— 建幕阶段就是要一条干净的主轨；被 move_scene 钉过的起点留着，
-      // 重排只改数组不会改时间，等于白排（这正是坑 #2 的现场）
-      ops: [{ op: "reorder_scenes", sceneIds: target, reflow: true }],
-    }),
-  });
-  const notes = [`已按分镜顺序重排幕序（之前是按建幕顺序排的，先建样板再补中间幕就会错位）`];
-  const warn = (res.summary ?? []).filter((x) => String(x).includes("⚠"));
-  notes.push(...warn);
-  return { notes, extraCount: extras.length };
-}
-
-
-/* ────────────────────────────── 素材时长 ────────────────────────────── */
-
-type   MediaProbe = {
-  src: string;
-  file: string;
-  format: string;
-  bytes: number;
-  durationInSeconds: number;
-  frames: number;
-  suggestedSceneFrames: number;
-  breathSec?: number;
-  sampleRate?: number;
-  channels?: number;
-  method?: string;
-  error?: string;
-};
-
-/** 量素材时长（转发给服务端，MCP 不自己解析文件） */
-async function probeAssets(srcs: string[], fps?: number, breathSec?: number): Promise<MediaProbe[]> {
-  const q = srcs.map((s) => `src=${encodeURIComponent(s)}`).join("&");
-  const { probes } = await api<{ probes: MediaProbe[] }>(
-    `/api/assets/probe?${q}${fps ? `&fps=${fps}` : ""}${
-      breathSec === undefined ? "" : `&breath=${breathSec}`
-    }`,
-  );
-  return probes ?? [];
-}
-
-/** 单个素材时长；量不到就返回 null（不打断主流程） */
-async function probeOne(src: string, fps?: number, breathSec?: number): Promise<MediaProbe | null> {
-  try {
-    const [p] = await probeAssets([src], fps, breathSec);
-    return p && !p.error ? p : null;
-  } catch {
-    return null;
-  }
-}
-
-type ToolDef = {
-  name: string;
-  description: string;
-  shape: Record<string, z.ZodTypeAny>;
-  run: (args: Record<string, any>) => Promise<string>;
-  /** 已并入别的工具：仍注册可调（老调用不断），但搜索/目录不再列出，run 内透明转发并提示新名字 */
-  retiredTo?: string;
-};
-
-const text = (s: string) => s;
-
-/** 画幅简写 → 尺寸（set_formats 收字符串时按这张表补，省掉手拼对象） */
-const FORMAT_PRESETS: Record<string, { label: string; width: number; height: number }> = {
-  portrait: { label: "竖屏 9:16", width: 1080, height: 1920 },
-  landscape: { label: "横屏 16:9", width: 1920, height: 1080 },
-  square: { label: "方形 1:1", width: 1080, height: 1080 },
-  tall45: { label: "竖版 4:5", width: 1080, height: 1350 },
-};
-
-
-/**
- * 需求改口的影响面：brief 里哪几个字段变了 → 下游要跟着重做什么。
- *
- * 为什么需要：复盘问题 3，项目中途从「无配音」改成「要 AI 配音」，
- * scriptType 从「屏幕文案」变成「双轨」，段落表要重算、幕长要重排、已放元素要挪。
- * 工具不说话，agent 只能自己推，推漏一步就是成片对不上稿。
- */
-/**
- * 每个工程「已经提醒过的影响面」累计表。
- *
- * 为什么要累计：需求常常分两次写（先主体、再补几项），第二次的 diff 只含第二次的字段，
- * 第一次那句「配音规格变了 → 旁白全部作废」就被覆盖掉了，用户很容易漏看。
- * 这里按工程累积，回执里把「本次」和「之前提过但本次没提」分开列。
- * 进程重启丢失可接受：影响面本来就是即时提醒，不是审计记录。
- */
-const briefImpactLog = new Map<string, string[]>();
-
-function describeBriefImpact(prev: Brief | null, next: Brief): string[] {
-  if (!prev) return [];
-  const out: string[] = [];
-  const changed = (k: string) =>
-    JSON.stringify((prev as Record<string, unknown>)[k] ?? null) !==
-    JSON.stringify((next as Record<string, unknown>)[k] ?? null);
-
-  const voiceChanged = changed("voiceSpec") || changed("voice");
-  const scriptChanged = changed("scriptType");
-  const segChanged = changed("segments");
-  const formChanged = changed("form");
-
-  if (voiceChanged) {
-    out.push("声音规格变了 → 已合成的旁白全部作废，要重跑 tts_narration，并重新确认试听（confirm_narration）");
-  }
-  if (scriptChanged) {
-    out.push("稿件类型变了 → 稿件结构要重写（save_script），分镜每幕的 text 也要跟着回填");
-  }
-  if (segChanged) {
-    out.push("段落表变了 → 幕长按新段落重算，已建场景的时长要重排（update_scene / 重建分镜）");
-  }
-  if (formChanged) {
-    out.push("形态变了 → 版式策略要重选（「有没有东西在动」决定 freeform 还是内置版式），已有场景可能要整体重做");
-  }
-  if (changed("durationSec")) {
-    out.push("目标时长变了 → 段落表时长合计要重新对齐（±5%），否则不是赶就是拖");
-  }
-  if (changed("mustInfo") || changed("bans")) {
-    out.push("契约信息变了 → 建完后要重跑 brief_audit（check_project 也会按新契约体检）");
-  }
-  if (voiceChanged || segChanged) {
-    out.push("幕长一变，已放的元素/贴纸坐标和关键帧都会错位：先定幕长再放定时元素，或回头改它们的 durationInFrames");
-  }
-  return out;
-}
-
-
-/**
- * 交付验收通过时，把「这支片子的稳定偏好」写进记忆 —— 下次开工 recall 就能命中，
- * 不用再问一遍画幅/风格/配音（复盘问题：recall 永远是「没有匹配的记忆」）。
- * 同一句话重复写会被 remember 去重；措辞带具体值，换了偏好自然产生新条目。
- */
-function rememberDeliveryPreferences(p: ProjectLite, brief: Brief | null): string[] {
-  const notes: string[] = [];
-  const push = (text: string, tags: string[]) => {
-    try {
-      remember({ kind: "preference", text, tags });
-      notes.push(text);
-    } catch {
-      /* 记忆写不进去不影响交付 */
-    }
-  };
-  const fmts = (p as unknown as { formats?: { key: string; label: string }[] }).formats ?? [];
-  if (fmts.length === 1) push(`画幅偏好：${fmts[0].label}（${fmts[0].key}）—— 单画幅交付，用户没要多版本`, ["画幅"]);
-  else if (fmts.length > 1) push(`画幅偏好：多画幅交付（${fmts.map((x) => x.key).join(" / ")}）`, ["画幅"]);
-
-  const style = (brief as { style?: string } | null)?.style;
-  if (style) push(`风格偏好：${style}`, ["风格"]);
-
-  const vs = (brief as { voiceSpec?: { gender?: string; speed?: string } } | null)?.voiceSpec;
-  if (vs?.gender) push(`配音偏好：${vs.gender}${vs.speed ? `，语速 ${vs.speed}` : ""}`, ["配音"]);
-
-  const tone = (brief as { transitionTone?: string } | null)?.transitionTone;
-  if (tone) push(`转场偏好：${tone}`, ["转场"]);
-  return notes;
 }
 
 const TOOLS: ToolDef[] = [
@@ -1254,6 +241,7 @@ const TOOLS: ToolDef[] = [
         "   ↳ mustInfo 漏项 / 禁词命中会**挡住 render_video**（这是契约唯一的硬保证）；确实要强行出片才传 forceContract=true，**并且必须附 forceUserQuote（用户原话）**。",
         "   ↳ 字幕超 26 字 render_video 会直接拒：先 fix_subtitles(dryRun=true) 看预演 → fix_subtitles 落盘",
         "15. 验收【闸口⑧】 → request_review：**请用户去编辑器把整片播一遍**（节奏 / 转场 / 字幕 / 音画同步只有整片看得出）",
+        "   ↳ 让他把问题**标在帧上**（编辑器画面右上「批注」）：他会拿到精确到幕内帧的定位 → 你读 get_annotations 逐条改、改完 resolve_annotation，比一句\"这里怪怪的\"少返工好几轮",
         "   ↳ 通过 → confirm_review(approved=true)　要改 → confirm_review(approved=false, feedback=[...]) 改完再请他看　他自己导出 → selfRender=true",
         "16. 渲染 → render_video(dryRun) → render_video（没验收过 / 刚改过没抽帧都会被拒；用户明确说「不用看了直接渲」才 force=true + forceUserQuote=他的原话）",
         "   ↳ 长片别用 wait 硬等（上限 240s，超过也等不到）：拿 taskId 用 **get_render_status(taskId, waitSec=25)**，状态一变立刻返回，12 分钟的片子约 30 次就够——别几秒一查，纯浪费轮次。",
@@ -1601,6 +589,7 @@ const TOOLS: ToolDef[] = [
         "save_storyboard",
         "save_brief",
         "save_script",
+        "revise_script",
         "remove_scene",
         "reorder_scenes",
         "delete_project",
@@ -1858,50 +847,48 @@ const TOOLS: ToolDef[] = [
   {
     name: "list_projects",
     description:
-      "列出所有工程（id / 名称 / 场景数 / 版本号），并标出当前默认工程。用户说「继续做上次的片子」或不确定在哪个工程上干活时先调它，再用 switch_project 切换。",
-    shape: {},
-    run: async () => {
+      "列出工程（id / 名称 / 场景数 / 版本号），标出当前默认工程。用户说「继续做上次的片子」或不确定在哪个工程上干活时先调它，再用 switch_project 切换。\n" +
+      "**已归档的工程默认不列**（archive_project 收起来的，多为自检/模板试建的测试工程）；末尾会说明归档了几个、怎么拿回来。要连它们一起看传 includeArchived:true。",
+    shape: {
+      includeArchived: z
+        .boolean()
+        .optional()
+        .describe("true = 连已归档的工程一起列（默认只列在用的；归档只是收起来，不是删除）"),
+    },
+    run: async (a) => {
       refreshPointer(); // 另一个通道可能刚切过工程
-      const { projects } = await api<{ projects: { id: string; name: string; rev: number; scenes: number }[] }>(
-        "/api/projects",
-      );
+      const { projects } = await api<{
+        projects: { id: string; name: string; rev: number; scenes: number; archivedAt?: string }[];
+      }>("/api/projects");
       if (!projects.length) return "还没有任何工程。用 create_project 新建。";
       // 指针为空 **或指向已删工程** 都要自愈并写回，否则这里永远标不出 ★、
-      // get_project 每次读都静默换一个工程（N-04 残留：旧写法只判断了「指针为空」）
-      if (!projects.some((p) => p.id === lastProjectId)) {
-        setCurrentProject(projects[0].id);
+      // get_project 每次读都静默换一个工程（N-04 残留：旧写法只判断了「指针为空」）。
+      // 自愈只在「在用」的里面挑：归档的工程不该被自动选中。
+      const live = projects.filter((p) => !p.archivedAt);
+      if (!projects.some((p) => p.id === lastProjectId) && live[0]) {
+        setCurrentProject(live[0].id);
       }
-      const nl = String.fromCharCode(10);
       // 对账：out/ 里有、data/ 里没有的工程 = 多半是另一个实例/另一份数据目录。
       // 不说的话，agent 会以为工程被删了，或者对着错误的工程继续改
-      let orphanNote = "";
-      let dataNote = "";
+      let orphanIds: string[] | undefined;
+      let dataDir: string | undefined;
       try {
-        const { ids, dataDir } = await api<{ ids: string[]; dataDir: string }>("/api/orphans");
-        // 总是显示数据目录：同一台机器上可能有两套 data/ 目录（不同 cwd 启动的实例各一份），
-        // 不显示绝对路径的话，「工程怎么不见了」根本无从判断——只能猜。
-        dataNote = `${nl}数据目录：${dataDir}${nl}（本次连的是 ${BASE}；同一台机器上如果还有别的实例/别的 cwd，工程是按各自数据目录分开存的）`;
-        if (ids.length) {
-          orphanNote =
-            `${nl}⚠ 对账提醒：out/ 里有 ${ids.length} 个工程不在当前数据目录（${ids.slice(0, 5).join("、")}${ids.length > 5 ? "…" : ""}）。` +
-            `${nl}  当前数据目录：${dataDir}。这些工程要么是别的实例/别的数据目录写的，要么已被删只剩渲染产物。` +
-            `${nl}  别当成「工程被删了」：先确认 SERVER_URL 指向的是不是同一个实例，再动手。`;
-        }
+        const r = await api<{ ids: string[]; dataDir: string }>("/api/orphans");
+        orphanIds = r.ids;
+        dataDir = r.dataDir;
       } catch {
         /* 对账拿不到不影响列表本身 */
       }
-      return (
-        `共 ${projects.length} 个工程（★ = 当前默认工程）：` +
-        nl +
-        projects
-          .map(
-            (p) =>
-              `${p.id === lastProjectId ? "★" : " "} ${p.name}（id=${p.id}，${p.scenes} 场景，rev=${p.rev}）`,
-          )
-          .join(nl) +
-        dataNote +
-        orphanNote
-      );
+      // 文案交给 projects-text.ts：那段有三套数字要对上（行数 / 头部总数 / 末尾归档数），
+      // 混在 run 里只能靠肉眼对，出过错（includeArchived 时头部少算）
+      return formatProjectList({
+        projects,
+        currentId: lastProjectId ?? undefined,
+        includeArchived: a.includeArchived,
+        dataDir,
+        serverUrl: BASE,
+        orphanIds,
+      });
     },
   },
   {
@@ -2062,7 +1049,7 @@ const TOOLS: ToolDef[] = [
     run: async (a) => {
       const p = await resolveProject(a.projectId);
       const s = p.scenes.find((x) => x.id === a.sceneId);
-      if (!s) throw new Error(`找不到场景 ${a.sceneId}`);
+      if (!s) throw new Error(sceneMissingMessage(p as never, p.scenes as never, a.sceneId));
       return JSON.stringify(s, null, 2);
     },
   },
@@ -2655,7 +1642,10 @@ const TOOLS: ToolDef[] = [
     description:
       "批量设置转场：① 套同一套（给全部或指定场景）② **逐幕指定，每幕不同类型**（items:[{sceneId,in,out}]）。" +
       "direction=both 时入出场都设；type=none 清除该方向的转场。\n" +
-      "文字密集的幕建议只用 硬切 / blur / 短 fade：circle/wipe/flip 在文字页容易显脏（不是不能，是不划算）。",
+      "文字密集的幕建议只用 硬切 / blur / 短 fade：circle/wipe/flip 在文字页容易显脏（不是不能，是不划算）。\n" +
+      "ℹ️ **接缝是「叠」出来的**：幕与幕首尾相接时，上一幕会多渲 N 帧（N = 下一幕的 transitionIn 时长）定格淡出，" +
+      "下一幕在它上面渐显。所以这 N 帧里两幕同时可见——**上一幕的最后一个画面（含大字、结论数字）会半透明地压在新幕上**。" +
+      "抽帧看到「两个大字叠在一起」通常就是这个，不是渲染错；不想要就缩短转场、把大字提前淡出，或给下一幕硬切。",
     shape: {
       type: z.enum(TRANSITION_TYPES).optional().describe("转场类型；none=清除（给了 items 时可省略）"),
       durationInFrames: z.number().int().min(0).max(120).optional().describe("转场时长（帧），默认 12"),
@@ -3083,7 +2073,9 @@ const TOOLS: ToolDef[] = [
       let src = a.src;
       if (!src && a.assetId) {
         const { items } = await api<{ items: { id: string; url: string; name: string }[] }>("/api/library");
-        const hit = items.find((x) => x.id === a.assetId);
+        // 带不带 asset: 前缀都认（upload_asset 回执写的是带前缀的形式）
+        const want = toAssetId(a.assetId);
+        const hit = items.find((x) => toAssetId(x.id) === want);
         if (!hit) throw new Error(`素材库里没有 ${a.assetId}（用 list_assets 查）`);
         src = hit.url;
       }
@@ -4023,6 +3015,383 @@ const TOOLS: ToolDef[] = [
     },
   },
   {
+    name: "revise_script",
+    description:
+      "**改稿即改片**：用户改了一句台词时用它，别用 save_script 重写——那会把整片配音、幕长、字幕全部作废。\n" +
+      "它只重配改动的那几段，然后同步：幕长（按新配音实测帧数）、旁白音频、字幕、分镜表、配音时间骨架；" +
+      "并列出幕长变化会牵动的幕内定时元素、特效轨、音效轨（这几类**不会**自动改，硬拉伸会毁动画节奏）。\n" +
+      "textOnly=true = 只改错别字/标点（读音不变，不重配、不改幕长）；dryRun=true = 只回估算，不动任何文件。\n" +
+      "改完仍要两道确认：新的一段发用户试听 → confirm_narration；稿件已变、上次确认失效 → confirm_script。",
+    shape: {
+      projectId: z.string().optional().describe("要操作的工程 id，不传 = 当前默认工程（list_projects 查）"),
+      changes: z
+        .array(
+          z.object({
+            segment: z
+              .number()
+              .int()
+              .min(1)
+              .optional()
+              .describe("改第几段（1 起，get_script 的编号）；与 sceneId 二选一"),
+            sceneId: z.string().optional().describe("也可以按幕 id 定位（忘了段号时用，先 get_scene / get_project）"),
+            text: z.string().describe("这一段的新文案（整段替换，不是只给改动的几个字）"),
+            note: z.string().optional().describe("新的画面备注；不传保留原备注"),
+          }),
+        )
+        .min(1)
+        .describe("要改的段（可以一次改多段）"),
+      fit: z
+        .enum(["duration", "keep"])
+        .optional()
+        .describe(
+          "duration（默认）= 按新配音实测改幕长；keep = 保留幕长只换音频（新配音更长会被幕尾截断，只在改短句时安全）",
+        ),
+      breathSec: z.number().min(0).max(5).optional().describe("幕尾呼吸位（秒），默认 0.7，与 tts_narration 一致"),
+      voice: z.string().optional().describe("重配用的音色；**不传 = 当前默认音色**，原片如果用了别的音色要显式传，否则这一段和其余段不一样"),
+      speed: z.number().min(0.25).max(4).optional().describe("重配语速；原片调过语速的话要一起传，不然这一段快慢不一致"),
+      textOnly: z.boolean().optional().describe("true = 只改稿件文字与字幕，不重配、不改幕长（错别字/标点修正）"),
+      dryRun: z.boolean().optional().describe("true = 只按字数估算影响，不合成、不写任何文件"),
+    },
+    run: async (a) => {
+      await ensureServer();
+      const p = await resolveProject(a.projectId);
+      const script = readScript(p.id);
+      if (!script?.segments?.length) {
+        throw new Error("还没有稿件分段：先 save_script 写一版（一段一幕）再来改稿");
+      }
+      const nl = String.fromCharCode(10);
+      const sb = readStoryboard(p.id);
+      const changes = resolveChanges(script, sb, (a.changes ?? []) as never);
+      const todo = changes.filter((c) => c.changed);
+      if (!todo.length) {
+        return (
+          `这 ${changes.length} 段的文案和现有稿件完全一致，没有改动。${nl}` +
+          `只是读音/语速不对 → tts_narration(segments=[{text, sceneId}], applyToScenes=true, keepSceneDuration=true)；` +
+          `整篇重写 → save_script`
+        );
+      }
+
+      const fps = Number(p.fps) > 0 ? Number(p.fps) : 30;
+      const breath = a.breathSec === undefined ? 0.7 : Math.max(0, Number(a.breathSec));
+      const fit = a.fit === "keep" ? "keep" : "duration";
+      const textOnly = a.textOnly === true;
+      const scenes = (p.scenes ?? []) as LooseScene[];
+      const oldTotal = totalDuration(p as never);
+      const briefSec = Number(readBrief(p.id)?.durationSec ?? 0);
+
+      // 每条改动落到「幕 + 旧幕长 + 估算新幕长」。幕可能还没建（只改稿与分镜）
+      const plan = todo.map((c) => {
+        const hit = findSceneOf(c.sceneId, scenes);
+        const oldDur = hit ? Math.max(1, Number(hit.scene.durationInFrames ?? 1)) : 0;
+        const estFrames = Math.max(1, Math.ceil((estimateSeconds(c.text) + breath) * fps));
+        return { c, hit, oldDur, estFrames };
+      });
+
+      if (a.dryRun) {
+        const items = plan.map((x, i) => {
+          const dur = x.hit
+            ? ` · 幕「${x.hit.scene.name}」${x.oldDur}f（${(x.oldDur / fps).toFixed(1)}s）→ 约 ${x.estFrames}f（${(x.estFrames / fps).toFixed(1)}s）`
+            : " · 还没建幕（只改稿与分镜，铺开时按新稿）";
+          return `${i + 1}. 第 ${x.c.index + 1} 段 ${scriptChars(x.c.oldText)}字 → ${scriptChars(x.c.text)}字${dur}`;
+        });
+        const delta = plan.reduce((n, x) => n + (x.hit ? x.estFrames - x.oldDur : 0), 0);
+        const after = (oldTotal + delta) / fps;
+        return [
+          `dryRun（什么都没改）：要改 ${plan.length} 段，按字数估算幕长合计 ${delta >= 0 ? "+" : ""}${delta}f（${delta >= 0 ? "+" : ""}${(delta / fps).toFixed(1)}s）`,
+          ...items,
+          `成片 ${(oldTotal / fps).toFixed(1)}s → 约 ${after.toFixed(1)}s${briefSec > 0 ? `（brief 目标 ${briefSec}s）` : ""}`,
+          `估算误差不小（4.5 字/秒 vs 实际念法）；要真数就去掉 dryRun 跑一遍`,
+        ].join(nl);
+      }
+
+      // ── 合成：全部成功才动稿件与工程。中途失败时稿件/工程都还是旧的 ──
+      type Synth = { url: string; frames: number; suggested: number; duration: number };
+      const synth = new Map<number, Synth>();
+      if (!textOnly) {
+        for (const x of plan) {
+          const res = await fetch(`${BASE}/api/tts/synthesize`, {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({ text: x.c.text, voice: a.voice, speed: a.speed, projectId: p.id }),
+          });
+          const data = (await res.json().catch(() => ({}))) as { url?: string; error?: string };
+          if (!res.ok || !data.url) {
+            throw new Error(
+              `第 ${x.c.index + 1} 段合成失败：${data.error ?? `HTTP ${res.status}`}（稿件与工程都还没动，可改完重试）`,
+            );
+          }
+          const probe = await probeOne(data.url, fps, breath);
+          if (!probe) {
+            throw new Error(
+              `第 ${x.c.index + 1} 段合成成功但读不出时长（${data.url}）——稿件与工程都还没动。检查语音服务返回的格式（wav/mp3/ogg）`,
+            );
+          }
+          synth.set(x.c.index, {
+            url: data.url,
+            frames: Number(probe.frames ?? 0),
+            suggested: Math.max(1, Number(probe.suggestedSceneFrames ?? 0)),
+            duration: Number(probe.durationInSeconds ?? 0),
+          });
+        }
+      }
+
+      // ── 只动命中的幕：旧旁白换新、幕长跟随、字幕重写 ──
+      const ops: Record<string, unknown>[] = [];
+      const touched: { index: number; sceneId: string; sceneName: string; oldDur: number; wantDur: number }[] = [];
+      for (const x of plan) {
+        const hit = x.hit;
+        if (!hit) continue;
+        const els = (hit.scene.elements ?? []) as Record<string, unknown>[];
+        const prevNar = els.find((el) => el.kind === "audio" && el.narration === true);
+        // 有人手工挪过旁白位置（from>0），重加不能归零
+        const keepFrom = prevNar ? Math.max(0, Number(prevNar.from ?? 0)) : 0;
+        const s = synth.get(x.c.index);
+        if (!textOnly) {
+          for (const el of els) {
+            if (el.kind === "audio" && el.narration === true) {
+              ops.push({ op: "remove_element", sceneId: hit.scene.id, elementId: el.id });
+            }
+          }
+        }
+        if (s && fit === "duration") {
+          ops.push({ op: "update_scene", sceneId: hit.scene.id, patch: { durationInFrames: s.suggested } });
+        }
+        ops.push({
+          op: "set_subtitle",
+          sceneId: hit.scene.id,
+          text: subtitleToField(normalizeSubtitle(x.c.text, { maxChars: SUBTITLE_LIMITS.max }).lines),
+        });
+        if (s) {
+          // keep：音频比幕长短就按幕长截，比幕长长会被幕尾截（下面会告警）
+          const dur = fit === "duration" ? s.suggested : Math.max(1, Math.min(s.suggested, x.oldDur));
+          ops.push({
+            op: "add_element",
+            sceneId: hit.scene.id,
+            element: {
+              kind: "audio",
+              src: s.url,
+              narration: true,
+              name: "旁白",
+              x: 50,
+              y: 50,
+              size: 6,
+              audioVolume: 1,
+              from: keepFrom,
+              durationInFrames: dur,
+            },
+          });
+        }
+        touched.push({
+          index: x.c.index,
+          sceneId: hit.scene.id,
+          sceneName: hit.scene.name,
+          oldDur: x.oldDur,
+          wantDur: s && fit === "duration" ? s.suggested : x.oldDur,
+        });
+      }
+
+      if (ops.length) {
+        await api(`/api/projects/${p.id}/ops`, {
+          method: "POST",
+          body: JSON.stringify({ actor: "agent", ops }),
+        });
+      }
+
+      // 场景类型有单幕时长上下限，超了会被 clamp —— 那就是"配音比幕长，尾字被吃掉"
+      let clampNote = "";
+      if (touched.some((t) => t.wantDur !== t.oldDur)) {
+        try {
+          const fresh = await api<{ project: { scenes: { id: string; durationInFrames: number }[] } }>(
+            `/api/projects/${p.id}`,
+          );
+          const hitClamp = touched.filter((t) => {
+            const f = fresh.project.scenes.find((s) => s.id === t.sceneId);
+            return f && Math.abs(Number(f.durationInFrames) - t.wantDur) > 1;
+          });
+          if (hitClamp.length) {
+            clampNote =
+              `⚠️ ${hitClamp.length} 幕被场景类型的时长上下限夹住了，配音会被幕尾截断：` +
+              hitClamp
+                .map((t) => {
+                  const f = fresh.project.scenes.find((s) => s.id === t.sceneId);
+                  return `「${t.sceneName}」要 ${t.wantDur}f 实际 ${f?.durationInFrames}f`;
+                })
+                .join("；") +
+              ` —— 拆成两幕，或换时长上限更高的类型`;
+          }
+        } catch {
+          /* 检查失败不影响主流程 */
+        }
+      }
+
+      // ── 稿件（saveScript 会清掉旧确认，这正是要的） ──
+      const nextSegments = (script.segments ?? []).map((seg, i) => {
+        const c = plan.find((x) => x.c.index === i);
+        if (!c) return seg;
+        return { ...seg, text: c.c.text, note: c.c.note, sceneId: seg.sceneId ?? c.c.sceneId };
+      });
+      saveScript(p.id, { ...script, segments: nextSegments });
+
+      // ── 配音时间骨架：只换命中段，其余读数还准 ──
+      let timingNote = "";
+      const timing = readTiming(p.id);
+      if (timing && synth.size) {
+        const merged = mergeTiming(
+          timing,
+          plan
+            .filter((x) => synth.has(x.c.index))
+            .map((x) => {
+              const s = synth.get(x.c.index) as Synth;
+              return {
+                sceneId: x.c.sceneId,
+                index: x.c.index,
+                text: x.c.text,
+                frames: s.frames,
+                suggested: s.suggested,
+                durationSec: s.duration,
+              };
+            }),
+          { allowIndexFallback: (timing.segments ?? []).length === script.segments.length },
+        );
+        if (merged.matched) {
+          saveTiming(p.id, merged.timing);
+          timingNote =
+            `配音时间骨架已同步（${merged.matched} 段，${timing.totalSec.toFixed(1)}s → ${merged.timing.totalSec.toFixed(1)}s）` +
+            `，「用户听过」按新版本自动失效`;
+        } else {
+          timingNote = `⚠️ 时间骨架里没对上这几段（骨架可能是别的稿子），没动它——还要用 useNarrationTiming 就重跑 tts_narration(mode="timing")`;
+        }
+      }
+
+      // ── 分镜表：不跟着改，下次 build 就按旧文案重建 ──
+      const sbPatch = patchStoryboard(
+        sb,
+        plan.map((x) => {
+          const s = synth.get(x.c.index);
+          return {
+            index: x.c.index,
+            sceneId: x.c.sceneId,
+            text: x.c.text,
+            durationInFrames: s && fit === "duration" ? s.suggested : undefined,
+          };
+        }),
+      );
+      if (sbPatch?.matched.length) saveStoryboard(p.id, sbPatch.storyboard);
+
+      // ── 影响面：幕内定时元素 / 全局轨 ──
+      const impacts = plan
+        .filter((x) => x.hit && synth.has(x.c.index) && fit === "duration")
+        .map((x) => {
+          const hit = x.hit as NonNullable<typeof x.hit>;
+          const s = synth.get(x.c.index) as Synth;
+          const r = analyzeReflow(hit.scene, s.suggested);
+          r.sceneIndex = hit.sceneIndex;
+          return r;
+        });
+      const elNotes: string[] = [];
+      for (const r of impacts) {
+        const head = `「${r.sceneName}」${r.oldDur}f → ${r.newDur}f`;
+        for (const el of r.unreachable) {
+          elNotes.push(`${head}：「${el.name}」起点 ${el.from}f 已越过幕尾，整段看不见（要挪回幕内：update_element）`);
+        }
+        for (const el of r.clipped) {
+          elNotes.push(
+            `${head}：「${el.name}」到 ${el.endsAt}f，超幕尾 ${el.endsAt - r.newDur}f，会被截断（想撑满就 durationInFrames=-1）`,
+          );
+        }
+        for (const el of r.earlyEnd) {
+          elNotes.push(`${head}：「${el.name}」在 ${el.endsAt}f 结束，幕尾空 ${r.newDur - el.endsAt}f（要它撑满就 durationInFrames=-1）`);
+        }
+      }
+      const deltaTotal = impacts.reduce((n, r) => n + r.deltaFrames, 0);
+      const newTotal = oldTotal + deltaTotal;
+
+      const spans = sceneSpans(scenes as never[]);
+      const shiftStarts = impacts
+        .filter((r) => r.deltaFrames !== 0 && r.sceneIndex >= 0)
+        .map((r) => Number(spans[r.sceneIndex]?.start ?? 0));
+      const firstShift = shiftStarts.length ? Math.min(...shiftStarts) : -1;
+      const lateTracks = firstShift >= 0 ? ((p.audioTracks ?? []) as { name: string; from: number }[]).filter((t) => t.from >= firstShift) : [];
+      const lateEffects = firstShift >= 0
+        ? ((p.effects ?? []) as { name: string; from: number }[]).filter((e) => e.from >= firstShift)
+        : [];
+      const trackNote =
+        lateTracks.length || lateEffects.length
+          ? `⚠️ 时间轴整体变了 ${(deltaTotal / fps).toFixed(1)}s：${[lateTracks.length ? `${lateTracks.length} 条音效/音乐` : "", lateEffects.length ? `${lateEffects.length} 个特效` : ""]
+              .filter(Boolean)
+              .join("、")}是**按绝对帧**摆的（第一个在 ${firstShift}f 之后），现在相对画面已经错位——要逐个 update_audio_track / update_effect 重摆，或接受错位`
+          : "";
+      const beatNote =
+        p.beatGrid && Math.abs(deltaTotal) > 2
+          ? `⚠️ 有节拍网格（${p.beatGrid.bpm} BPM）：卡点基于旧时间轴，改长/改短后要重新 align 卡点`
+          : "";
+      // keep 模式不改幕长，新配音比幕长就必然被幕尾截断 —— 这是这个模式唯一的坑
+      const keepOver =
+        fit === "keep"
+          ? touched
+              .map((t) => ({ t, s: synth.get(t.index) }))
+              .filter((x) => x.s && (x.s as Synth).suggested > x.t.oldDur)
+          : [];
+      const keepNote = keepOver.length
+        ? `⚠️ fit=keep 但新配音比幕长：` +
+          keepOver
+            .map((x) => `「${x.t.sceneName}」配音 ${(x.s as Synth).suggested}f > 幕长 ${x.t.oldDur}f`)
+            .join("；") +
+          ` —— 尾字会被幕尾切掉。要完整就重跑一次不传 fit（按配音改幕长）`
+        : "";
+      // BGM 若写死了长度，片变长会提前结束（loop 的没这个问题）
+      const bgmFixed = Number((p.audio as { durationInFrames?: number } | undefined)?.durationInFrames ?? 0);
+      const bgmNote =
+        bgmFixed > 0 && newTotal > bgmFixed + 2
+          ? `⚠️ 背景音乐写死了 ${bgmFixed}f，成片现在 ${newTotal}f：后面 ${newTotal - bgmFixed}f 会没声音（要么 set_audio(durationInFrames=null) 让它跟素材，要么开 loop）`
+          : "";
+
+      // ── 回执 ──
+      const items = plan.map((x, i) => {
+        const s = synth.get(x.c.index);
+        const chars = `${scriptChars(x.c.oldText)}字 → ${scriptChars(x.c.text)}字`;
+        const where = x.hit ? ` · 幕「${x.hit.scene.name}」［${x.hit.scene.id}］` : " · 还没建幕（只改稿与分镜）";
+        const dur =
+          s && fit === "duration" && x.hit
+            ? ` ${x.oldDur}f（${(x.oldDur / fps).toFixed(1)}s）→ ${s.suggested}f（${(s.suggested / fps).toFixed(1)}s）`
+            : s
+              ? ` 幕长保持 ${x.oldDur}f`
+              : "";
+        const link = s ? `${nl}   试听：${BASE}${s.url}` : "";
+        return `${i + 1}. 第 ${x.c.index + 1} 段 ${chars}${where}${dur}${link}`;
+      });
+
+      const next = textOnly
+        ? `${nl}下一步：把改后的这一段发给用户过目 → confirm_script（读音没变，不用重配）`
+        : `${nl}⛔ 下一步（顺序别省）：` +
+          `${nl}   ① 把上面的试听链接发给用户，只问三件事：语速对不对 / 有没有读错 / 停顿别扭吗` +
+          `${nl}   ② 他说「可以」→ confirm_narration(userSaid="他的原话")` +
+          `${nl}   ③ 稿件也变了 → confirm_script（旧确认已失效；他没点头之前 build_storyboard 会拒绝）` +
+          `${nl}   ④ 元素被挤到的，用 update_element 挪位置/改时长；要复看画面就 preview_frames`;
+
+      return [
+        `改稿已落地：${plan.length} 段${textOnly ? "（只改字，没重配）" : `，重配 ${synth.size} 段`}`,
+        ...items,
+        textOnly
+          ? ""
+          : `${nl}成片 ${(oldTotal / fps).toFixed(1)}s → ${(newTotal / fps).toFixed(1)}s${briefSec > 0 ? `（brief 目标 ${briefSec}s，差 ${(newTotal / fps - briefSec).toFixed(1)}s）` : ""}`,
+        textOnly ? "" : (sbPatch?.matched.length ? `分镜表已同步（第 ${sbPatch.matched.join("、")} 幕）` : ""),
+        timingNote,
+        clampNote,
+        keepNote,
+        trackNote,
+        bgmNote,
+        beatNote,
+        elNotes.length
+          ? `${nl}幕内元素要跟手（${elNotes.length} 处）：${nl}- ${elNotes.slice(0, 6).join(`${nl}- `)}${elNotes.length > 6 ? `${nl}- …共 ${elNotes.length} 处` : ""}`
+          : "",
+        next,
+      ]
+        .filter(Boolean)
+        .join(nl);
+    },
+  },
+  {
     name: "register_narration",
     description:
       "**登记已有配音**：配音不是 tts_narration 生成的（真人录音 / 外部 TTS / 客户给的文件）时用这个。\n" +
@@ -4714,6 +4083,90 @@ const TOOLS: ToolDef[] = [
     },
   },
   {
+    name: "get_annotations",
+    description:
+      "读用户在编辑器里对**某一帧**留的批注。用户看片时暂停在出问题的那一帧写原话，所以每条都带 sceneId + 幕内帧 + 时间码——比「第 3 幕有点怪」精确得多，能直接抽那一帧看。\n" +
+      "用法：先读这个，再逐条 preview_frames(sceneId, frames=[幕内帧]) 看现场；改完一条就 resolve_annotation 标掉，别攒着。",
+    shape: {
+      projectId: z.string().optional().describe("工程 id，不传 = 当前默认工程"),
+      includeResolved: z.boolean().optional().describe("连已标已修的也列出来（默认只看未解决的）"),
+    },
+    run: async (a) => {
+      const p = await resolveProject(a.projectId);
+      const nl = String.fromCharCode(10);
+      const all = listAnnotations(p.id);
+      if (!all.length) {
+        return (
+          `工程「${p.name}」还没有批注。` +
+          `${nl}用户可以在编辑器里暂停到出问题的那一帧，点画面右上「批注」写下意见——` +
+          `这样你会拿到精确到帧的定位，而不是一句"这里怪怪的"。` +
+          `${nl}要请他看片就用 request_review（回执里会带上这条建议）。`
+        );
+      }
+      const list = a.includeResolved ? all : all.filter((x) => !x.resolved);
+      if (!list.length) {
+        return `工程「${p.name}」的 ${all.length} 条批注都已标为已修。要复查全部传 includeResolved=true。`;
+      }
+
+      // ProjectLite 的 scenes 元素类型比 Scene 松（元素字段可选），这里只读 start/dur
+      const spans = sceneSpans(p.scenes as never[]);
+      const order = new Map(spans.map((sp, i) => [sp.id, i]));
+      const sorted = list
+        .slice()
+        .sort(
+          (x, y) =>
+            (order.get(x.sceneId) ?? 999) - (order.get(y.sceneId) ?? 999) ||
+            x.frameInScene - y.frameInScene,
+        );
+      const fps = p.fps || 30;
+      const tc = (frame: number) => {
+        const sec = frame / fps;
+        return `${String(Math.floor(sec / 60)).padStart(2, "0")}:${(sec % 60).toFixed(1).padStart(4, "0")}`;
+      };
+      const lines = sorted.map((x, i) => {
+        const idx = order.get(x.sceneId);
+        const where =
+          idx === undefined
+            ? `幕 ${x.sceneId}（这一幕已不存在，可能被删了）· 幕内第 ${x.frameInScene} 帧`
+            : `第 ${idx + 1} 幕「${p.scenes[idx].name}」 · 全片 ${tc(spans[idx].start + x.frameInScene)}（幕内第 ${x.frameInScene} 帧）`;
+        // sceneId 必须出现在回执里：preview_frames 要的就是它，别再让 agent 回头查一次
+        return `${i + 1}. ${x.resolved ? "[已修] " : ""}${where}${nl}   “${x.text}”${nl}   id=${x.id} · sceneId=${x.sceneId}`;
+      });
+      const openCount = all.filter((x) => !x.resolved).length;
+      return (
+        `工程「${p.name}」有 ${openCount} 条未解决批注（共 ${all.length} 条）：${nl}${nl}` +
+        lines.join(nl + nl) +
+        `${nl}${nl}怎么用这些批注：` +
+        `${nl}  · 每条都是"用户看着画面说的"，别自己重新理解一遍——原话里的措辞就是他要的效果` +
+        `${nl}  · 看现场：preview_frames(sceneId="上面那条的 sceneId", frames=[幕内帧])，一帧就够，别抽整段` +
+        `${nl}  · 改完一条就 resolve_annotation(ids=["id"]) 标掉；攒着不标，下一轮你还得重新判断改没改`
+      );
+    },
+  },
+  {
+    name: "resolve_annotation",
+    description:
+      "把用户批注标记为已修（或恢复未解决）。改完一条就标一条——批注列表是给下一轮看的，留着没标的分不清是真没改还是改了没记账。",
+    shape: {
+      projectId: z.string().optional().describe("工程 id，不传 = 当前默认工程"),
+      ids: z.array(z.string()).describe("批注 id 数组（get_annotations 每条末尾给）"),
+      resolved: z.boolean().optional().describe("默认 true = 标记已修；传 false = 恢复未解决"),
+    },
+    run: async (a) => {
+      const p = await resolveProject(a.projectId);
+      if (!a.ids?.length) throw new Error("缺少 ids（get_annotations 回执里每条末尾那个 id=an_xxx）");
+      const r = resolveAnnotations(p.id, a.ids, a.resolved !== false);
+      const verb = a.resolved === false ? "恢复为未解决" : "标为已修";
+      if (!r.changed) {
+        return `没有改动：这 ${a.ids.length} 条 id 要么不存在，要么本来就是这个状态（剩 ${r.remaining} 条未解决）。`;
+      }
+      return (
+        `已把 ${r.changed} 条批注${verb}，还剩 ${r.remaining} 条未解决。` +
+        (r.remaining ? `${String.fromCharCode(10)}继续处理剩下的，全部标完再 request_review 请用户复查。` : "")
+      );
+    },
+  },
+  {
     name: "render_video",
     description:
       "提交渲染任务（默认把工程里所有画幅都出一版）。默认异步返回，用 get_render_status 查询；传 wait=true 会等到完成再返回（省轮询）。\n" +
@@ -5073,18 +4526,36 @@ const TOOLS: ToolDef[] = [
         );
 
       const dur = ((c.endFrame - c.startFrame + 1) / fps).toFixed(1);
+      /**
+       * 头部这行必须和下面「这段里有」一致。
+       * c.withAudio 是**请求**（用户没关音轨），不是事实：工程里一个音频都没有时，
+       * 渲出来是条空轨，还写「带音轨」会让人以为有声，等听到才发现白等一轮。
+       */
+      const audioHead = c.withAudio
+        ? hasAudio
+          ? "带音轨"
+          : "静音（工程里还没有音频）"
+        : "静音";
+      /** 问哪几条要看这段里真有什么：没字幕还问「字幕来得及读吗」是空问题 */
+      const askList = [
+        "① 转场刺不刺眼 / 有没有两幕文字叠在一起",
+        subLines > 0
+          ? "② 字幕来得及读完吗（尤其念得快的那几句）"
+          : "② 该有字的地方有没有空着（这版一幕字幕都没写）",
+        hasAudio ? "③ BGM 压过人声没有" : null,
+      ]
+        .filter(Boolean)
+        .join(`${nl}  `);
       return (
-        `预览片段：${dur}s · ${Math.round((c.scale * 100))}% 分辨率 · ${c.withAudio ? "带音轨" : "静音"} · ${c.sections} 帧` +
+        `预览片段：${dur}s · ${Math.round((c.scale * 100))}% 分辨率 · ${audioHead} · ${c.sections} 帧` +
         `${nl}地址：${BASE}${c.url}` +
         `${nl}本地：${c.localPath}` +
         `${nl}渲染 ${(c.renderMs / 1000).toFixed(1)}s（预估 ${estSec}s）${c.bundleMs > 800 ? `（含打包 ${(c.bundleMs / 1000).toFixed(1)}s）` : ""}` +
         `${nl}选取理由：${reason}` +
         `${nl}这段里有：${seams} 个转场、${subLines} 句字幕${hasAudio ? "、有音轨" : "、没有音轨"}` +
-        `${nl}${nl}**把链接发给用户，只问三件事**（问多了他答不清）：` +
-        `${nl}  ① 转场刺不刺眼 / 有没有两幕文字叠在一起` +
-        `${nl}  ② 字幕来得及读完吗（尤其念得快的那几句）` +
-        `${nl}  ③ BGM 压过人声没有` +
-        `${nl}这三件事在这一段里全能判断，别等到整片。`
+        `${nl}${nl}**把链接发给用户，按这几条问**（问多了他答不清）：` +
+        `${nl}  ${askList}` +
+        `${nl}这些在这一段里全能判断，别等到整片。`
       );
     },
   },
@@ -5095,7 +4566,9 @@ const TOOLS: ToolDef[] = [
       "① 全局帧：frames:[90,210]（不带 sceneId）；\n" +
       "② 某一幕内部：sceneId + frames:[90,210]（**此时 frames 是该幕内的帧号**，不用换算全局）或 sceneId+offset（单帧快捷）；\n" +
       '③ 转场交界：around="transitions" 自动取每幕交界前后几帧。\n' +
-      "⚠️ 别只抽第 0 帧——文字入场动画从 0 开始，第 0 帧经常是空背景；要等动画落定的帧（如幕内 60% 处）。",
+      "⚠️ 别只抽第 0 帧——文字入场动画从 0 开始，第 0 帧经常是空背景；要等动画落定的帧（如幕内 60% 处）。\n" +
+      "ℹ️ 交界那几帧（= 下一幕 transitionIn 的时长）里，上一幕会定格淡出、下一幕渐显，**两幕同时在画面上**：" +
+      "看到上一幕的大字/标题半透明压在新幕上属叠化本身，工具会在回执里点名这个区间，别当成渲染 bug。",
     shape: {
       frames: z
         .array(z.number())
@@ -5119,14 +4592,22 @@ const TOOLS: ToolDef[] = [
       const p = await resolveProject(a.projectId);
       const nl = String.fromCharCode(10);
       const lines: string[] = [];
-      let frames = a.frames ?? [];
+      let frames: number[] = a.frames ?? [];
+      /** 被钳过的帧：静默钳到末帧会让人以为「四个不同帧长得一模一样」 */
+      const clampedInfo: { asked: number; used: number; scene: string }[] = [];
       if (a.sceneId) {
         const idx = (p.scenes ?? []).findIndex((x: any) => x.id === a.sceneId);
-        if (idx < 0) throw new Error(`没有场景 ${a.sceneId}`);
+        if (idx < 0) throw new Error(sceneMissingMessage(p as never, (p.scenes ?? []) as never, a.sceneId));
         // 多轨之后起点不再等于"前序时长之和"，必须走 sceneSpans（否则画中画会预览到别处）
         const span = sceneSpans(p.scenes as any[])[idx];
         const dur = span?.dur ?? (p.scenes as any[])[idx].durationInFrames;
-        const clamp = (f: number) => Math.max(0, Math.min(dur - 1, f));
+        const sceneName = String((p.scenes as any[])[idx].name ?? a.sceneId);
+        const clamp = (f: number) => {
+          const asked = Math.round(f);
+          const used = Math.max(0, Math.min(dur - 1, asked));
+          if (used !== asked) clampedInfo.push({ asked, used, scene: sceneName });
+          return used;
+        };
         if (a.frames?.length) {
           // sceneId + frames = 该幕内的帧号（agent 的自然直觉，实测就是这么传的——
           // 以前这里直接用 frames 覆盖成 [起点+offset]，传的帧被静默丢掉只回第 0 帧）
@@ -5134,6 +4615,15 @@ const TOOLS: ToolDef[] = [
         } else {
           const off = Math.max(0, Math.min(dur - 1, a.offset ?? 0));
           frames = [(span?.start ?? 0) + off];
+        }
+        if (clampedInfo.length) {
+          const name = clampedInfo[0].scene;
+          const dur0 = dur;
+          lines.push(
+            `⚠️ ${clampedInfo.length} 个帧号超出「${name}」的长度（${dur0} 帧，合法幕内帧号 0–${dur0 - 1}），已钳到边界：` +
+              clampedInfo.map((c) => `${c.asked}→${c.used}`).join("、") +
+              `${nl}   frames 配 sceneId 时是**幕内帧号**；要看别的一幕请换 sceneId，要看全片请不带 sceneId 传全局帧号`,
+          );
         }
       }
       if (a.around === "transitions") {
@@ -5154,6 +4644,38 @@ const TOOLS: ToolDef[] = [
         }
       }
       if (!frames.length) throw new Error('给 frames 列表（单帧 frames:[帧号]）、sceneId+offset，或 around="transitions" 自动取交界帧');
+      // 全局帧号同样要拦越界：以前超出片长会落到渲染端超时，报错里看不出是帧号写错了
+      if (!a.sceneId) {
+        const spansAll = sceneSpans(p.scenes as any[]);
+        const totalFrames = spansAll.reduce((m, s) => Math.max(m, s.start + s.dur), 0);
+        const over = frames.filter((f) => f < 0 || f >= totalFrames);
+        if (over.length) {
+          lines.push(
+            `⚠️ ${over.length} 个全局帧号超出片长（全片 ${totalFrames} 帧，合法 0–${totalFrames - 1}）：${over.join("、")}，已钳到边界`,
+          );
+          frames = frames.map((f) => Math.max(0, Math.min(totalFrames - 1, f)));
+        }
+      }
+      /**
+       * 抽到的帧落在接缝交叠区时**必须说明**。
+       *
+       * 叠化的实现是"上一幕多渲 N 帧定格淡出、下一幕渐显覆盖"，所以交叠区里
+       * 两幕真的同时在画面上 —— 抽帧看到的是两个画面叠在一起（例如 3D 幕开头
+       * 压着上一幕的「谢谢观看」大字）。这看起来极像渲染 bug：实测为了确认它是
+       * 转场而不是状态泄漏，来回抽了 6 组帧。这里直接点名，省掉那 6 组。
+       */
+      const spanAll = sceneSpans(p.scenes as any[]);
+      const blends = seamBlendWindows((p.scenes ?? []) as any[], spanAll);
+      const inBlend = frames.filter((f) => blends.some((w) => f >= w.start && f < w.end));
+      if (inBlend.length) {
+        const w = blends.find((x) => inBlend[0] >= x.start && inBlend[0] < x.end)!;
+        lines.push(
+          `ℹ️ 第 ${inBlend.join("、")} 帧落在**接缝交叠区**（「${w.from}」→「${w.to}」的第 ${w.start}–${w.end - 1} 帧）：` +
+            `${w.frames} 帧里上一幕定格淡出、下一幕渐显，两幕同时在画面上——` +
+            `看到上一幕的标题/大字半透明地压在新幕上属叠化本身，不是渲染错。` +
+            `要干净的画面就抽交叠区之外（≥ 第 ${w.end} 帧）；想彻底不要这层残影就缩短转场或给下一幕硬切`,
+        );
+      }
       for (const f of frames) {
         const res = await api<{ stills: { format: string; url: string }[] }>(
           `/api/projects/${p.id}/stills`,
@@ -5172,7 +4694,7 @@ const TOOLS: ToolDef[] = [
               .join(" | "),
         );
       }
-      dirtySincePreview = false;
+      clearDirty();
       return lines.join(nl);
     },
   },
@@ -5235,13 +4757,14 @@ const TOOLS: ToolDef[] = [
       const brief = readBrief(p.id);
       const res = await api<{ stills: { format: string; url: string }[] }>(
         `/api/projects/${p.id}/stills`,
-        { method: "POST", body: JSON.stringify({ frame, formats: a.formats }) },
+        // purpose=cover：落到 covers/，产物面板里能认出来这是封面而不是关键帧
+        { method: "POST", body: JSON.stringify({ frame, formats: a.formats, purpose: "cover" }) },
       );
       const nl = String.fromCharCode(10);
       const files = res.stills.map(
         (x) => `${x.format}: ${BASE}${encodeURI(x.url)}${nl}  文件：${path.join(ROOT, String(x.url).split("?")[0].replace(/^\/+/, ""))}`,
       );
-      dirtySincePreview = false;
+      clearDirty();
       return (
         `封面候选（第 ${frame} 帧）：${nl}${files.join(nl)}${autoNote ? `${nl}${autoNote}` : ""}` +
         (brief?.cover
@@ -5363,6 +4886,8 @@ const TOOLS: ToolDef[] = [
         removedVideos: number;
         removedStills: number;
         removedSubtitles: number;
+        removedCovers: number;
+        skippedLocked: number;
         removedOrphanDirs: number;
         removedLegacy: number;
         freedBytes: number;
@@ -5374,11 +4899,14 @@ const TOOLS: ToolDef[] = [
       const parts = [
         `${r.removedVideos} 个成片`,
         `${r.removedStills} 张关键帧`,
+        ...(r.removedCovers ? [`${r.removedCovers} 张封面`] : []),
         ...(r.removedSubtitles ? [`${r.removedSubtitles} 个字幕`] : []),
       ].join(" + ");
       const notes = [
         r.removedOrphanDirs ? `工程已删的产物目录 ${r.removedOrphanDirs} 个（整块收掉）` : "",
         r.removedLegacy ? `旧版扁平目录残留 ${r.removedLegacy} 个文件` : "",
+        // 锁定的不删是有意的：用户标了"这条别删"，就该一直留着
+        r.skippedLocked ? `${r.skippedLocked} 个已锁定的产物跳过没删` : "",
       ].filter(Boolean);
       return (
         (r.dryRun
@@ -5411,7 +4939,8 @@ const TOOLS: ToolDef[] = [
       "把本机文件（图片 / 音频 / 视频）上传，返回站内地址。\n" +
       "**两种归宿**：registerToLibrary:true（默认）→ 进「我的素材」库（assets/library/，跨工程复用、删工程不动它）；\n" +
       "false → 进**本工程素材目录**（assets/projects/<工程id>/，删工程时一起清掉）。\n" +
-      "只是这一支片子用一次的素材（生成的图 / 配音）建议 false；想反复用就入库存。",
+      "只是这一支片子用一次的素材（生成的图 / 配音）建议 false；想反复用就入库存。\n" +
+      "path 给本机绝对路径即可（反斜杠要写成 \\\\ 或用正斜杠）；文件不存在/是目录/空文件/超 40MB 会直接说清原因并给出同目录里名字相近的候选。",
     shape: {
       projectId: z.string().optional().describe("要操作的工程 id，不传 = 当前默认工程（list_projects 查）"),
       path: z.string().describe("本机绝对路径，如 D:/tmp/icon.png"),
@@ -5423,10 +4952,11 @@ const TOOLS: ToolDef[] = [
     },
     run: async (a) => {
       const p = await resolveProject(a.projectId);
-      const fs = await import("node:fs/promises");
-      const nodePath = await import("node:path");
-      const buf = await fs.readFile(a.path);
-      const base = nodePath.basename(a.path);
+      // 路径解析统一走 server/upload-path.ts：不存在 / 是目录 / 空文件 / 超大 / 没权限
+      // 各自给不同的下一步（以前直接 readFile，抛一句裸 ENOENT，agent 只能反复换写法重试）
+      const file = loadUploadFile(a.path);
+      const buf = file.buf;
+      const base = file.name;
       const toLibrary = a.registerToLibrary ?? true;
 
       await ensureServer();
@@ -5624,13 +5154,15 @@ const TOOLS: ToolDef[] = [
     name: "rename_asset",
     description: "给「我的素材」改名（只改显示名，不影响文件与已引用它的工程）。",
     shape: {
-      id: z.string().optional().describe("素材 id（list_assets 里能看到）"),
+      id: z.string().optional().describe("素材 id（list_assets 里能看到；带不带 asset: 前缀都认）"),
       assetId: z.string().optional().describe("同 id（别名，delete_asset 用的是这个名字）"),
       name: z.string().describe("新名字"),
     },
     run: async (a) => {
-      const id = a.id ?? a.assetId;
-      if (!id) throw new Error("缺少 id（素材 id，list_assets 里查；也认 assetId）");
+      const raw = a.id ?? a.assetId;
+      if (!raw) throw new Error("缺少 id（素材 id，list_assets 里查；也认 assetId）");
+      // 带不带 asset: 前缀都认（upload_asset 回执给的是带前缀的）
+      const id = toAssetId(raw);
       const { item } = await api<{ item: any }>(`/api/library/${id}`, {
         method: "PATCH",
         headers: { "content-type": "application/json" },
@@ -5683,7 +5215,8 @@ const TOOLS: ToolDef[] = [
   {
     name: "add_element",
     description:
-      "往场景里放一个自由元素（贴纸 / 图标 / 标签 / 图片 / 视频 / 音频）。可以用 libraryId 取素材库现成的，也可以自己给 svg（矢量）、text（文字）、imageSrc（图片）、videoSrc（视频）、audioSrc（音频）——素材库没有合适的就自己造。放进去之后用户可以正常拖动/旋转/缩放/删除。视频默认有声、不循环；音频/视频没给 durationInFrames 会按素材真实时长。支持背景色 bg、入场 enter / 出场 exit 特效、场景内时间 from / durationInFrames。",
+      "往场景里放一个自由元素（贴纸 / 图标 / 标签 / 图片 / 视频 / 音频）。可以用 libraryId 取素材库现成的，也可以自己给 svg（矢量）、text（文字）、imageSrc（图片）、videoSrc（视频）、audioSrc（音频）——素材库没有合适的就自己造。放进去之后用户可以正常拖动/旋转/缩放/删除。视频默认有声、不循环；音频/视频没给 durationInFrames 会按素材真实时长。支持背景色 bg、入场 enter / 出场 exit 特效、场景内时间 from / durationInFrames。\n" +
+      "**x/y 是元素中心点**（不是左上角）：贴边放时元素有一半会被裁掉。文字宽度随字数×字号变化，长句别往 x>80 放，否则右侧超出画面（回执会算给你）。",
     shape: {
       projectId: z.string().optional().describe("要操作的工程 id，不传 = 当前默认工程（list_projects 查）"),
       sceneId: z.string().optional().describe("放到哪个场景；不传就用第一个场景"),
@@ -5705,8 +5238,8 @@ const TOOLS: ToolDef[] = [
         .optional()
         .describe("视频元素：/assets/xxx.mp4（先 upload_asset）；默认有声、不循环"),
       name: z.string().optional().describe("图层名，方便后续指认"),
-      x: z.number().optional().describe("中心 X，画面宽度百分比，默认 50"),
-      y: z.number().optional().describe("中心 Y，画面高度百分比，默认 52"),
+      x: z.number().optional().describe("中心 X（画面宽度百分比 0–100，默认 50）。**中心点定位**：x=85 的长文字会右边出界"),
+      y: z.number().optional().describe("中心 Y（画面高度百分比 0–100，默认 52）。顶部贴边时 y 给 6 以上"),
       size: z.number().optional().describe("短边百分比：图形是宽度，文字是字号"),
       rotate: z.number().optional(),
       scale: z.number().optional(),
@@ -5779,7 +5312,12 @@ const TOOLS: ToolDef[] = [
           ops: [{ op: "add_element", sceneId, element }],
         }),
       });
-      return `已放入元素 ${element.id}「${element.name}」到场景 ${sceneId}（${element.kind}，位置 ${element.x}% / ${element.y}%）`;
+      // 中心点定位 + 文字宽度随字数变：靠边放必出界，出界在抽帧前看不出来（本地实测过 x=85 长句被裁一半）
+      const warn = elementEdgeWarn(element as never);
+      return (
+        `已放入元素 ${element.id}「${element.name}」到场景 ${sceneId}（${element.kind}，位置 ${element.x}% / ${element.y}%）` +
+        (warn ? `\n⚠️ ${warn}` : "")
+      );
     },
   },
   {
@@ -5993,2326 +5531,18 @@ const TOOLS: ToolDef[] = [
     },
   },
   /* ── scene3d 场景图：逐节点读写（人和编辑器面板改的就是这批 op） ── */
-  {
-    name: "get_graph",
-    description:
-      "看 scene3d 某一幕的**场景图大纲**：每个节点的 id / 显示名 / 几何体与关键参数 / 颜色与贴图 / 位置 / 父子层级 / 关键帧段数，外加相机、光源、粒子、辉光。\n" +
-      "改节点之前先调它拿 nodeId——不要整份读 get_scene 再从几千行 JSON 里找 id。\n" +
-      "没有 graph 的场景表示它用的是**预置场景**（preset），没有节点可改。",
-    shape: {
-      projectId: z.string().optional().describe("要操作的工程 id，不传 = 当前默认工程（list_projects 查）"),
-      sceneId: z.string(),
-    },
-    run: async (a) => {
-      const p = await resolveProject(a.projectId);
-      const s = p.scenes.find((x) => x.id === a.sceneId);
-      if (!s) throw new Error(`找不到场景 ${a.sceneId}`);
-      if (s.type !== "scene3d") {
-        throw new Error(
-          `「${s.name}」是 ${s.type} 版式，没有 3D 场景图。get_graph 只对 scene3d 生效`,
-        );
-      }
-      const props = s.props as {
-        preset?: string;
-        graph?: {
-          nodes: {
-            id: string;
-            label?: string;
-            parent?: string;
-            hidden?: boolean;
-            locked?: boolean;
-            geometry: { type: string; [k: string]: unknown };
-            material?: { color?: string; emissive?: string; map?: { src?: string }; wireframe?: boolean };
-            transform?: { position?: number[] };
-            anim?: unknown[];
-          }[];
-          camera?: {
-            position: number[];
-            target: number[];
-            fov: number;
-            orbit?: { degPerSec: number };
-            anim?: unknown[];
-          };
-          lights?: { type: string; position: number[]; intensity: number; color: string }[];
-          particles?: { count: number; size: number };
-          post?: { bloom?: number; threshold?: number };
-        };
-      };
-      const g = props.graph;
-      if (!g) {
-        return (
-          `「${s.name}」用的是预置场景（preset=${props.preset ?? "blank"}），没有节点可改。\n` +
-          `要逐节点编辑，先 update_scene(sceneId:"${s.id}", props:{graph:{nodes:[…]}})；` +
-          `最小骨架与字段表见 get_guide("scene3d")。`
-        );
-      }
-      const keyNums = ["radius", "innerRadius", "outerRadius", "width", "height", "depth", "count", "duty"];
-      const geoOf = (geo: { type: string; [k: string]: unknown }) =>
-        [geo.type, ...keyNums.filter((k) => typeof geo[k] === "number").map((k) => `${k}=${geo[k]}`)]
-          .slice(0, 4)
-          .join(" ");
-      const byId = new Map(g.nodes.map((n) => [n.id, n]));
-      const depthOf = (id: string) => {
-        let d = 0;
-        let cur = byId.get(id);
-        while (cur?.parent && d < 32) {
-          d++;
-          cur = byId.get(cur.parent);
-        }
-        return d;
-      };
-      const lines = g.nodes.map((n) => {
-        const bits = [geoOf(n.geometry)];
-        const m = n.material;
-        if (m?.color) bits.push(m.color);
-        if (m?.emissive) bits.push(`自发光 ${m.emissive}`);
-        if (m?.map?.src) bits.push(`贴图 ${m.map.src.split("/").pop()}`);
-        if (m?.wireframe) bits.push("线框");
-        const pos = n.transform?.position;
-        if (pos) bits.push(`pos(${pos.join(",")})`);
-        if ((n.anim ?? []).length) bits.push(`anim×${n.anim!.length}`);
-        if (n.hidden) bits.push("[隐藏]");
-        if (n.locked) bits.push("[锁定]");
-        const pad = "  ".repeat(depthOf(n.id));
-        return `${pad}- ${n.id}${n.label ? `（${n.label}）` : ""} | ${bits.join(" | ")}`;
-      });
-      const out = [`「${s.name}」sceneId=${s.id} · ${g.nodes.length} 个节点`, ...lines];
-      if (g.camera) {
-        const c = g.camera;
-        /**
-         * 锁定/跟随段必须显式报出来：agent 看到"target 写了却没变化"时，
-         * 最常见的原因就是这一段被 lookAt 覆盖了——不报它，agent 会一直去改 target。
-         */
-        const segs = (c.anim ?? []) as Array<{ at: [number, number]; lookAt?: string; follow?: string }>;
-        const locks = segs.filter((a) => a.lookAt);
-        const follows = segs.filter((a) => a.follow);
-        out.push(
-          `相机：pos[${c.position.join(",")}] → target[${c.target.join(",")}] fov${c.fov}` +
-            (c.orbit?.degPerSec ? ` 环绕${c.orbit.degPerSec}°/s` : "") +
-            ((c.anim ?? []).length ? ` anim×${c.anim!.length}` : "") +
-            (locks.length ? ` 锁定×${locks.length}` : "") +
-            (follows.length ? ` 跟随×${follows.length}` : ""),
-        );
-        if (locks.length) {
-          out.push(
-            `　锁定段：${locks.map((a) => `「${a.lookAt}」f${a.at[0]}–f${a.at[1]}`).join("；")}` +
-              `（这些段的 target 由节点位置每帧决定，改 targetX/Y/Z 无效；退出锁定=下一段不给 lookAt 且不写 from.target）`,
-          );
-        }
-      } else out.push("相机：自动取景");
-      if (g.lights?.length) {
-        out.push(`光源 ${g.lights.length} 盏：${g.lights.map((l) => `${l.type}@[${l.position.join(",")}] i=${l.intensity}`).join("；")}`);
-      }
-      if (g.particles) out.push(`粒子：${g.particles.count} 个，size ${g.particles.size}`);
-      if (g.post) out.push(`辉光：×${g.post.bloom ?? 1}${g.post.threshold != null ? ` 阈值 ${g.post.threshold}` : ""}`);
-      out.push(
-        "改单个节点：update_graph_node(sceneId, nodeId, patch:{…})（不要整份覆盖 graph）；" +
-          "节点增删：add_graph_node / remove_graph_node；相机·灯光·粒子·辉光：set_graph_scene。",
-      );
-      return out.join("\n");
-    },
-  },
-  {
-    name: "update_graph_node",
-    description:
-      "改 scene3d 场景图里的**一个节点**（按 nodeId 局部写回，不重发整张图）。\n" +
-      "常用：patch:{geometry:{radius:2.4}} 改半径（同形状只改给的参数，其余保留；换 type 则整份重来）、" +
-      "patch:{material:{color:\"#FFD27A\", emissive:\"#FF8A3D\"}} 改颜色/自发光（深合并）、" +
-      "patch:{transform:{position:[0,1,0]}} 移动（position/rotation/scale 整个替换，其余保留）、" +
-      "patch:{label:\"地球\"} 起名、patch:{hidden:true} 临时隐藏（子树一起）、" +
-      "patch:{parent:\"sun\"} 换父级（**保持世界位置不变**，做卫星就靠它）、patch:{anim:[…]} 整段替换关键帧、anim:null 清空。\n" +
-      "轨迹想走曲线：段里加 curve:{out:[x,y,z], in:[x,y,z]}（相对直线方向的偏移，世界单位；不写=直线；两个给相同值=这段朝那个方向鼓）。\n" +
-      "⚠️ 节点有关键帧时，基础 transform 在关键帧区间内会被覆盖——改了看不到变化就检查 anim。\n" +
-      "nodeId 从 get_graph 拿。不知道有什么节点就先 get_graph，别整份改 graph。",
-    shape: {
-      projectId: z.string().optional().describe("要操作的工程 id，不传 = 当前默认工程（list_projects 查）"),
-      sceneId: z.string(),
-      nodeId: z.string().describe("节点 id（get_graph 第一列）"),
-      patch: z
-        .record(z.any())
-        .optional()
-        .describe("要改的字段：geometry/material/transform/anim/label/hidden/locked/parent"),
-      geometry: z.record(z.any()).optional().describe("几何体参数（同形状增量合并，换 type 则整份替换）"),
-      material: z.record(z.any()).optional().describe("材质（深合并；map:null 去掉贴图）"),
-      transform: z.record(z.any()).optional().describe("变换（深合并：position/rotation/scaleXYZ 整个替换）"),
-      anim: z.array(z.any()).nullable().optional().describe("关键帧数组（整表替换），null 清空"),
-      label: z.string().nullable().optional().describe("大纲里显示的名字"),
-      hidden: z.boolean().optional().describe("true = 连子树一起不渲染"),
-      locked: z.boolean().optional().describe("true = 编辑器里锁住（渲染照常）"),
-      parent: z.string().nullable().optional().describe("新父级节点 id；null = 提到根层级"),
-    },
-    run: async (a) => {
-      const { projectId, sceneId, nodeId, patch, ...flat } = a as Record<string, any>;
-      const merged: Record<string, unknown> = { ...(patch ?? {}) };
-      for (const [k, v] of Object.entries(flat)) if (v !== undefined) merged[k] = v;
-      if (!Object.keys(merged).length) {
-        throw new Error("update_graph_node 没有要改的字段：给 patch:{…} 或平铺 geometry/material/transform/…");
-      }
-      const p = await resolveProject(projectId);
-      const res = await api<{ summary: string[] }>(`/api/projects/${p.id}/ops`, {
-        method: "POST",
-        body: JSON.stringify({
-          actor: "agent",
-          ops: [{ op: "update_graph_node", sceneId, nodeId, patch: merged }],
-        }),
-      });
-      return fmtSummary(res.summary);
-    },
-  },
-  {
-    name: "add_graph_node",
-    description:
-      "往 scene3d 场景图里加一个节点（上限 48 个）。至少给 geometry，例如 {type:\"sphere\", radius:0.5}；" +
-      "可选 id（不给自动起 n1/n2…）、parent（挂在某个节点下，跟着它公转）、transform:{position:[…]}、material:{…}、label。\n" +
-      "几何体白名单：box/sphere/cylinder/cone/torus/torusKnot/plane/capsule/icosahedron/dodecahedron/octahedron/ring/dashRing。" +
-      "画行星轨道用 dashRing（扁平虚线，torus 会变成甜甜圈）。返回新节点 id。",
-    shape: {
-      projectId: z.string().optional().describe("要操作的工程 id，不传 = 当前默认工程（list_projects 查）"),
-      sceneId: z.string(),
-      node: z.record(z.any()).optional().describe("完整节点对象，如 {id:\"moon\", geometry:{type:\"sphere\",radius:0.15}, parent:\"earth\", transform:{position:[1,0,0]}}"),
-      afterId: z.string().optional().describe("插到这个节点之后（决定渲染顺序与大纲顺序）"),
-      id: z.string().optional().describe("节点 id（不传自动 n1/n2…）"),
-      parent: z.string().optional().describe("父节点 id"),
-      geometry: z.record(z.any()).optional().describe("几何体，如 {type:\"sphere\", radius:0.5}"),
-      material: z.record(z.any()).optional().describe("材质，如 {color:\"#5AC8FA\"}"),
-      transform: z.record(z.any()).optional().describe("变换，如 {position:[2,0,0]}"),
-      label: z.string().optional().describe("大纲里显示的名字"),
-    },
-    run: async (a) => {
-      const { projectId, sceneId, node, afterId, ...flat } = a as Record<string, any>;
-      let nodeObj: Record<string, unknown>;
-      if (node && typeof node === "object") {
-        nodeObj = { ...(node as Record<string, unknown>) };
-        for (const [k, v] of Object.entries(flat)) if (v !== undefined && nodeObj[k] === undefined) nodeObj[k] = v;
-      } else {
-        nodeObj = {};
-        for (const [k, v] of Object.entries(flat)) if (v !== undefined) nodeObj[k] = v;
-      }
-      if (!nodeObj.geometry) {
-        throw new Error(
-          'add_graph_node 缺少 geometry：如 node:{geometry:{type:"sphere", radius:0.5}}' +
-            "（几何体白名单见 get_guide(\"scene3d\")）",
-        );
-      }
-      const p = await resolveProject(projectId);
-      const res = await api<{ summary: string[] }>(`/api/projects/${p.id}/ops`, {
-        method: "POST",
-        body: JSON.stringify({
-          actor: "agent",
-          ops: [{ op: "add_graph_node", sceneId, node: nodeObj, ...(afterId ? { afterId } : {}) }],
-        }),
-      });
-      return fmtSummary(res.summary);
-    },
-  },
-  {
-    name: "remove_graph_node",
-    description:
-      "删 scene3d 场景图里的一个节点。默认**连子树一起删**（withChildren 默认 true）；" +
-      "只删父节点会留下孤儿，所以 withChildren:false 遇到子节点会直接拒绝并列出它们。" +
-      "场景图至少要留一个节点。删错可 restore_rev 回滚。",
-    shape: {
-      projectId: z.string().optional().describe("要操作的工程 id，不传 = 当前默认工程（list_projects 查）"),
-      sceneId: z.string(),
-      nodeId: z.string().describe("节点 id（get_graph 第一列）"),
-      withChildren: z.boolean().optional().describe("默认 true = 连子节点一起删"),
-    },
-    run: async (a) => {
-      const p = await resolveProject(a.projectId);
-      const res = await api<{ summary: string[] }>(`/api/projects/${p.id}/ops`, {
-        method: "POST",
-        body: JSON.stringify({
-          actor: "agent",
-          ops: [{ op: "remove_graph_node", sceneId: a.sceneId, nodeId: a.nodeId, withChildren: a.withChildren }],
-        }),
-      });
-      return fmtSummary(res.summary);
-    },
-  },
-  {
-    name: "set_graph_scene",
-    description:
-      "改 scene3d 的**场景级**设置（不是某个节点）：相机、光源、粒子、辉光。只传要改的那几项，其余保持原样；传 null 表示清掉（恢复默认）。\n" +
-      "相机：{position:[0,2,8], target:[0,0,0], fov:42, orbit:{degPerSec:6}}；" +
-      "运镜段里想**锁定看向某个会动的节点**（行星、飘的物体）用 anim[].lookAt:\"节点id\"" +
-      "（target 每帧重算，targetX/Y/Z 在该段失效；退出锁定=下一段不给 lookAt 且不写 from.target，镜头会自动接上）；" +
-      "想让镜头走弧线用 anim[].curve:{out,in}（相对直线的偏移，绕拍/甩镜）；" +
-      "光源（给了就顶掉预设打光，最多 8 盏）：[{type:\"point\", position:[0,0,0], intensity:20, color:\"#FFE9B0\"}]" +
-      "（point/spot 按 1/距离² 衰减，距离 2 时要 20 上下才亮；directional 1~3 就够）；" +
-      "粒子：{count:800, spread:[6,4,6], size:0.06, drift:0.3}；辉光：{bloom:1.2}。",
-    shape: {
-      projectId: z.string().optional().describe("要操作的工程 id，不传 = 当前默认工程（list_projects 查）"),
-      sceneId: z.string(),
-      camera: z
-        .record(z.any())
-        .nullable()
-        .optional()
-        .describe(
-          "相机；null = 交还自动取景。anim[] 里可用 lookAt:\"节点id\" 锁定看向（段内 target 每帧重算）",
-        ),
-      lights: z.array(z.any()).nullable().optional().describe("整组光源；null 或 [] = 撤掉自定义光"),
-      particles: z.record(z.any()).nullable().optional().describe("粒子层；null = 关掉"),
-      post: z.record(z.any()).nullable().optional().describe("后期（bloom/threshold）；null = 回到默认"),
-    },
-    run: async (a) => {
-      const ops: Record<string, unknown>[] = [];
-      if (a.camera !== undefined) ops.push({ op: "set_graph_camera", sceneId: a.sceneId, camera: a.camera });
-      if (a.lights !== undefined) ops.push({ op: "set_graph_lights", sceneId: a.sceneId, lights: a.lights });
-      if (a.particles !== undefined) ops.push({ op: "set_graph_particles", sceneId: a.sceneId, particles: a.particles });
-      if (a.post !== undefined) ops.push({ op: "set_graph_post", sceneId: a.sceneId, post: a.post });
-      if (!ops.length) {
-        throw new Error("set_graph_scene 没有要改的东西：给 camera / lights / particles / post 之一");
-      }
-      const p = await resolveProject(a.projectId);
-      const res = await api<{ summary: string[] }>(`/api/projects/${p.id}/ops`, {
-        method: "POST",
-        body: JSON.stringify({ actor: "agent", ops }),
-      });
-      return fmtSummary(res.summary);
-    },
-  },
-  {
-    name: "remove_element",
-    description:
-      "删除场景里的自由元素。elementId 见 get_project 的 elements 列表。模板/版式自带的元素删不掉（会提示）；删错可 restore_rev 回滚。",
-    shape: {
-      projectId: z.string().optional().describe("要操作的工程 id，不传 = 当前默认工程（list_projects 查）"),
-      sceneId: z.string(),
-      elementId: z.string(),
-    },
-    run: async (a) => {
-      const p = await resolveProject(a.projectId);
-      const res = await api<{ summary: string[] }>(`/api/projects/${p.id}/ops`, {
-        method: "POST",
-        body: JSON.stringify({
-          actor: "agent",
-          ops: [{ op: "remove_element", sceneId: a.sceneId, elementId: a.elementId }],
-        }),
-      });
-      return fmtSummary(res.summary) || "已删除";
-    },
-  },
-  {
-    name: "export_project",
-    description:
-      "把工程导出成本机 .zip 工程包（含 project.json、assets、manifest），默认写到 out/project-bundles/。用于备份、换机器或发给别人；导出后把路径告诉用户。",
-    shape: {
-      projectId: z.string().optional().describe("要操作的工程 id，不传 = 当前默认工程（list_projects 查）"),
-      path: z.string().optional().describe("保存路径（.zip）；不传则写 out/project-bundles/<工程名>.zip"),
-    },
-    run: async (a) => {
-      const p = await resolveProject(a.projectId);
-      const res = await fetch(`${BASE}/api/projects/${p.id}/export`);
-      if (!res.ok) throw new Error(`导出失败（${res.status}）`);
-      const buf = Buffer.from(await res.arrayBuffer());
-      const safe = (p.name || p.id).replace(/[\\/:*?"<>|]+/g, "_").slice(0, 60) || p.id;
-      const file = a.path ? path.resolve(a.path) : path.join(ROOT, "out", "project-bundles", `${safe}.zip`);
-      fs.mkdirSync(path.dirname(file), { recursive: true });
-      fs.writeFileSync(file, buf);
-      return `已导出「${p.name}」到 ${file}（${(buf.length / 1024).toFixed(0)} KB，含素材）`;
-    },
-  },
-  {
-    name: "import_project",
-    description:
-      "从本机 .zip 工程包导入成一个新工程（id 会重新生成，不覆盖现有工程）。导入后返回新工程 id；Web 端要用户自己在工程菜单里切过去。",
-    shape: {
-      path: z.string().describe("本机 .zip 路径（export_project 产出的，或用户给的工程包）"),
-      name: z.string().optional().describe("新工程名，不传用包里的名字"),
-    },
-    run: async (a) => {
-      const file = path.resolve(a.path);
-      if (!fs.existsSync(file)) throw new Error(`文件不存在：${file}`);
-      const form = new FormData();
-      form.append("file", new Blob([fs.readFileSync(file)], { type: "application/zip" }), path.basename(file));
-      const res = await fetch(`${BASE}/api/projects/import`, { method: "POST", body: form });
-      const data = (await res.json()) as { project?: any; error?: string; warnings?: string[] };
-      if (!res.ok || !data.project) throw new Error(data.error ?? `导入失败（${res.status}）`);
-      if (a.name?.trim()) {
-        await api(`/api/projects/${data.project.id}/ops`, {
-          method: "POST",
-          body: JSON.stringify({
-            actor: "agent",
-            ops: [{ op: "update_project", patch: { name: a.name.trim() } }],
-          }),
-        });
-        data.project.name = a.name.trim();
-      }
-      setCurrentProject(data.project.id); // 导入的工程就是要接着干的工程
-      const warn = data.warnings?.length ? `\n注意：${data.warnings.join("；")}` : "";
-      return `已导入工程「${data.project.name}」（id=${data.project.id}，${data.project.scenes.length} 个场景，rev=1），并已切换为当前工程。${warn}`;
-    },
-  },
-  {
-    name: "restore_rev",
-    description:
-      "把工程回滚到某个历史 rev（磁盘快照，保留最近 50 个）。先用 get_history 看有哪些 rev 带 snapshot。回滚本身也会记一条新历史，可以再回滚回来。",
-    shape: {
-      rev: z.number().int().positive().describe("目标 rev，见 get_history"),
-      projectId: z.string().optional().describe("要操作的工程 id，不传 = 当前默认工程（list_projects 查）"),
-    },
-    run: async (a) => {
-      const p = await resolveProject(a.projectId);
-      const res = await api<{ project: ProjectLite; summary: string[] }>(
-        `/api/projects/${p.id}/restore/${a.rev}`,
-        { method: "POST" },
-      );
-      return `已回滚到 rev ${a.rev}，当前 rev=${res.project.rev}。${fmtSummary(res.summary)}`;
-    },
-  },
-  {
-    name: "layout_grid",
-    description:
-      "纯计算：把 N 个元素排成网格，返回每个元素的中心坐标和尺寸（画面百分比）。配合 add_element / apply_ops 用，省得手算坐标。不写工程。",
-    shape: {
-      count: z.number().int().min(1).max(24).describe("要排几个"),
-      cols: z.number().int().min(1).max(6).optional().describe("列数，默认 2"),
-      gap: z.number().min(0).max(20).optional().describe("格子间距（百分比），默认 4"),
-      area: z
-        .object({
-          x1: z.number(),
-          x2: z.number(),
-          y1: z.number(),
-          y2: z.number(),
-        })
-        .optional()
-        .describe("可用区域（百分比），默认 x 8-92 / y 8-92"),
-      sizeRatio: z
-        .number()
-        .min(0.2)
-        .max(1)
-        .optional()
-        .describe("元素尺寸占格子短边的比例，默认 0.85"),
-    },
-    run: async (a) => {
-      const count = a.count;
-      const cols = Math.max(1, Math.min(count, a.cols ?? 2));
-      const rows = Math.ceil(count / cols);
-      const gap = a.gap ?? 4;
-      const area = a.area ?? { x1: 8, x2: 92, y1: 8, y2: 92 };
-      const cw = (area.x2 - area.x1 - gap * (cols - 1)) / cols;
-      const ch = (area.y2 - area.y1 - gap * (rows - 1)) / rows;
-      const ratio = a.sizeRatio ?? 0.85;
-      const cells = Array.from({ length: count }, (_, i) => {
-        const col = i % cols;
-        const row = Math.floor(i / cols);
-        return {
-          x: Number((area.x1 + col * (cw + gap) + cw / 2).toFixed(1)),
-          y: Number((area.y1 + row * (ch + gap) + ch / 2).toFixed(1)),
-          size: Number(Math.max(4, Math.min(34, Math.min(cw, ch) * ratio)).toFixed(1)),
-        };
-      });
-      return JSON.stringify(cells);
-    },
-  },
-  {
-    name: "align_elements",
-    description:
-      "把场景里几个元素对齐/等距分布：left/centerX/right/top/centerY/bottom/distributeX/distributeY。按元素中心坐标操作（尺寸差异大时边缘可能不齐），直接写库。",
-    shape: {
-      projectId: z.string().optional().describe("要操作的工程 id，不传 = 当前默认工程（list_projects 查）"),
-      sceneId: z.string().describe("元素所在场景"),
-      elementIds: z.array(z.string()).describe("要操作的元素 id 列表（≥2）"),
-      mode: z
-        .enum([
-          "left",
-          "centerX",
-          "right",
-          "top",
-          "centerY",
-          "bottom",
-          "distributeX",
-          "distributeY",
-        ])
-        .describe("对齐方式"),
-    },
-    run: async (a) => {
-      if (a.elementIds.length < 2) throw new Error("至少给两个元素");
-      const p = await resolveProject(a.projectId);
-      const scene = p.scenes.find((s) => s.id === a.sceneId);
-      if (!scene) throw new Error(`没有场景 ${a.sceneId}`);
-      const els = (scene.elements ?? []).filter((e) => a.elementIds.includes(e.id));
-      if (els.length < 2) throw new Error("场景里没找到这些元素（检查 id 和 sceneId）");
-      const pick = (e: any) => ({ id: e.id, x: e.x ?? 50, y: e.y ?? 52, size: e.size ?? 20 });
+  ...SCENE3D_TOOLS,
 
-      if (a.mode === "distributeX" || a.mode === "distributeY") {
-        const axis = a.mode === "distributeX" ? "x" : "y";
-        const sorted = els.map(pick).sort((u, v) => u[axis] - v[axis]);
-        const first = sorted[0];
-        const last = sorted[sorted.length - 1];
-        const step = (last[axis] - first[axis]) / (sorted.length - 1);
-        const patches = sorted.map((e, i) => ({
-          id: e.id,
-          value: Number((first[axis] + step * i).toFixed(1)),
-        }));
-        const ops = patches.map((pt) => ({
-          op: "update_element" as const,
-          sceneId: a.sceneId,
-          elementId: pt.id,
-          patch: { [axis]: pt.value } as Record<string, number>,
-        }));
-        const res = await api<{ summary: string[] }>(`/api/projects/${p.id}/ops`, {
-          method: "POST",
-          body: JSON.stringify({ actor: "agent", ops }),
-        });
-        return fmtSummary(res.summary);
-      }
-
-      const list = els.map(pick);
-      const xs = list.map((e) => e.x);
-      const ys = list.map((e) => e.y);
-      const minX = Math.min(...xs);
-      const maxX = Math.max(...xs);
-      const minY = Math.min(...ys);
-      const maxY = Math.max(...ys);
-      let targetX: number | null = null;
-      let targetY: number | null = null;
-      switch (a.mode) {
-        case "left":
-          targetX = minX;
-          break;
-        case "centerX":
-          targetX = (minX + maxX) / 2;
-          break;
-        case "right":
-          targetX = maxX;
-          break;
-        case "top":
-          targetY = minY;
-          break;
-        case "centerY":
-          targetY = (minY + maxY) / 2;
-          break;
-        case "bottom":
-          targetY = maxY;
-          break;
-      }
-      const ops = list.map((e) => ({
-        op: "update_element" as const,
-        sceneId: a.sceneId,
-        elementId: e.id,
-        patch:
-          targetX != null
-            ? { x: Number(targetX.toFixed(1)) }
-            : { y: Number((targetY as number).toFixed(1)) },
-      }));
-      const res = await api<{ summary: string[] }>(`/api/projects/${p.id}/ops`, {
-        method: "POST",
-        body: JSON.stringify({ actor: "agent", ops }),
-      });
-      return fmtSummary(res.summary);
-    },
-  },
-  {
-    name: "confirm_brief",
-    description:
-      "记录「用户已确认需求」。4 组问完、契约完整后，把 brief 总结发给用户，用户确认后调用它；没有确认过，build_storyboard 会拒绝。\n" +
-      "闸口是**内容判据**而不是「必填有没有填」：段落表每段有时长+内容、镜头清单能直接排拍摄（动画片换成元素清单）、参考指到时间点、素材有责任人+截止、交付有版本列表。缺了会逐条告诉你缺什么。\n" +
-      "如果 brief 里有 assumed（你替用户拍板的字段），**必须带上用户原话**：confirm_brief(assumptions=[{field, userSaid}])。\n" +
-      "用户是一次性认可的（「都按你建议的来」）就传 batchAck=true + batchUserSaid=\"他那句原话\"，一条原话覆盖全部推断项。\n" +
-      "只传 acknowledgedAssumptions=true 会被拒绝——布尔记不下用户说了什么，事后也查不出他同意了哪几条。",
-    shape: {
-      projectId: z.string().optional().describe("要操作的工程 id，不传 = 当前默认工程（list_projects 查）"),
-      summary: z
-        .string()
-        .optional()
-        .describe("发给用户确认的那份总结（可选，便于留档）"),
-      assumptions: z
-        .array(
-          z.object({
-            field: z.string().describe("assumed 里的那个字段名（要一字不差）"),
-            userSaid: z.string().describe("用户对这条的实际原话（不是「同意」，是他说的那句）"),
-          }),
-        )
-        .optional()
-        .describe("逐条核对记录：brief 里每个 assumed 字段都要有一条。缺一条就拒绝确认"),
-      acknowledgedAssumptions: z
-        .boolean()
-        .optional()
-        .describe("已废弃：只传 true 而不传 assumptions 会被拒绝（布尔记不下用户说了什么）"),
-      batchAck: z
-        .boolean()
-        .optional()
-        .describe(
-          "用户一次性认可了全部 assumed（如「都按你建议的来」）时传 true，配合 batchUserSaid 一句原话覆盖全部推断项",
-        ),
-      batchUserSaid: z
-        .string()
-        .optional()
-        .describe("批量确认时用户的原话（≥2 字）；会落盘成每条 assumed 的核对记录，事后可审计"),
-    },
-    run: async (a) => {
-      const p = await resolveProject(a.projectId);
-      const before = readBrief(p.id);
-      const assumed = (before?.assumed ?? []).filter(Boolean);
-      const brief = confirmBrief(p.id, {
-        acknowledgedAssumptions: a.acknowledgedAssumptions === true,
-        assumptions: a.assumptions,
-        batchAck: a.batchAck === true,
-        batchUserSaid: a.batchUserSaid,
-      });
-      const nl = String.fromCharCode(10);
-      // 不再写「已核对」——工具无法验证，只能说「你提供了这些记录」
-      const checks = brief.assumptionChecks ?? [];
-      const isBatch = a.batchAck === true && String(a.batchUserSaid ?? "").trim().length >= 2;
-      const assumedNote = checks.length
-        ? `${nl}你提供的核对记录（${checks.length} 项，已落盘可审计；工具无法验证真伪）` +
-          (isBatch ? `——**批量确认**：${checks.length} 项共用同一句原话` : "") +
-          "：" +
-          (isBatch
-            ? `${nl}  · 全部 ← 「${String(a.batchUserSaid).trim()}」` +
-              checks.map((c) => `${nl}  · 覆盖 ${c.field}`).join("")
-            : checks.map((c) => `${nl}  · ${c.field} ← 「${c.userSaid}」`).join(""))
-        : "";
-      const lock = brief.designLock ?? recomputeDesignLock(brief);
-      const cov = briefCoverage(brief);
-      const countHint = sceneCountHint(brief);
-      return (
-        `需求已确认（${brief.confirmedAt}）${a.summary ? `${nl}确认单：${a.summary}` : ""}${assumedNote}` +
-        `${nl}${designLockSummary(lock)}` +
-        `${nl}契约检查：${cov.summary}` +
-        (countHint ? `${nl}${countHint}` : "") +
-        `${nl}设计锁随 brief 落盘：build_storyboard / check_project / brief_audit 都会按它检查——` +
-        `改档位只需 save_brief(density=...) 一次，全片跟随，不要逐幕手改。` +
-        `${nl}下一步：intake(10) 定稿件类型 → save_script 写稿 → confirm_script 请用户过目；` +
-        `${nl}再 intake(11) 定观感五项（mood / 安全区 / 封面 / 字幕规格 / 音效）→ save_brief(step=11)；` +
-        `${nl}然后 list_styles 选风格 → save_storyboard 写分镜`
-      );
-    },
-  },
-  {
-    name: "check_project",
-    description:
-      "只读诊断：场景/时长/文案/音频/字幕/素材/画幅的潜在问题，返回清单（不改工程）。交付前或每轮修改后跑一次，按提示修。\n" +
-      "画幅相关的检查（安全区 / 竖屏构图 / 字幕距底）默认按 brief 里的画幅挑；多画幅工程只查交付那一版，要查另一版传 format。",
-    shape: {
-      projectId: z.string().optional().describe("要体检的工程 id，不传 = 当前默认工程"),
-      format: z.string().optional().describe("按哪个画幅做画幅体检（formats 里的 key）；不传按 brief.aspect，再退到工程第一个画幅"),
-    },
-    run: async (a) => {
-      const p = await resolveProject(a.projectId);
-      const issues: string[] = [];
-      const scenes = p.scenes ?? [];
-      if (!scenes.length) issues.push("⚠️ 工程没有场景");
-
-      const total = totalDuration(p as any);
-      const spans = sceneSpans(scenes as any[]);
-      const KEY_TEXT = ["title", "heading", "text", "quote", "leftTitle", "rightTitle", "value"];
-
-      // 幕序 vs 分镜表：build_storyboard 按调用顺序 append，先建样板再补中间幕就会错位，
-      // 而画面每一幕单看都是对的 —— 人眼和抽帧都发现不了，只有对顺序才查得出（复盘坑 #1）
-      {
-        const sbNow = readStoryboard(p.id);
-        const known = new Set(scenes.map((s) => s.id));
-        const intended = (sbNow?.shots ?? [])
-          .map((s) => s.sceneId)
-          .filter((id): id is string => !!id && known.has(id));
-        if (intended.length >= 2) {
-          const pos = intended.map((id) => scenes.findIndex((s) => s.id === id));
-          const jump = pos.findIndex((v, i) => i > 0 && v < pos[i - 1]);
-          if (jump > 0) {
-            const want = intended[jump];
-            const at = pos[jump] + 1;
-            const shotNo = (sbNow?.shots ?? []).findIndex((s) => s.sceneId === want) + 1;
-            issues.push(
-              `⚠️ 幕序和分镜表不一致：分镜第 ${shotNo} 幕对应的场景排在第 ${at} 位` +
-                `（应该是第 ${shotNo} 位）。这种错位单看每一幕都正常，播起来却是「先给答案再给推理」` +
-                ` → reorder_scenes(按分镜顺序的完整 id, reflow=true)`,
-            );
-          }
-          const extra = scenes.filter((s) => !intended.includes(s.id));
-          if (extra.length) {
-            issues.push(
-              `⚠️ 有 ${extra.length} 幕不在分镜表里：${extra
-                .map((s) => `「${s.name}」`)
-                .slice(0, 6)
-                .join("、")}${extra.length > 6 ? " 等" : ""}` +
-                ` —— 模板开场/结尾、风格样张这类中间产物，成片前要 remove_scene 或 build_storyboard(replace=true)`,
-            );
-          }
-        }
-        const temp = scenes.filter((s) => /样张|风格候选|STYLE PROBE/i.test(String(s.name ?? "")));
-        if (temp.length && !intended.length) {
-          issues.push(`⚠️ 工程里有样张幕（${temp.map((s) => `「${s.name}」`).join("、")}）：成片前删掉，别混进片子`);
-        }
-      }
-
-      for (const sc of scenes as any[]) {
-        if (sc.durationInFrames < 30) {
-          issues.push(`⚠️「${sc.name}」只有 ${sc.durationInFrames} 帧，短到看不清`);
-        }
-        const props = sc.props ?? {};
-        const isFreeform =
-          sc.type === "freeform" && Array.isArray((props as any).elements) && (props as any).elements.length > 0;
-        const hasText =
-          isFreeform ||
-          KEY_TEXT.some((k) => typeof props[k] === "string" && props[k].trim()) ||
-          (sc.elements ?? []).some((e: any) => e.kind === "text" && String(e.text ?? "").trim());
-        if (!hasText) issues.push(`ℹ️「${sc.name}」没有文案（空场景？）`);
-        const hasAudio = (sc.elements ?? []).some((e: any) => e.kind === "audio");
-        if (hasAudio && !String(sc.subtitle ?? "").trim()) {
-          issues.push(`ℹ️「${sc.name}」有旁白但没有字幕（set_subtitle 或 tts_narration）`);
-        }
-      }
-
-      // 画幅与 brief 对齐：用户说「只要竖屏」，工程里却留着横屏 →
-      // 编辑器顶栏多一个画幅按钮、预览和渲染也多出一版，用户会以为 agent 没按要求做
-      {
-        const briefNow = readBrief(p.id);
-        const aspect = String((briefNow as any)?.aspect ?? "").trim();
-        const allFmt = (((p as any).formats ?? []) as { key: string; label: string; width: number; height: number }[]);
-        const m = aspect.replace(/：/g, ":").match(/(\d+(?:\.\d+)?)\s*[:x×]\s*(\d+(?:\.\d+)?)/);
-        if (m && allFmt.length > 1 && Number(m[1]) > 0 && Number(m[2]) > 0) {
-          const want = Number(m[1]) / Number(m[2]);
-          const best = allFmt.reduce(
-            (acc, f) => (Math.abs(f.width / f.height - want) < Math.abs(acc.width / acc.height - want) ? f : acc),
-            allFmt[0],
-          );
-          const extra = allFmt.filter((f) => f.key !== best.key);
-          if (extra.length) {
-            issues.push(
-              `ℹ️ brief 要的画幅是 ${aspect}（≈「${best.label}」），工程里还留着 ${extra.length} 个：${extra
-                .map((f) => `${f.label} ${f.width}×${f.height}`)
-                .join("、")} —— 预览/渲染默认会一起出，编辑器顶栏也会多出按钮，用户容易以为没按要求做。` +
-                `只要一版：set_formats(只传 ${best.key})；确实是多画幅工程就忽略这条`,
-            );
-          }
-        }
-      }
-
-      {
-        // 字幕：又臭又长是成片观感的第一杀手（一屏几十字 + 标点全上屏）
-        const audit = auditSubtitles(p);
-        issues.push(...audit.hard.map((x) => `⚠️ ${x}`), ...audit.issues);
-        if (audit.hard.length) {
-          issues.push("  → 修法：fix_subtitles(dryRun=true) 先看预演，确认后 fix_subtitles 落盘");
-        }
-      }
-
-      // 多轨：同轨重叠 / 画中画挂旁白 / 画中画忘了缩小
-      const byTrack = new Map<number, typeof spans>();
-      for (const sp of spans) {
-        const list = byTrack.get(sp.track) ?? [];
-        list.push(sp);
-        byTrack.set(sp.track, list);
-      }
-      for (const [track, list] of byTrack) {
-        list.sort((a, b) => a.start - b.start);
-        for (let i = 1; i < list.length; i++) {
-          if (list[i].start < list[i - 1].end) {
-            const prev = (scenes as any[]).find((s) => s.id === list[i - 1].id)?.name;
-            const cur = (scenes as any[]).find((s) => s.id === list[i].id)?.name;
-            issues.push(
-              `⚠️ 轨道 ${track}：「${prev}」和「${cur}」时间重叠（同轨只能串行，要叠着放请 move_scene 换轨道）`,
-            );
-          }
-        }
-      }
-      for (const sc of scenes as any[]) {
-        const track = sc.track ?? 0;
-        if (track <= 0 && !sc.box) continue;
-        if ((sc.elements ?? []).some((e: any) => e.kind === "audio")) {
-          issues.push(`ℹ️「${sc.name}」是画中画但挂了旁白：所有轨道的声音都会播，容易和主轨撞车`);
-        }
-        if (track > 0 && !sc.box) {
-          issues.push(
-            `ℹ️「${sc.name}」在轨道 ${track} 但仍是全屏大小，会把下面的画面整块盖住（用 set_scene_box 缩小）`,
-          );
-        }
-      }
-
-      // 素材缺失
-      const refs = new Set<string>();
-      for (const sc of scenes as any[]) {
-        for (const el of sc.elements ?? []) {
-          if (typeof el.src === "string" && el.src.startsWith("/assets/")) refs.add(el.src);
-        }
-      }
-      const proj = p as any;
-      if (proj.audio?.src) refs.add(String(proj.audio.src));
-      for (const t of proj.audioTracks ?? []) {
-        if (typeof t?.src === "string" && t.src.startsWith("/assets/")) refs.add(t.src);
-      }
-      for (const src of refs) {
-        const file = path.join(ROOT, "public", src.replace(/^\/+/, ""));
-        if (!fs.existsSync(file)) issues.push(`⚠️ 素材缺失：${src}`);
-      }
-
-      // freeform 元素级体检（踩坑清单第 2 轮 §3/§9 的手写脚本，内置成诊断）：
-      // 提前消失 / 永不出现 / 空 svg / 可疑 viewBox / 同幕 y 不一致
-      for (const sc of scenes as any[]) {
-        if (sc.type !== "freeform") continue;
-        const els = (sc.props?.elements ?? []) as any[];
-        if (!els.length) continue;
-        const dur = Number(sc.durationInFrames) || 0;
-        const ys: { label: string; y: number }[] = [];
-        els.forEach((el, i) => {
-          const label = el.id ? `元素 ${el.id}` : `元素 #${i + 1}`;
-          const isAmbient = el.type === "fx" || el.id === "paper" || el.id === "bg";
-          const from = Number(el.from ?? 0);
-          const d = el.durationInFrames === undefined ? undefined : Number(el.durationInFrames);
-          if (from >= dur) {
-            issues.push(`⚠️「${sc.name}」${label} 起点 ${from} ≥ 幕长 ${dur}，永远不会出现（from 要 < 幕长）`);
-          } else if (d !== undefined && dur - (from + d) > 3) {
-            issues.push(
-              `⚠️「${sc.name}」${label} 在第 ${from + d} 帧提前消失（幕长 ${dur} 帧）。` +
-                `想一直显示到幕尾就不要传 durationInFrames（或传到幕尾的帧数）`,
-            );
-          }
-          if (el.type === "svg") {
-            if (!el.svg) issues.push(`⚠️「${sc.name}」${label} 是 svg 但没有 svg 内容（空元素）`);
-            else if (String(el.viewBox ?? "0 0 24 24") === "0 0 24 24" && String(el.svg).length > 150) {
-              issues.push(
-                `⚠️「${sc.name}」${label} 的 viewBox 还是默认值 0 0 24 24，但 svg 内容不小 —— ` +
-                  `不是 24×24 图标的话整层会被压成一个点（update 时 svg 和 viewBox 要一起传）`,
-              );
-            }
-          }
-          if (!isAmbient && el.y !== undefined) ys.push({ label, y: Number(el.y) });
-          // 基础 y 与动画落点是两笔账：只改 el.y 不改 anim[].to.y，动画播完会回到旧位置；
-          // 反过来 at 的结束帧留在幕中间，元素会在中途**跳回**基础值。静态抽帧常常正好
-          // 抽在动画窗口外，看不出问题（复盘坑 #3），所以读一次就体检一遍。
-          // 判据集中在 shared/freeform.ts#animLandingIssues，单测锁着，避免这里越改越窄。
-          for (const issue of animLandingIssues(el as never, dur)) {
-            if (issue.kind === "dead") {
-              issues.push(
-                `⚠️「${sc.name}」${label} 第 ${issue.segment} 段关键帧没有可动画的 to（数值）—— 这段不会生效：` +
-                  `数值动画必须写 to（例：anim:[{at:[0,30], to:{y:40}}]），只写 from 是空转`,
-              );
-              continue;
-            }
-            if (isAmbient) continue; // fx 氛围层的位移多为装饰，不追这条
-            const far = Math.abs((issue.toY as number) - (issue.baseY as number)) > 8;
-            const sev = far ? "⚠️" : "ℹ️";
-            if (issue.kind === "landing") {
-              issues.push(
-                `${sev}「${sc.name}」${label}：基础 y=${issue.baseY}，动画落点 to.y=${issue.toY} —— ` +
-                  `播完停在 ${issue.toY}%，基础 y 只在第 ${issue.endFrame} 帧之前有效。` +
-                  `要挪位置用 update_freeform_element（会自动同步关键帧），手写 patch 要连 anim 一起改；` +
-                  `若 ${issue.toY} 就是想要的落点，把 y 改成一致`,
-              );
-            } else {
-              issues.push(
-                `${sev}「${sc.name}」${label}：关键帧在第 ${issue.endFrame} 帧就结束（元素可见到第 ${issue.visibleEnd} 帧），` +
-                  `之后会跳回基础 y=${issue.baseY} —— 把 at 的结束帧延到幕尾，或让 y 与落点 ${issue.toY} 一致`,
-              );
-            }
-          }
-        });
-        // 只报「差一点点」的错位：差 5% 以内说明本来想对齐、手抖了。
-        // 差 20% 是两行内容，本来就该不同 y —— 以前按「y 值不止一个」判，一屏多行永远在报（实测 50 条噪音）
-        const near: string[] = [];
-        for (let i = 0; i < ys.length; i++) {
-          for (let j = i + 1; j < ys.length; j++) {
-            const d = Math.abs(ys[i].y - ys[j].y);
-            if (d > 0.2 && d <= 5) {
-              near.push(`${ys[i].label}(y=${ys[i].y}) 与 ${ys[j].label}(y=${ys[j].y}) 差 ${d.toFixed(1)}%`);
-            }
-          }
-        }
-        if (near.length) {
-          issues.push(
-            `ℹ️「${sc.name}」有元素看着该对齐却差了一点（5% ≈ 27px 就能看出错位）：${BRK}  - ` +
-              near.slice(0, 3).join(`${BRK}  - `) +
-              `${BRK}  同一行请统一成同一个 y；真是两行内容就不用管`,
-          );
-        }
-      }
-
-      // 音频超出可用时长
-      for (const sc of scenes as any[]) {
-        for (const el of sc.elements ?? []) {
-          if (el.kind !== "audio" || typeof el.src !== "string" || !el.src.startsWith("/assets/")) continue;
-          const pr = await probeOne(el.src);
-          const room = Math.max(1, sc.durationInFrames - (el.from ?? 0));
-          if (pr && pr.frames > room + 2) {
-            issues.push(
-              `⚠️「${sc.name}」旁白 ${pr.frames} 帧 > 场景可用 ${room} 帧，后面会被截断（set_scene_timing 改场景时长）`,
-            );
-          }
-        }
-      }
-
-      const nl = String.fromCharCode(10);
-      // 安全区体检（提醒级，不阻渲染）：出框可能是设计，但字幕/二维码压进平台 UI 是真事故
-      {
-        const briefNow = readBrief(p.id);
-        const allFmt = (((p as any).formats ?? []) as { key?: string; width?: number; height?: number }[]);
-        const picked = pickReviewFormat(allFmt, a.format, briefNow?.aspect);
-        const fmt0 = picked.fmt;
-        const W = Number(fmt0?.width ?? 1080);
-        const H = Number(fmt0?.height ?? 1920);
-        const portrait = H >= W;
-        // 比例用真实宽高算，别信 key（key 可能是自定义名）
-        const ratio = W / H;
-        const aspect = ratio < 0.95 ? "9:16" : ratio > 1.05 ? "16:9" : "1:1";
-        if (picked.others.length) {
-          issues.push(
-            `ℹ️ 画幅体检只覆盖「${fmt0?.key}」（${W}×${H}，${picked.why}）：` +
-              `这个工程还有 ${picked.others.join("、")}，两版版式未必一样，另一版要单独查 → check_project(format="...")`,
-          );
-        }
-        const sa = platformSafeArea(briefNow?.platform, aspect);
-        const short = Math.min(W, H);
-        const hits: string[] = [];
-        for (const sc of scenes as any[]) {
-          // freeform 元素：x/y 是中心百分比，size 是短边百分比
-          if (sc.type === "freeform") {
-            const els = (sc.props?.elements ?? []) as any[];
-            els.forEach((el, i) => {
-              if (el.type === "fx" || el.x === undefined || el.y === undefined) return;
-              const size = Number(el.size ?? 0);
-              if (!size) return;
-              // width/height 不给就回落到 size（矩形现在可以单独定宽高）
-              const wPct = Number(el.width ?? size);
-              const hPct = Number(el.height ?? size);
-              // size 是短边百分比 → 换算成「占画面宽/高的百分比」的半宽半高
-              // 之前这里多乘了 100，导致任何元素都被判成几百 % 宽，安全区提醒全是误报
-              const halfW = (wPct / 2) * (short / W);
-              const halfH = (hPct / 2) * (short / H);
-              const x = Number(el.x);
-              const y = Number(el.y);
-              // 满屏元素是背景/出血，边缘一定贴着画面，报了就是噪音
-              if (Math.max(wPct, hPct) >= 80) return;
-              const label = el.id ? `元素 ${el.id}` : `元素 #${i + 1}`;
-              if (sa.right && 100 - (x + halfW) < sa.right) hits.push(`「${sc.name}」${label} 右边缘进了右侧 ${sa.right}% 按钮栏`);
-              if (100 - (y + halfH) < sa.bottom) hits.push(`「${sc.name}」${label} 下边缘进了底部 ${sa.bottom}% 文案区`);
-              if (y - halfH < sa.top) hits.push(`「${sc.name}」${label} 上边缘进了顶部 ${sa.top}% 状态栏`);
-            });
-          }
-          // 画中画小窗：x/y 是中心百分比，scale 是缩放
-          if (sc.box) {
-            const bx = Number(sc.box.x ?? 50);
-            const by = Number(sc.box.y ?? 50);
-            const sc2 = Number(sc.box.scale ?? 1);
-            const halfW = (sc2 * 100) / 2;
-            const halfH = ((sc2 * 100 * W) / H) / 2;
-            if (sa.right && 100 - (bx + halfW) < sa.right) hits.push(`「${sc.name}」画中画右边缘进了右侧 ${sa.right}% 按钮栏`);
-            if (100 - (by + halfH) < sa.bottom) hits.push(`「${sc.name}」画中画下边缘进了底部 ${sa.bottom}% 文案区`);
-            if (by - halfH < sa.top) hits.push(`「${sc.name}」画中画上边缘进了顶部 ${sa.top}% 状态栏`);
-          }
-          // 字幕位置：bottomPct 才是「按画面高度」的真百分比（渲染端 Video.tsx 优先用它），
-          // bottom 是短边百分比 —— 只按 bottom 算会把设了 bottomPct 的字幕误判成压底栏
-          if (portrait && String(sc.subtitle ?? "").trim()) {
-            const st = (sc.subtitleStyle ?? {}) as { bottom?: number; bottomPct?: number };
-            const bottomPct =
-              st.bottomPct !== undefined
-                ? Number(st.bottomPct)
-                : ((Number(st.bottom ?? 6.5) / 100) * short) / H * 100;
-            if (bottomPct < sa.bottom) {
-              hits.push(
-                `「${sc.name}」字幕距底约 ${bottomPct.toFixed(1)}%` +
-                  (st.bottomPct !== undefined ? `（bottomPct=${st.bottomPct}）` : `（bottom=${Number(st.bottom ?? 6.5)}）`) +
-                  `，在底部 ${sa.bottom}% 文案区内`,
-              );
-            }
-          }
-        }
-        if (hits.length) {
-          issues.push(
-            `ℹ️ 安全区提醒（${sa.note}；数字是粗估，出框可能是设计，真机检查确认一下）：${nl}  - ` +
-              hits.slice(0, 6).join(`${nl}  - `) +
-              (hits.length > 6 ? `${nl}  - …还有 ${hits.length - 6} 处` : "") +
-              `${nl}  要挪：字幕 set_subtitle_style(bottomPct=18~22)（按画面高度）、元素 add_freeform_element/update_freeform_element 改 y`,
-          );
-        }
-
-        // 竖屏构图（提醒级）：竖屏上下各 20% 是平台 UI 与拇指的地盘，主体放进去就被压
-        // 判「元素中心」而不是边缘：出血/延伸是常见设计，中心在禁区才是真的「放错地方」
-        if (portrait) {
-          const TOP = 20;
-          const BOTTOM = 80;
-          const off: string[] = [];
-          for (const sc of scenes as any[]) {
-            if (sc.type === "freeform") {
-              const els = (sc.props?.elements ?? []) as any[];
-              els.forEach((el, i) => {
-                if (el.type === "fx" || el.y === undefined) return;
-                const size = Number(el.size ?? 0);
-                // 满屏背景不算主体（出血是设计），只查真正被看见的那几个元素
-                if (size >= 80) return;
-                const y = Number(el.y);
-                const label = el.id ? `元素 ${el.id}` : `元素 #${i + 1}`;
-                if (y < TOP) off.push(`「${sc.name}」${label} 中心在顶部 ${TOP}% 内（状态栏/下拉刷新区）`);
-                if (y > BOTTOM) off.push(`「${sc.name}」${label} 中心在底部 ${100 - BOTTOM}% 内（字幕/平台文案/按钮区）`);
-              });
-            }
-            if (sc.box) {
-              const by = Number(sc.box.y ?? 50);
-              if (by < TOP) off.push(`「${sc.name}」画中画中心在顶部 ${TOP}% 内（状态栏区）`);
-              if (by > BOTTOM) off.push(`「${sc.name}」画中画中心在底部 ${100 - BOTTOM}% 内（字幕/平台 UI 区）`);
-            }
-          }
-          if (off.length) {
-            issues.push(
-              `ℹ️ 竖屏构图提醒（9:16 上方 20% / 下方 20% 不放主体，内容应在中间 60% 且垂直居中）：${nl}  - ` +
-                off.slice(0, 5).join(`${nl}  - `) +
-                (off.length > 5 ? `${nl}  - …还有 ${off.length - 5} 处` : "") +
-                `${nl}  要挪：元素的 y 改到 30–70；有字幕的幕整体上移 8%；确实要出血就把元素铺满整屏（size≥100）当背景，别把主体放进去`,
-            );
-          }
-        }
-      }
-
-      // 密度节奏：判"有没有起伏"，不是"某一幕够不够满"。
-      // 36%–55% 单幕完全正常；那次返工的真问题是 18 幕几乎全在同一档，看下来平且空。
-      {
-        const allFmt = ((p as any).formats ?? []) as { key: string; label: string; width: number; height: number }[];
-        const wantKey = (a as { format?: string }).format;
-        const fmt = wantKey ? allFmt.find((f) => f.key === wantKey) ?? allFmt[0] : allFmt[0];
-        if (fmt) {
-          const dens = projectDensity(scenes as never[], fmt);
-          const rhythm = rhythmIssues(dens, fmt);
-          if (rhythm.length) {
-            issues.push(
-              `⚠️ 密度节奏（${fmt.label}）：${nl}  - ${rhythm.map((x) => x.message).join(`${nl}  - `)}` +
-                `${nl}  ${densitySummary(dens)}（单幕 36%–55% 本身正常，问题只在"连续多幕同一档、没有穿插"）`,
-            );
-          }
-        }
-      }
-
-      // 转场 × 文字密度：circle/wipe/flip 在文字页上看着脏（不是不能，是不划算）
-      {
-        const collectStrings = (v: unknown, out: string[] = []): string[] => {
-          if (typeof v === "string") out.push(v);
-          else if (Array.isArray(v)) for (const x of v) collectStrings(x, out);
-          else if (v && typeof v === "object") for (const x of Object.values(v)) collectStrings(x, out);
-          return out;
-        };
-        const risky: string[] = [];
-        (scenes as { subtitle?: string; elements?: { text?: string }[]; props?: unknown; transitionIn?: { type?: string } }[]).forEach(
-          (sc, i) => {
-            const t = sc.transitionIn;
-            if (!t || !["flip", "circle", "wipe"].includes(String(t.type))) return;
-            const txt = [
-              String(sc.subtitle ?? ""),
-              ...(sc.elements ?? []).map((e) => String(e.text ?? "")),
-              ...collectStrings(sc.props ?? {}),
-            ]
-              .join("")
-              .replace(/\s/g, "");
-            if (txt.length >= 16) risky.push(`第 ${i + 1} 幕`);
-          },
-        );
-        if (risky.length) {
-          issues.push(
-            `ℹ️ ${risky.length} 幕是文字页却用 flip/circle/wipe 入场：${risky.slice(0, 6).join("、")}${
-              risky.length > 6 ? " 等" : ""
-            }` +
-              `${nl}  → 文字页用 硬切 / blur / 短 fade 更干净；这几类在文字多的时候会显得像"画面在抖"`,
-          );
-        }
-      }
-
-      // 契约体检（和 brief_audit 同一套逻辑）：只报"说了没做到"，不报风格偏好。
-      // 放在 check_project 里是为了「一个工具看全」——用户不该为了知道漏了什么去开三个工具。
-      {
-        const bForAudit = readBrief(p.id);
-        if (bForAudit?.confirmedAt) {
-          // 只有走过 v4 确认（有 designLock）或明确定了形态的工程才查设计锁：
-          // 存量 brief 没有形态信息，硬推一套锁会刷一堆和用户意图无关的警告
-          const lockForAudit = bForAudit.designLock ?? (bForAudit.form ? recomputeDesignLock(bForAudit) : undefined);
-          const r = auditBriefAgainstProject(bForAudit, p as never, lockForAudit);
-          for (const x of r.blocking) issues.push(`⚠️ 契约：${x}`);
-          for (const x of r.warnings.slice(0, 4)) issues.push(`ℹ️ 契约：${x}`);
-          if (r.warnings.length > 4) {
-            issues.push(`ℹ️ 契约：还有 ${r.warnings.length - 4} 条提醒（brief_audit 看全部）`);
-          }
-        }
-      }
-
-      const head =
-        `工程「${p.name}」：${scenes.length} 场景 / ${total} 帧（${(total / (p.fps || 30)).toFixed(1)}s）` +
-        `${nl}（⚠️ = 要修 · ℹ️ = 确认一下，可能是故意的 · 💡 = 可选优化）`;
-      if (!issues.length) return `${head}${nl}✅ 没有发现明显问题。${nl}自检清单见 get_guide(\"qa\")`;
-      // 封顶 30 条：误报多时全量吐出来只会把真问题淹掉
-      const CAP = 30;
-      const shown = issues.slice(0, CAP);
-      const more = issues.length > CAP ? `${nl}…还有 ${issues.length - CAP} 条没列出（先修已列出的，多数会连带消失；需要全量再说）` : "";
-      return `${head}${nl}发现 ${issues.length} 条（${CAP < issues.length ? `显示前 ${CAP} 条` : "全部"}）：${nl}${shown.join(nl)}${more}`;
-    },
-  },
-  {
-    name: "intake",
-    description:
-      "需求问诊。**默认按 4 组走**（内容骨架 → 画面清单 → 声音字幕 → 素材交付）：每组必须拿到明确产出才往下走，不传 group 返回 4 组总览 + 当前契约缺口。\n" +
-      "问诊只问「用户能判断的东西」：形态、段落、镜头、参考、素材责任人、交付版本。动画/转场/特效/背景**不问实现类型，只收档位**（克制/标准/活泼 等），具体参数由设计锁推导。\n" +
-      "用户答「你定 / 随便」时不要硬问：按形态默认值填，并把该字段写进 assumed。\\n" +
-      "⚠ 但 assumed 里的每一条，**confirm_brief 时都要带上用户原话**（assumptions:[{field,userSaid}]），只传布尔会被拒——\\n" +
-      "   布尔记不下他说了什么：一句「可以，先试试」常被错记成「全部确认，往下走」。\\n" +
-      "第 10 步「稿件」在 brief 确认之后单独走（save_script → confirm_script）。",
-    shape: {
-      group: z
-        .number()
-        .int()
-        .min(1)
-        .max(4)
-        .optional()
-        .describe("第几组：1=内容骨架 2=画面清单 3=声音字幕 4=素材与交付（新流程用这个）"),
-      step: z.number().int().min(1).max(11).optional().describe("老接口：第几步（1–11）"),
-      mode: z
-        .enum(["quick", "full"])
-        .optional()
-        .describe(
-          "quick = 快问三题（给谁看 / 多久 / 画面里有没有东西在动），其余按默认值走并写进 assumed；full = 默认的 4 组详问",
-        ),
-      projectId: z.string().optional().describe("要操作的工程 id，不传 = 当前默认工程（list_projects 查）"),
-    },
-    run: async (a) => {
-      const nl = String.fromCharCode(10);
-      const p = await resolveProject(a.projectId);
-      const brief = readBrief(p.id);
-      const progress = briefProgress(brief);
-
-      const cov = briefCoverage(brief);
-      const script = readScript(p.id);
-
-      const covBlock = [
-        `契约完整性：${cov.summary}`,
-        ...(legacyFieldNotice(brief) ? [legacyFieldNotice(brief) as string] : []),
-        ...cov.blocking.slice(0, 10).map((x) => `  ✗ ${x.message}`),
-        ...(cov.blocking.length > 10 ? [`  …还有 ${cov.blocking.length - 10} 项`] : []),
-        ...cov.warnings.map((x) => `  ⚠️ ${x.message}`),
-      ].join(nl);
-
-      // 快问：低表达欲用户不该被 9 步问诊拖着走三四个来回（复盘问题 2）。
-      // 只问「用户能一句话答完、且答错代价最大」的三件；其余全部按默认值走，但必须写进 assumed。
-      if (a.mode === "quick") {
-        return [
-          "快问三题（一次问完，用户答完就能开工）：",
-          "1. 给谁看？（平台 + 受众，一句话）→ 决定画幅与安全区",
-          "2. 多久？（秒数；不确定就说个大概）→ 决定段落表",
-          "3. **画面里有没有东西在动？**",
-          "   · 有具体的东西在动（天体运行、机械原理、数据流转）→ 这幕用 freeform，逐帧摆位置",
-          "   · 只是一组并列的信息（清单/对比/参数）→ 用内置版式，快且稳",
-          "   ↳ 这一问比「用哪个版式」重要：答成「文字卡片」而用户想的是「科普动画」，就会整片重做",
-          "",
-          "提交（照抄改字即可）：",
-          'save_brief(core:{who:"给谁看"}, durationSec:30, form:"动画演示", motionLevel:"标准")',
-          "",
-          "其余没答的字段一律按默认值走，但**必须逐条写进 assumed**，confirm_brief 时要带用户原话；",
-          "想按 4 组详问就传 intake(mode=\"full\")。",
-          "",
-          covBlock,
-        ].join(nl);
-      }
-
-      if (a.group) {
-        const g = CONFIRM_GROUPS.find((x) => x.no === a.group);
-        if (!g) throw new Error(`没有第 ${a.group} 组（只有 1–4）`);
-        return [
-          `第 ${g.no} 组：${g.title}（覆盖${g.covers}）`,
-          `这一组要拿到：${g.output}`,
-          "问用户（一次问完，别一条一条抛）：",
-          ...g.questions.map((q) => `- ${q}`),
-          "",
-          `要提交的字段（就是 save_brief 的参数名）：${g.fields.join(" / ")}`,
-          `一条能直接抄的：save_brief(${g.sample})`,
-          "",
-          covBlock,
-          "",
-          `保存：save_brief 一次传齐本组字段（不用带 step）；4 组都齐了再 confirm_brief。`,
-        ].join(nl);
-      }
-
-      if (!a.step) {
-        const groupDone = (no: number): boolean => {
-          if (no === 1) {
-            const c = brief?.core ?? {};
-            return !!(c.who && c.believe && c.action && brief?.form && (brief?.segments ?? []).length);
-          }
-          if (no === 2) return (brief?.shots ?? []).length > 0 || FORM_SPECS[normalizeForm(brief?.form)].shots === "list";
-          if (no === 3) return (brief?.refs ?? []).length > 0;
-          return (brief?.deliverables ?? []).length > 0;
-        };
-        return [
-          "需求问诊（4 组，按生产依赖排序；intake(group=N) 取某一组的问题）：",
-          ...CONFIRM_GROUPS.map(
-            (g) => `${g.no}. ${g.title}（${g.covers}）${groupDone(g.no) ? " ✅" : ""}${nl}   产出：${g.output}`,
-          ),
-          "",
-          covBlock,
-          "",
-          "⚠️ 不要一次把 20 个问题全抛给用户：先给「我读完内容的理解 + 假设清单」让他改错，再逐组确认。",
-          "  更好的是把能用眼睛判断的项做成图让他选（密度、动感、转场性格各三档），别让他描述。",
-          progress.finished
-            ? script?.confirmedAt
-              ? "第 10 步稿件：已确认 ✅"
-              : `第 10 步稿件：${brief?.scriptType ? `类型「${brief.scriptType}」，稿子${script?.segments?.length ? "写好了但还没请用户确认" : "还没写"}` : "类型还没定"} → intake(10)`
-            : "第 10 步「稿件」要等 4 组问完、brief 确认之后再走。",
-          (() => {
-            const miss = stepMissingFields(11, brief);
-            return miss.length
-              ? `第 11 步观感与规格：还缺 ${miss.join("、")} → intake(11)（不填齐，request_review 会拒绝）`
-              : "第 11 步观感与规格：齐了 ✅";
-          })(),
-        ].join(nl);
-      }
-
-      const step = BRIEF_STEPS.find((s) => s.no === a.step);
-      if (!step) throw new Error(`没有第 ${a.step} 步（1–11）`);
-      const missing = stepMissingFields(step.no, brief);
-      return [
-        `第 ${step.no} 步：${step.title}`,
-        "必填：" + step.required.map(([, l]) => l).join("、"),
-        "要问用户：",
-        ...step.questions.map((q) => `- ${q}`),
-        "",
-        missing.length
-          ? `还缺：${missing.join("、")}——问完用 save_brief(step=${step.no}, ...) 保存`
-          : "这一步需要的都填了，可以 save_brief(step=" + step.no + ") 标记完成",
-        `进度：${progress.done.length}/9`,
-        "",
-        covBlock,
-      ].join(nl);
-    },
-  },
-  {
-    name: "save_brief",
-    description:
-      "保存创作需求（开工前先问用户，确认后落盘）。**带 step 时会校验该步必填**（如 step=2 必须有 durationSec），缺了报错；**不传 step 则不强制必填**，字段齐不齐用 intake 看进度（进度按字段是否齐判断，不看 step 标记）。\n不传 step 的批量通道只用于「用户已一次性把信息给全」；凡是用户没明确回答、你自己判断的字段，必须写进 assumed，否则 confirm_brief 会以为全是用户说的。\n之后随时 get_brief 对照。",
-    shape: {
-      projectId: z.string().optional().describe("要操作的工程 id，不传 = 当前默认工程（list_projects 查）"),
-      step: z
-        .number()
-        .int()
-        .min(1)
-        .max(11)
-        .optional()
-        .describe("第几步（1–11）。1–9 是接单问诊；10 = 稿件类型；11 = 观感与规格"),
-      editMode: z
-        .string()
-        .optional()
-        .describe("工程归属：新增 / 改已有（改已有要先 list_projects 跟用户确认改哪个）"),
-      changeScope: z
-        .string()
-        .optional()
-        .describe("改已有工程时：这次只动什么（只改文案 / 换风格 / 重做分镜 / 加幕 / 重配音）"),
-      scriptType: z
-        .string()
-        .optional()
-        .describe("稿件类型（第 10 步）：口播稿 / 屏幕文案 / 双轨 / 无稿 / 用户已给稿"),
-      mood: z
-        .array(z.string())
-        .optional()
-        .describe("情绪基准（第 11 步）：3 个形容词，如 [\"高级\",\"克制\",\"有质感\"]"),
-      safeArea: z
-        .string()
-        .optional()
-        .describe("安全区（第 11 步）：投放端 UI 要避让的区域，如「抖音竖屏：右侧 12% / 底部 16% 不放字，二维码放中上」"),
-      cover: z
-        .string()
-        .optional()
-        .describe("封面（第 11 步）：用片头第一帧 / 单独做一张 / 不要；以及封面文案"),
-      subtitleSpec: z
-        .string()
-        .optional()
-        .describe("字幕规格（第 11 步）：字号 / 位置 / 描边或底色 / 逐句高亮 / 双语"),
-      sfx: z
-        .string()
-        .optional()
-        .describe("音效层（第 11 步）：只放 BGM / 要声音设计（转场、文字入场、重点重音）"),
-      goal: z.string().optional().describe("要达成什么"),
-      format: z
-        .string()
-        .optional()
-        .describe("用途类型（get_guide(\"formats\") 的 A–I，如「B 产品宣传」）——写分镜前先按它定结构"),
-      benchmark: z.string().optional().describe("对标：1–2 个参考作品，学什么 / 不学什么"),
-      structure: z.string().optional().describe("3 个候选结构 → 选哪个、为什么"),
-      signals: z.array(z.string()).optional().describe("风格辨识信号：挑 2–3 个，翻掉哪些俗套"),
-      takeaway: z.string().optional().describe("观众记住的一句话或一个画面"),
-      hook: z.string().optional().describe("前 1 秒发生什么"),
-      signature: z.string().optional().describe("记忆点：第几秒、什么手法"),
-      palette: z.string().optional().describe("配色（具体色值或风格）"),
-      type: z.string().optional().describe("字体/排版方案"),
-      motion: z.string().optional().describe("运动气质"),
-      texture: z.string().optional().describe("材质/纹理"),
-      forbidden: z.array(z.string()).optional().describe("这支片子的禁止清单"),
-      audience: z.string().optional().describe("给谁看"),
-      platform: z.string().optional().describe("投放平台（抖音/小红书/B站/视频号）"),
-      durationSec: z.number().optional().describe("目标时长（秒）"),
-      aspect: z.string().optional().describe("画幅，如 9:16 / 16:9 / 1:1"),
-      style: z.string().optional().describe("风格：色调、节奏、参考对标"),
-      layoutMode: z
-        .string()
-        .optional()
-        .describe("版式体系：内置场景（75 个现成版式）/ 自由画布 freeform / 混合"),
-      avoid: z.array(z.string()).optional().describe("禁止出现的词/竞品/品牌规范"),
-      assetsNote: z.string().optional().describe("可用素材情况"),
-      voice: z.string().optional().describe("配音：音色/语言/语速/是否要字幕"),
-      music: z.string().optional().describe("BGM 风格与音量"),
-      soundPlan: z
-        .string()
-        .optional()
-        .describe("声音计划：BGM/音效来源（素材库/用户提供/关闭）、情绪曲线、人声避让（get_guide(\"sound\")）"),
-      // 2026-10-31 退役：delivery（自由文本）→ deliverables（类型 + 规格的结构化数组）。
-      // 同一件事两个名字，会让 agent 填了一个仍被判「缺必填」。只留 deliverables。
-      pace: z.string().optional().describe("节奏：快剪 / 慢叙 / 卡点"),
-      versions: z.string().optional().describe("版本数量：只竖屏 / 竖+横 / 多语言"),
-      copySource: z.string().optional().describe("文案来源：用户给稿 / agent 写 / 改写已有"),
-      assetConstraints: z.string().optional().describe("素材约束：版权 / 品牌规范"),
-      subtitle: z.string().optional().describe("字幕方式：硬字幕 / 只出 SRT / 都不要"),
-      brandRules: z.string().optional().describe("品牌规范（没有写「无」）"),
-      release: z.string().optional().describe("发布限制（可公开 / 敏感信息）"),
-      languages: z.string().optional().describe("多语言版本"),
-      deadline: z.string().optional().describe("什么时候要"),
-      notes: z.string().optional().describe("其他补充"),
-      assumed: z
-        .array(z.string())
-        .optional()
-        .describe(
-          "来源存证：哪些字段是你替用户拍板的（用户没明确回答）。写进来 → confirm_brief 会拦一次，逼你先跟用户逐条核对",
-        ),
-
-      /* ── v4：制作前确认十步（结构化；对应 intake 的 4 组） ── */
-      core: z
-        .object({
-          who: z.string().optional().describe("让【谁】看"),
-          believe: z.string().optional().describe("知道/相信【什么】，一句话 ≤40 字"),
-          action: z.string().optional().describe("然后去做【什么动作】"),
-        })
-        .optional()
-        .describe("第 1 步：一句话内容。拆三段才能校验「动作有没有落地」"),
-      form: z
-        .string()
-        .optional()
-        .describe("第 2 步：主形态 —— 口播讲解/产品演示/情景剧/客户证言/前后对比/动画演示/混剪"),
-      segments: z
-        .array(
-          z.object({
-            startSec: z.number().optional().describe("起始秒"),
-            endSec: z.number().optional().describe("结束秒"),
-            content: z.string().optional().describe("这一段的一句话内容（不是标题）"),
-            shotIds: z.array(z.string()).optional(),
-          }),
-        )
-        .optional()
-        .describe("第 2 步：段落表 —— 分镜的单一真源。每段要有时长 + 内容，合计≈总时长（±5%）"),
-      open3: z
-        .object({
-          firstFrame: z.string().optional().describe("第一帧画面是什么"),
-          firstLine: z.string().optional().describe("第一句台词/字幕"),
-          bgmStart: z.string().optional().describe("BGM 是否直接起：是 / 否 / 入场后起"),
-        })
-        .optional()
-        .describe("第 3 步：开头 3 秒 —— 唯一能靠抽帧自动校验的字段"),
-      ending: z
-        .object({
-          lastLine: z.string().optional().describe("最后一句口播"),
-          cta: z.string().optional().describe("让观众做什么（一个动作）"),
-          qr: z.string().optional().describe("二维码/联系方式放哪儿"),
-          date: z.string().optional().describe("活动时间"),
-          logo: z.string().optional().describe("Logo 怎么出现"),
-        })
-        .optional()
-        .describe("第 3 步：结尾动作"),
-      mustInfo: z
-        .array(
-          z.object({
-            text: z.string().optional(),
-            where: z.string().optional().describe("出现位置：字幕 / 画面正文 / 结尾 / 封面"),
-          }),
-        )
-        .optional()
-        .describe("第 4 步：必须出现的信息。brief_audit 会逐条全文匹配，漏一条阻断渲染"),
-      bans: z.array(z.string()).optional().describe("第 4 步：绝对不出现（禁用词 / 竞品 / 人物）"),
-      shots: z
-        .array(
-          z.object({
-            id: z.string().optional(),
-            desc: z.string().optional().describe("这一镜发生什么"),
-            subject: z.string().optional().describe("谁出镜：真人/演员/手部/无人出镜/客户"),
-            location: z.string().optional().describe("在哪拍；动画片写「无实拍」"),
-            productState: z.string().optional().describe("全新/使用中/特写/对比/拆解"),
-            durationSec: z.number().optional(),
-            segmentId: z.string().optional().describe("归属段落（段落序号，从 1 开始）"),
-          }),
-        )
-        .optional()
-        .describe("第 5 步：镜头清单。实拍形态必填；动画/混剪改成「元素/图解点」"),
-      voiceSpec: z
-        .object({
-          gender: z.string().optional().describe("男声/女声/AI"),
-          speed: z.string().optional().describe("语速，如「稍快」「4.5 字/秒」"),
-          isHuman: z.boolean().optional().describe("真人原声 = true"),
-        })
-        .optional()
-        .describe("第 6 步：配音规格"),
-      bgm: z
-        .object({ mood: z.string().optional(), energy: z.string().optional().describe("克制/中/强") })
-        .optional()
-        .describe("第 6 步：BGM 情绪与强度"),
-      refs: z
-        .array(
-          z.object({
-            source: z.string().optional().describe("链接 / 作品名 / 客户往期片"),
-            range: z.string().optional().describe("**必填**：参考哪一段，如 00:03–00:08"),
-            aspect: z.array(z.string()).optional().describe("节奏/字幕/色调/转场/BGM/叙事结构"),
-            antiAspect: z.array(z.string()).optional().describe("明确不参考什么"),
-          }),
-        )
-        .optional()
-        .describe("第 7 步：参考标注。range 必填 —— 只给链接等于没说"),
-      noRefReason: z
-        .string()
-        .optional()
-        .describe(
-          "第 7 步的出口：客户确实没有参考时写「没有参考，风格按 X 定」（≥8 字）。空着 = 缺参考，会阻断确认",
-        ),
-      assets: z
-        .array(
-          z.object({
-            item: z.string().optional(),
-            owner: z.string().optional().describe("谁提供；工具不负责的写 n/a"),
-            due: z.string().optional().describe("截止时间"),
-            license: z.string().optional().describe("肖像权 / 音乐字体版权 / 场地授权"),
-          }),
-        )
-        .optional()
-        .describe("第 8 步：素材清单。每条要有 owner + due"),
-      deliverables: z
-        .array(
-          z.object({
-            type: z.string().optional().describe("主片/竖版/横版/封面/字幕文件/无字幕版/压缩版/工程文件"),
-            spec: z.string().optional().describe("1080×1920 / H.264 / 30fps…"),
-          }),
-        )
-        .optional()
-        .describe("第 9 步：交付版本列表"),
-      acceptance: z
-        .object({
-          approver: z.string().optional().describe("谁拍板"),
-          criteria: z.array(z.string()).optional().describe("信息准确/品牌合规/字幕无误/节奏/画质"),
-          reviseRounds: z.number().optional().describe("允许几轮修改"),
-          feedbackMode: z.string().optional().describe("一次集中给 / 随时提"),
-        })
-        .optional()
-        .describe("第 10 步：验收标准 + 修改轮次"),
-      density: z
-        .string()
-        .optional()
-        .describe("档位：信息密度 杂志/讲稿/海报（不问实现，只收档位）"),
-      motionLevel: z.string().optional().describe("档位：动感 克制/标准/活泼"),
-      transitionTone: z.string().optional().describe("档位：转场性格 利落/柔和/动感"),
-      effects: z.string().optional().describe("档位：特效 关/点缀/允许（默认关）"),
-      bgTone: z.string().optional().describe("档位：背景 浅/深"),
-      scriptTone: z.string().optional().describe("口播语气：专业讲解/朋友聊天/情绪独白/广告腔"),
-      bulleted: z.boolean().optional().describe("要不要分点讲（1、2、3 列举）"),
-    },
-    run: async (a) => {
-      const p = await resolveProject(a.projectId);
-      // 存一份改之前的，用来算「需求改口的影响面」
-      const prevBrief = readBrief(p.id);
-      // projectId 只是定位工程，不写进 brief
-      const { projectId: _ignored, step: _step, ...briefFields } = a;
-      // 9 步问诊：按 step 校验那一步的必填项，缺了不落盘，逼 agent 回去问用户
-      const step = a.step;
-      const fields: Record<string, unknown> = { ...briefFields };
-      if (step !== undefined) {
-        if (step < 1 || step > 11) throw new Error(`step 只能是 1–11（收到 ${step}）`);
-        const merged = { ...(readBrief(p.id) ?? {}), ...fields } as Brief;
-        const missing = stepMissingFields(step, merged);
-        if (missing.length) {
-          throw new Error(
-            `第 ${step} 步还缺必填：${missing.join("、")}。先问用户，补齐后 save_brief(step=${step}, ...)。`,
-          );
-        }
-        fields.steps = [step];
-      }
-      const { brief } = await api<{ brief: unknown }>(`/api/projects/${p.id}/brief`, {
-        method: "PUT",
-        body: JSON.stringify(fields),
-      });
-
-      // 需求改口的影响面：改之前 vs 改之后，哪些下游会跟着变。
-      // 复盘问题 3：从「无配音」改成「要 AI 配音」时，scriptType/段落表/幕长全要重算，
-      // 工具不说话，agent 只能自己推——推漏了就是成片对不上稿。
-      const impact = describeBriefImpact(prevBrief, brief as Brief);
-      // 累计：本次之外、之前提过的影响也要再露一次，避免分两次写 brief 时前一段被覆盖
-      const logged = briefImpactLog.get(p.id) ?? [];
-      const earlier = logged.filter((x) => !impact.includes(x));
-      briefImpactLog.set(p.id, [...logged, ...impact.filter((x) => !logged.includes(x))]);
-      const progress = briefProgress(brief as never);
-      // 批量通道（不带 step）不校验必填：把还缺的步骤明说，别让 agent 以为存完就过了
-      const missingSteps =
-        step === undefined
-          ? CORE_STEPS.filter((s) => stepMissingFields(s.no, brief as never).length > 0).map((s) => s.no)
-          : [];
-      const batchWarn = missingSteps.length
-        ? `${String.fromCharCode(10)}⚠️ 批量通道不校验步骤：还差第 ${missingSteps.join("、")} 步的必填项，` +
-          `且这些值必须来自用户原话——自己拍的要写进 assumed`
-        : "";
-      const cov = briefCoverage(brief as never);
-      const lock = (brief as Brief).designLock;
-      const nextTip = cov.ok
-        ? `需求契约已完整 ✅ 把总结发给用户确认（重点：段落表 / 镜头清单 / 必现信息 / 参考指到点），点头后 confirm_brief`
-        : `下一步：补齐上面的契约缺口 → 4 组都齐了再 confirm_brief（intake 不带参数可看全部）`;
-      const lockNote = lock
-        ? `${String.fromCharCode(10)}${designLockSummary(lock)}` +
-          `${String.fromCharCode(10)}（档位变了会自动重算；改一次全片跟随，不用逐幕改）`
-        : "";
-      return (
-        `已保存 brief（工程 ${p.id}）` +
-        String.fromCharCode(10) +
-        briefToText(brief as never) +
-        (impact.length || earlier.length
-          ? `${String.fromCharCode(10)}🧭 需求改口的影响面：${String.fromCharCode(10)}${
-              impact.length
-                ? impact.map((x) => `  · ${x}`).join(String.fromCharCode(10))
-                : `  · （本次没有新变化）`
-            }${
-              earlier.length
-                ? `${String.fromCharCode(10)}  之前这次改动里已经提醒过（同样要回头看）：${String.fromCharCode(10)}` +
-                  earlier.map((x) => `  · ${x}`).join(String.fromCharCode(10))
-                : ""
-            }`
-          : "") +
-        batchWarn +
-        lockNote +
-        String.fromCharCode(10) +
-        nextTip
-      );
-    },
-  },
-  {
-    name: "get_brief",
-    description: "读取创作需求 brief（开工前/创作中对照用）。",
-    shape: { projectId: z.string().optional() },
-    run: async (a) => {
-      const p = await resolveProject(a.projectId);
-      const b = readBrief(p.id);
-      const notice = legacyFieldNotice(b);
-      return notice ? `${briefToText(b)}\n\n${notice}` : briefToText(b);
-    },
-  },
-  {
-    name: "probe_param",
-    description:
-      "**参数最小实验**：给 1 个元素 + 1 组参数，渲 1 张图看它到底长什么样。\n" +
-      "为什么需要：maxWidth / bottom / stroke / textAlign 这些语义不直观，直接铺到整片再改要动几十幕。\n" +
-      "先用它把参数摸清，再全量铺。探针写在一个叫「参数探针」的 freeform 幕里，不碰你正在做的那几幕。",
-    shape: {
-      projectId: z.string().optional().describe("要操作的工程 id，不传 = 当前默认工程"),
-      element: z.record(z.any()).describe("一个 freeform 元素，如 {type:'text', text:'账面音浪', x:50, y:50, size:4, maxWidth:82}"),
-      note: z.string().optional().describe("这次想验证什么（只写进回执，例如「maxWidth 82 会不会折行」）"),
-      format: z.string().optional().describe("画幅 key，不传用工程第一个"),
-    },
-    run: async (a) => {
-      const p = await resolveProject(a.projectId);
-      const nl = String.fromCharCode(10);
-      const el = normalizeFreeElement({ id: "probe", ...(a.element as Record<string, unknown>) });
-      const parsed = freeElSchema.strict().safeParse(el);
-      if (!parsed.success) {
-        const detail = parsed.error.issues
-          .map((x: { path: (string | number)[]; message: string }) => `${x.path.join(".") || "(根)"}：${x.message}`)
-          .join("；");
-        throw new Error(`探测元素本身不合法：${detail}`);
-      }
-
-      const existing = (p.scenes ?? []).find((x: { name?: string }) => String(x.name ?? "") === "参数探针");
-      let sceneId = (existing as { id?: string } | undefined)?.id;
-      const props = {
-        background: { kind: "solid", colors: ["#111114"] },
-        elements: [parsed.data],
-      };
-      if (sceneId) {
-        await api(`/api/projects/${p.id}/ops`, {
-          method: "POST",
-          body: JSON.stringify({
-            actor: "agent",
-            ops: [{ op: "update_scene", sceneId, patch: { props, durationInFrames: 90 } }],
-          }),
-        });
-      } else {
-        const created = await api<{ createdSceneIds: string[] }>(`/api/projects/${p.id}/ops`, {
-          method: "POST",
-          body: JSON.stringify({
-            actor: "agent",
-            ops: [
-              { op: "add_scene", type: "freeform", name: "参数探针", durationInFrames: 90, props },
-            ],
-          }),
-        });
-        sceneId = created.createdSceneIds?.[0];
-      }
-      if (!sceneId) throw new Error("探针场景创建失败");
-
-      const fresh = await api<{ project: any }>(`/api/projects/${p.id}`);
-      const idx = (fresh.project.scenes ?? []).findIndex((x: { id?: string }) => x.id === sceneId);
-      const span = sceneSpans((fresh.project.scenes ?? []) as never[])[idx];
-      const frame = (span?.start ?? 0) + Math.max(0, Math.floor((span?.dur ?? 30) * 0.6));
-
-      const stills = await api<{ stills: { format: string; url: string }[] }>(
-        `/api/projects/${p.id}/stills`,
-        { method: "POST", body: JSON.stringify({ frame, tag: "probe", formats: a.format ? [a.format] : undefined }) },
-      );
-      const urls = stills.stills.map((x) => `${BASE}${encodeURI(x.url)}`);
-      return (
-        `参数探针已出图${a.note ? `（验证：${a.note}）` : ""}：${nl}${urls.join(nl)}` +
-        `${nl}就是 1 个元素、1 张图，不改你正在做的幕。` +
-        `${nl}看懂之后再去全量铺——别拿整片当实验场。` +
-        `${nl}（探针幕叫「参数探针」，交付前删掉它或 build_film(replace:true) 会一并清掉）`
-      );
-    },
-  },
-  {
-    name: "brief_audit",
-    description:
-      "契约体检：拿当前成片去对 brief —— 只查「说了有没有做到」，不查风格偏好。\n" +
-      "查这些：① 必须出现的信息是否逐条出现（漏了=违约，会挡 render_video）② 禁用清单是否被违反 " +
-      "③ 开头第一句与契约是否一致 ④ 结尾动作在不在 ⑤ 实际时长与段落表的偏差 ⑥ 设计锁违约（元素数/转场白名单/转场时长/字号）。\n" +
-      "什么时候跑：铺开之后、验收之前；每轮改完也可以跑（只读，不改工程）。",
-    shape: {
-      projectId: z.string().optional().describe("要操作的工程 id，不传 = 当前默认工程"),
-    },
-    run: async (a) => {
-      const p = await resolveProject(a.projectId);
-      const brief = readBrief(p.id);
-      if (!brief) throw new Error("还没有 brief：先走 intake 4 组问诊，再 save_brief");
-      // 老工程没有 form / designLock 时不硬推一套锁，只做信息类比对（mustInfo / 禁词 / 时长）
-      const lock = brief.designLock ?? (brief.form ? recomputeDesignLock(brief) : undefined);
-      const r = auditBriefAgainstProject(brief, p as never, lock);
-      const nl = String.fromCharCode(10);
-      const lockLine = lock
-        ? `${nl}${nl}设计锁：${designLockSummary(lock)}`
-        : `${nl}${nl}（这份 brief 没有形态信息，跳过设计锁检查；下次确认需求时定 form 就会锁定）`;
-      return (
-        auditToText(r) +
-        lockLine +
-        (r.ok
-          ? `${nl}下一步：request_review 请用户看片 → 验收后 render_video`
-          : `${nl}下一步：先把上面「必须修」的补掉；没补之前 render_video 会拒绝（确实要强行出片：render_video(forceContract=true)）`)
-      );
-    },
-  },
-  {
-    name: "save_script",
-    description:
-      "保存稿件（brief 确认之后、写分镜之前）：按段写，一段一句。改稿会让上一次的用户确认失效，必须重新 confirm_script。\n稿件类型见 brief.scriptType（口播稿 / 屏幕文案 / 双轨 / 无稿 / 用户已给稿），写法和字数换算见 get_guide(\"script\")。",
-    shape: {
-      projectId: z.string().optional().describe("要操作的工程 id，不传 = 当前默认工程（list_projects 查）"),
-      type: z
-        .string()
-        .optional()
-        .describe(`稿件类型：${SCRIPT_TYPES.join(" / ")}（不传沿用 brief.scriptType）`),
-      segments: z
-        .array(
-          z.object({
-            text: z.string().describe("这一段要念 / 要显示的话（一句一意）"),
-            note: z.string().optional().describe("配什么画面（给自己的备注）"),
-            sceneId: z.string().optional().describe("对应幕的 id（写完分镜再回填也行）"),
-          }),
-        )
-        .optional()
-        .describe("稿件分段：一段一幕最省事"),
-      sourceText: z
-        .string()
-        .optional()
-        .describe("用户已给稿时把原文放这里（保留原样，便于对照改了哪里）"),
-    },
-    run: async (a) => {
-      const p = await resolveProject(a.projectId);
-      const brief = readBrief(p.id);
-      if (!brief?.confirmedAt) {
-        throw new Error("brief 还没请用户确认：先走完 9 步问诊 + confirm_brief，再写稿（稿子要照着确认过的需求写）");
-      }
-      const script = saveScript(p.id, {
-        type: a.type ?? brief.scriptType,
-        segments: (a.segments ?? []) as Script["segments"],
-        sourceText: a.sourceText,
-      });
-      // 类型以稿件为准回写 brief，避免两处说法不一致
-      if (a.type && a.type !== brief.scriptType) saveBrief(p.id, { scriptType: a.type } as Brief);
-      const nl = String.fromCharCode(10);
-      // 机械体检：空洞词 / 数字缺参照 / 句子太长 / AI 味。
-      // 查不出「没意思」，但能挡掉一半废话和几乎所有「一眼 AI」的句式
-      const kind = (a.type ?? brief.scriptType) === "屏幕文案" ? ("screen" as const) : ("voice" as const);
-      const items = script.segments.map((seg, i) => ({ text: seg.text, kind, label: `第 ${i + 1} 段` }));
-      const lint = lintScriptLines(items);
-      const warnCount = script.segments.reduce(
-        (n, seg) => n + detectFlavor(seg.text, kind).filter((h) => h.level === "warn").length,
-        0,
-      );
-      const lintNote = lint.length
-        ? `${nl}文案体检（提醒，不阻断）${warnCount ? `：其中 AI 味 ${warnCount} 处建议改` : ""}：${nl}- ${lint
-            .slice(0, 10)
-            .join(`${nl}- `)}` +
-          `${nl}（规则见 get_guide("content")；去 AI 味的词表与改写对照：get_guide("content","AI 味")）`
-        : "";
-      return (
-        `已保存稿件${nl}${scriptToText(script, brief.durationSec)}${lintNote}${nl}` +
-        `下一步：把稿子整段发给用户过目（尤其口播语气、幕数、有没有事实要核），点头后 confirm_script`
-      );
-    },
-  },
-  {
-    name: "get_script",
-    description: "读取稿件（带每段预估秒数、与目标时长的差异、是否已被用户确认）。",
-    shape: { projectId: z.string().optional() },
-    run: async (a) => {
-      const p = await resolveProject(a.projectId);
-      return scriptToText(readScript(p.id), readBrief(p.id)?.durationSec);
-    },
-  },
-  {
-    name: "confirm_script",
-    description:
-      "记录「用户已确认稿件」。稿子是整片骨架：没确认过，build_storyboard 会拒绝（brief.scriptType 为无稿时除外）。",
-    shape: {
-      projectId: z.string().optional().describe("要操作的工程 id，不传 = 当前默认工程（list_projects 查）"),
-      summary: z.string().optional().describe("发给用户确认的那份稿子摘要（可选，便于留档）"),
-    },
-    run: async (a) => {
-      const p = await resolveProject(a.projectId);
-      const s = confirmScript(p.id);
-      const nl = String.fromCharCode(10);
-      const total = (s.segments ?? []).reduce((n, x) => n + scriptChars(x.text), 0);
-      return (
-        `稿件已确认（${s.confirmedAt}，${(s.segments ?? []).length} 段 / ${total} 字 / 约 ${estimateSeconds((s.segments ?? []).map((x) => x.text).join(""))}s）` +
-        `${a.summary ? `${nl}确认稿摘要：${a.summary}` : ""}` +
-        `${nl}下一步：每幕的 text 直接取自稿件分段 → save_storyboard → build_storyboard(shot=1) 验风格帧`
-      );
-    },
-  },
-  {
-    name: "save_storyboard",
-    description:
-      "保存分镜表（brief 之后、搭场景之前的计划）：每幕给 type / props / durationInFrames / text（口播字幕）/ note。先确认分镜，再 build_storyboard 一次建成。",
-    shape: {
-      projectId: z.string().optional().describe("要操作的工程 id，不传 = 当前默认工程（list_projects 查）"),
-      useNarrationTiming: z
-        .boolean()
-        .optional()
-        .describe("true = 用 tts_narration(mode='timing') 落盘的真实时长回填每幕 durationInFrames（口播片强烈建议）"),
-      append: z
-        .boolean()
-        .optional()
-        .describe("true = 追加到现有分镜表后面（分多次提交长片分镜用；默认整份替换）"),
-      shots: z
-        .array(
-          z.object({
-            type: z.string().describe("场景类型，见 list_scene_types"),
-            name: z.string().optional(),
-            durationInFrames: z.number().int().optional().describe("不传按类型默认"),
-            props: z.record(z.any()).optional().describe("场景业务数据（直传 add_scene 的 props）"),
-            text: z.string().optional().describe("这一幕的口播/字幕文本（一行一句）"),
-            change: z
-              .string()
-              .optional()
-              .describe("连续叙事三问①：这一幕让观众看懂什么变化（get_guide(\"craft\") §3）"),
-            carry: z.string().optional().describe("连续叙事三问②：从上一幕承接什么（主体/位置/颜色）"),
-            note: z.string().optional().describe("给自己的备注：要传达什么"),
-          }),
-        )
-        .min(1)
-        .describe("分镜：一幕一项，顺序就是出场顺序"),
-    },
-    run: async (a) => {
-      const p = await resolveProject(a.projectId);
-
-      // 口播片：幕长取自配音实测，不是估算。
-      // 这一步放在校验之前 —— 回填出来的时长也要过一遍各类型的 min/max。
-      let timingNote = "";
-      if (a.useNarrationTiming) {
-        const t = await api<{
-          timing: { fps: number; totalSec: number; segments: { text: string; suggested: number }[] } | null;
-        }>(`/api/projects/${p.id}/narration-timing`);
-        const timing = t.timing;
-        if (!timing) {
-          throw new Error(
-            "还没有旁白时间骨架：先 tts_narration(mode=\"timing\", segments=[...]) 跑一遍（一幕一段），再回来存分镜",
-          );
-        }
-        // 用配音骨架排幕长 = 绑定了这版语音，必须先让用户听过
-        await assertNarrationHeard(p.id, "按配音骨架存分镜");
-        if (timing.segments.length !== a.shots.length) {
-          throw new Error(
-            `段数对不上：TTS 有 ${timing.segments.length} 段，分镜有 ${a.shots.length} 幕。` +
-              `口播片要一幕一段 —— 先对齐（要么改分镜，要么重跑 tts_narration(mode="timing")），别硬存`,
-          );
-        }
-        a = {
-          ...a,
-          shots: a.shots.map((shot: Record<string, unknown>, i: number) => ({
-            ...shot,
-            durationInFrames: timing.segments[i].suggested,
-          })),
-        };
-        const planned = Number(readBrief(p.id)?.durationSec ?? 0);
-        const dev =
-          planned > 0
-            ? `；brief 计划 ${planned}s → 实测 ${timing.totalSec.toFixed(1)}s（${(((timing.totalSec - planned) / planned) * 100).toFixed(0)}%）`
-            : "";
-        timingNote = `\n幕长已按配音回填（${timing.segments.length} 段 / ${timing.totalSec.toFixed(1)}s${dev}）`;
-      }
-
-      // 写分镜时就按各类型 schema 校验，别等 build 整批原子失败
-      for (const [i, shot] of a.shots.entries()) {
-        const meta = getMeta(shot.type);
-        if (!meta) throw new Error(`第 ${i + 1} 幕：未知场景类型「${shot.type}」（先 list_scene_types）`);
-        const parsed = meta.schema.safeParse({ ...meta.defaultProps, ...(shot.props ?? {}) });
-        if (!parsed.success) {
-          const errs = parsed.error.issues
-            .map((e) => `${e.path.join(".") || "(根)"}：${e.message}`)
-            .join("；");
-          throw new Error(`第 ${i + 1} 幕（${shot.type}）props 校验失败：${errs}`);
-        }
-      }
-      const prevShots = a.append ? (readStoryboard(p.id)?.shots ?? []) : [];
-      const sb = saveStoryboard(p.id, { shots: [...prevShots, ...(a.shots as Storyboard["shots"])] });
-      // 分镜是最后一次「只动文字」的机会：这里不体检，等铺开再改就要重建场景
-      const shotLint = lintScriptLines(
-        sb.shots.flatMap((s, i) => {
-          const out: { text: string; kind: "screen" | "voice"; label: string }[] = [];
-          if (s.text) out.push({ text: s.text, kind: "voice", label: `第 ${i + 1} 幕口播` });
-          const head = (s.props as Record<string, unknown> | undefined)?.title;
-          if (typeof head === "string" && head.trim()) {
-            out.push({ text: head, kind: "screen", label: `第 ${i + 1} 幕大字` });
-          }
-          return out;
-        }),
-      );
-      const lintNote = shotLint.length
-        ? `${String.fromCharCode(10)}文案体检（提醒，不阻断；现在改最便宜）：${String.fromCharCode(10)}- ${shotLint
-            .slice(0, 8)
-            .join(`${String.fromCharCode(10)}- `)}`
-        : "";
-      return `${timingNote ? `${timingNote}${String.fromCharCode(10)}` : ""}已保存分镜表${a.append ? `（追加 ${a.shots.length} 幕，共 ${sb.shots.length} 幕）` : ""}${String.fromCharCode(10)}${storyboardToText(sb)}${lintNote}${String.fromCharCode(10)}下一步：确认分镜后 build_storyboard 一次建成（会顺带写字幕）`;
-    },
-  },
-  {
-    name: "get_storyboard",
-    description: "读取当前分镜表（开工前/搭建中对照用）。",
-    shape: { projectId: z.string().optional() },
-    run: async (a) => {
-      const p = await resolveProject(a.projectId);
-      return storyboardToText(readStoryboard(p.id));
-    },
-  },
-  {
-    name: "build_storyboard",
-    description:
-      "按分镜表建成场景：每幕 add_scene（type/props/时长/名字），口播文本写成字幕，并把 sceneId 回填分镜。replace=true 会先清掉工程现有场景。\n别一次铺满再给用户看：先 build_storyboard(shot=1) 只建第 1 幕 → preview_frame 给用户过目 → 满意再 build_storyboard(replace=true) 全量建（会重建第 1 幕，属正常）。\n⚠️ 建出来的幕转场是默认 fade 12 帧——brief 设计锁里的转场档位（如「利落」= zoom 8 帧）不会被继承，建完用 set_transitions 按设计锁补一遍，否则 check_project 会报转场违约。",
-    shape: {
-      projectId: z.string().optional().describe("要操作的工程 id，不传 = 当前默认工程（list_projects 查）"),
-      shot: z
-        .number()
-        .int()
-        .min(1)
-        .optional()
-        .describe("只建第 N 幕（1 起）——风格帧验证专用；只建单幕时忽略 replace"),
-      replace: z.boolean().optional().describe("先删掉工程现有场景再建（默认 false：追加）"),
-      attachSubtitle: z.boolean().optional().describe("把每幕 text 写成字幕，默认 true"),
-      skipChecks: z
-        .boolean()
-        .optional()
-        .describe(
-          "跳过流程闸口（需求问诊 / 需求确认 / 风格样张 / 稿件确认 / 配音试听）。用户明确说「直接建 / 不用问了」才传；验收与契约闸口不受影响",
-        ),
-      skipReason: z
-        .string()
-        .optional()
-        .describe("用户让你跳过的原话（至少 2 字）；skipChecks=true 时必填，会记录在回执里"),
-    },
-    run: async (a) => {
-      const p = await resolveProject(a.projectId);
-      const bypass = processGateBypass(a);
-      const skippedGates: string[] = [];
-      /** 流程性闸口统一处理：不旁路就挡，旁路就留痕 */
-      const gate = (blocked: boolean, message: string, label: string) => {
-        if (!blocked) return;
-        if (bypass) {
-          skippedGates.push(label);
-          return;
-        }
-        throw new Error(message);
-      };
-      // 需求 9 步没问完就不许开建（重要配置不能自己定）
-      const brief = readBrief(p.id);
-      const progress = briefProgress(brief);
-      gate(
-        !progress.finished,
-        `需求还没问完（${progress.done.length}/9），下一步该问第 ${progress.next} 步。` +
-          `先用 intake(${progress.next}) 看要问什么，save_brief(step=${progress.next}) 逐步补齐，再 build_storyboard。` +
-          `（用户明确说「直接建」时：skipChecks=true + skipReason=他的原话）`,
-        `需求问诊未完成（${progress.done.length}/9）`,
-      );
-      gate(
-        !(brief as any)?.confirmedAt,
-        "需求还没请用户确认：把 9 步总结发给用户，用户确认后调用 confirm_brief，再 build_storyboard。",
-        "需求未确认",
-      );
-      // 开工前给用户看过样张：方向错了，后面 50 幕全是白做
-      const probe = readReview(p.id);
-      gate(
-        !probe?.probeAt,
-        "开工前还没让用户看过效果：先 probe_style(slugs=[...]) 出 1–3 张风格样张 → 把图发给用户挑 → " +
-          "confirm_style_probe(slug)，再写分镜。\n" +
-          "这一步省不得：方向不对的话，现在改一张图；等 50 幕铺完再改，是全线返工。",
-        "风格样张未确认",
-      );
-
-      // 稿子没确认就别写分镜（无稿类除外）：分镜每一幕的 text 都该来自稿件，不该临场编
-      const briefScriptType = (brief as any)?.scriptType as string | undefined;
-      const needsScript = !!briefScriptType && !/无稿/.test(briefScriptType);
-      if (needsScript) {
-        const sc = readScript(p.id);
-        gate(
-          !sc || (!sc.segments?.length && !sc.sourceText),
-          `稿件类型是「${briefScriptType}」，但还没有稿件：` +
-            `intake(10) 看该问什么 → save_script 写稿 → confirm_script 请用户过目，再写分镜。`,
-          "稿件未写",
-        );
-        gate(
-          !sc?.confirmedAt,
-          "稿件还没请用户确认：把稿子（每段 + 预估秒数）发给用户过目，点头后 confirm_script，再 save_storyboard / build_storyboard。",
-          "稿件未确认",
-        );
-      }
-      // 配音闸口：没让用户听过这一版，不许铺开画面
-      if (bypass) {
-        skippedGates.push("配音试听未确认");
-      } else {
-        await assertNarrationHeard(p.id, "建幕");
-      }
-      const skipNote = skippedGates.length ? SKIPPED_NOTE(skippedGates, bypass as string) + "\n" : "";
-      const sb = readStoryboard(p.id);
-      if (!sb?.shots?.length) throw new Error("还没有分镜表，先用 save_storyboard 写");
-      // 观感（mood / 安全区 / 封面 / 字幕 / 音效）没定不拦写分镜，但要说一句：
-      // 这几项拖到验收前才定，版式和字幕规格大概率要返工
-      const visionMissing = stepMissingFields(11, brief);
-      // shot=N：只建第 N 幕做风格帧。全量铺开前先验证调性，方向错了只重做 1 幕
-      const onlyIdx = a.shot ? a.shot - 1 : -1;
-      if (onlyIdx >= 0 && (a.shot as number) > sb.shots.length) {
-        throw new Error(`分镜只有 ${sb.shots.length} 幕，shot 只能是 1–${sb.shots.length}`);
-      }
-      const targets = onlyIdx >= 0 ? [sb.shots[onlyIdx]] : sb.shots;
-
-      const ops: Record<string, unknown>[] = [];
-      if (onlyIdx < 0 && a.replace) {
-        for (const sc of p.scenes ?? []) ops.push({ op: "remove_scene", sceneId: sc.id });
-      }
-      // 单幕模式要**插到分镜里前一幕的后面**，不能一律 append：
-      // 先建第 1、6 幕当样板、再补第 2–18 幕，append 出来的时间轴是 1→6→2→3…（坑 #1，会毁片）。
-      // 找不到「已建的前一幕」时不插（末尾追加），后面 alignScenesToStoryboard 还会兜一次底。
-      const aliveIds = new Set((p.scenes ?? []).map((s: { id: string }) => s.id));
-      const anchorFor = (shotIdx: number): string | undefined => {
-        for (let k = shotIdx - 1; k >= 0; k--) {
-          const id = sb.shots[k]?.sceneId;
-          if (id && aliveIds.has(id)) return id;
-        }
-        return undefined;
-      };
-      const anchor = onlyIdx >= 0 ? anchorFor(onlyIdx) : undefined;
-      for (const shot of targets) {
-        ops.push({
-          op: "add_scene",
-          type: shot.type,
-          ...(shot.name ? { name: shot.name } : {}),
-          ...(shot.durationInFrames ? { durationInFrames: shot.durationInFrames } : {}),
-          ...(shot.props ? { props: shot.props } : {}),
-          ...(anchor ? { afterSceneId: anchor } : {}),
-        });
-      }
-      const res = await api<{ createdSceneIds: string[] }>(`/api/projects/${p.id}/ops`, {
-        method: "POST",
-        body: JSON.stringify({ actor: "agent", ops }),
-      });
-      const ids = res.createdSceneIds ?? [];
-
-      // 转场继承设计锁：不套的话每幕都是版本默认 fade 12 帧，
-      // 契约里写的「利落（none/zoom ≤10 帧）」当场违约，之后还得手动补一次 set_transitions
-      const lock: any = (brief as any)?.designLock;
-      const lockTypes: string[] = Array.isArray(lock?.transitionWhitelist) ? lock.transitionWhitelist : [];
-      let lockNote = "";
-      if (lockTypes.length && !lockTypes.includes("none") && ids.length) {
-        const t = {
-          type: lockTypes[0],
-          durationInFrames: Number(lock.transitionMaxFrames) || TRANSITION_DEFAULT_FRAMES,
-        };
-        await api(`/api/projects/${p.id}/ops`, {
-          method: "POST",
-          body: JSON.stringify({
-            actor: "agent",
-            ops: ids.map((sceneId: string) => ({ op: "update_scene", sceneId, patch: { transitionIn: t } })),
-          }),
-        });
-        lockNote = `转场已按设计锁套用：${t.type} ${t.durationInFrames} 帧（白名单 ${lockTypes.join(" / ")}；要改就再 set_transitions）`;
-      }
-
-      // 字幕：一律先拆段再落库。分镜的 text 是「这一幕说的话」，经常是一整句甚至两句，
-      // 直接上屏就是一屏几十字；这里拆好，后面 set_subtitle_style 调字号也不会再变长
-      const subReport: string[] = [];
-      if (a.attachSubtitle !== false) {
-        const subOps: Record<string, unknown>[] = [];
-        targets.forEach((shot, i) => {
-          if (!shot.text || !ids[i]) return;
-          const norm = normalizeSubtitle(shot.text, { maxChars: SUBTITLE_LIMITS.max });
-          subOps.push({ op: "set_subtitle", sceneId: ids[i], text: subtitleToField(norm.lines) });
-          if (norm.lines.length > 1) subReport.push(`第 ${i + 1} 幕拆成 ${norm.lines.length} 屏`);
-          if (norm.lines.some((l) => [...l].length > SUBTITLE_LIMITS.max)) {
-            subReport.push(`第 ${i + 1} 幕有句子拆不开（长英文/无标点），建议改稿`);
-          }
-        });
-        if (subOps.length) {
-          await api(`/api/projects/${p.id}/ops`, {
-            method: "POST",
-            body: JSON.stringify({ actor: "agent", ops: subOps }),
-          });
-        }
-      }
-
-      // sceneId 回填，和分镜一一对应（单幕模式只回填那一幕，其余保持原值）
-      const saved = saveStoryboard(p.id, {
-        ...sb,
-        shots: sb.shots.map((s, i) =>
-          onlyIdx >= 0 ? (i === onlyIdx ? { ...s, sceneId: ids[0] } : s) : { ...s, sceneId: ids[i] },
-        ),
-      });
-
-      // 幕序自愈：建完立刻和分镜顺序对一遍。这一步不做，片子会「看起来完整、内部已经错位」
-      const align = await alignScenesToStoryboard(p.id, saved);
-      const nl = String.fromCharCode(10);
-      const visionNote = visionMissing.length
-        ? `${nl}💬 观感还没定（${visionMissing.join("、")}）：intake(11) 问一下再收尾——request_review 会因为这几项没填而拒绝。`
-        : "";
-      const subNote = subReport.length
-        ? `${nl}字幕已按屏拆好（每屏 ≤${SUBTITLE_LIMITS.max} 字、不带标点）：${subReport.slice(0, 6).join("；")}${
-            subReport.length > 6 ? `…共 ${subReport.length} 处` : ""
-          }`
-        : "";
-      const orderNote = align.notes.length ? `${nl}🔧 ${align.notes.join(`${nl}🔧 `)}` : "";
-      const leftoverNote = align.extraCount
-        ? `${nl}⚠️ 工程里还有 ${align.extraCount} 幕不在分镜表里（模板开场/结尾、风格样张之类）：` +
-          `确认要不要 remove_scene 掉；要全部重建就 build_storyboard(replace=true)。` +
-          `不清掉它们会混进成片。`
-        : "";
-      if (onlyIdx >= 0) {
-        return (
-          skipNote +
-          visionNote +
-          (visionNote ? nl : "") +
-          `已建第 ${onlyIdx + 1} 幕做风格帧（${sb.shots[onlyIdx]?.type}，id=${ids[0]}）。${nl}` +
-          `下一步：preview_frames 抽 1–3 帧给用户过目（场景 id=${ids[0]}）——` +
-          `配色/字体/版式方向 OK 再 build_storyboard(replace=true) 全量铺开（会重建这一幕，正常）；` +
-          `不对就 save_storyboard 改这一幕再 build_storyboard(shot=${onlyIdx + 1})，只重做 1 幕。${subNote}${orderNote}${lockNote ? `${nl}${lockNote}` : ""}`
-        );
-      }
-      // 建完顺手判一次"空"：在用户看到之前报，而不是等他第一眼说"太空旷"
-      const densityNote = await (async () => {
-        try {
-          const fresh = await api<{ project: { formats?: { key: string; label: string; width: number; height: number }[]; scenes?: unknown[] } }>(
-            `/api/projects/${p.id}`,
-          );
-          const fmts = fresh.project.formats ?? [];
-          const fmt = fmts[0];
-          if (!fmt) return "";
-          const dens = projectDensity((fresh.project.scenes ?? []) as never[], fmt);
-          const rhythm = rhythmIssues(dens, fmt);
-          if (!rhythm.length) return "";
-          return (
-            `${nl}⚠️ 密度节奏（${fmt.label}）：` +
-            rhythm.map((x) => `${nl}  · ${x.message}`).join("") +
-            `${nl}  ${densitySummary(dens)}`
-          );
-        } catch {
-          return "";
-        }
-      })();
-      return `${skipNote}已按分镜建了 ${ids.length} 幕：${nl}${ids.map((id, i) => `${i + 1}. ${id}（${sb.shots[i]?.type}）`).join(nl)}${lockNote ? `${nl}${lockNote}` : ""}${nl}下一步：tts_narration 配音（applyToScenes=true 自动对齐场景时长和字幕）${orderNote}${leftoverNote}${subNote}${visionNote}${densityNote}`;
-    },
-  },
-  {
-    name: "build_film",
-    description:
-      "**一次提交整片**：给一幕幕的「类型 + 内容」，剩下的坐标、字幕、转场、入场动画由系统按规则展开成一条 apply_ops（整批原子、只涨 1 个 rev）。\n" +
-      "为什么需要它：逐幕 add_scene + set_subtitle + set_transitions 要几十次往返才能建成整片；这里一次说完。\n" +
-      "用法：scenes 按出场顺序给；freeform 幕直接给 elements（会自动补 id、按 stagger 挂入场动画）；\n" +
-      "内置版式幕给 props（按该类型 schema 校验，错了当场报第几幕哪个字段）。\n" +
-      "⚠️ 别拿它当「第一版」：先 probe_style 挑风格 → build_storyboard(shot=1) 建 1 幕给用户过目 → 再 build_film 全量。",
-    shape: {
-      projectId: z.string().optional().describe("要操作的工程 id，不传 = 当前默认工程"),
-      replace: z.boolean().optional().describe("true = 先清空工程现有场景（首次全量建时用）"),
-      scenes: z
-        .array(
-          z.object({
-            as: z.string().optional().describe("批内别名，默认 s1/s2…（回执会列出真实 id）"),
-            type: z.string().describe("场景类型（list_scene_types）"),
-            name: z.string().optional(),
-            durationInFrames: z.number().int().min(1).optional().describe("不传按类型默认"),
-            props: z.record(z.any()).optional().describe("内置版式的业务数据"),
-            elements: z
-              .array(z.record(z.any()))
-              .optional()
-              .describe("freeform 幕的元素数组（type/text/x/y/size/fill…，会自动补 id）"),
-            text: z.string().optional().describe("这一幕的口播/字幕文本（会写成字幕）"),
-            subtitle: z.string().optional().describe("直接给字幕文本（不给就用 text）"),
-            transitionIn: z
-              .object({ type: z.enum(TRANSITION_TYPES), durationInFrames: z.number().int().min(0).max(120) })
-              .nullable()
-              .optional(),
-            transitionOut: z
-              .object({ type: z.enum(TRANSITION_TYPES), durationInFrames: z.number().int().min(0).max(120) })
-              .nullable()
-              .optional(),
-          }),
-        )
-        .min(1)
-        .describe("分镜：一幕一项，顺序就是出场顺序"),
-      transitions: z
-        .object({ type: z.enum(TRANSITION_TYPES), durationInFrames: z.number().int().min(0).max(120).optional() })
-        .optional()
-        .describe("统一入场转场（各幕 transitionIn 优先）；不传则沿用各类型默认"),
-      animations: z
-        .object({
-          preset: z.enum(["stagger", "none"]).optional().describe("stagger = 文字元素逐个淡入上浮，默认 stagger"),
-          step: z.number().min(0).max(20).optional().describe("错峰间距（帧），默认 3"),
-          inFrames: z.number().min(1).max(60).optional().describe("单元素入场时长（帧），默认 14"),
-        })
-        .optional()
-        .describe("freeform 元素的入场动画预设（元素自带 anim 时以元素为准）"),
-      subtitles: z.boolean().optional().describe("写不写字幕，默认 true（有 text/subtitle 才写）"),
-      skipChecks: z
-        .boolean()
-        .optional()
-        .describe("跳过流程闸口（需求确认 / 配音试听）。用户明确说「直接建 / 不用问了」才传；验收与契约闸口不受影响"),
-      skipReason: z
-        .string()
-        .optional()
-        .describe("用户让你跳过的原话（至少 2 字）；skipChecks=true 时必填，会记录在回执里"),
-    },
-    run: async (a) => {
-      const p = await resolveProject(a.projectId);
-      const bypass = processGateBypass(a);
-      const skippedGates: string[] = [];
-      const brief = readBrief(p.id);
-      if (!(brief as any)?.confirmedAt) {
-        if (bypass) skippedGates.push("需求未确认");
-        else
-          throw new Error("brief 还没确认：先走完 4 组问诊 + confirm_brief，再 build_film（否则建出来的东西没人认过）");
-      }
-      // 配音闸口：合成过但没人听过 → 不许建幕（建了就等于把幕长锁死在这版语音上）
-      if (bypass) {
-        skippedGates.push("配音试听未确认");
-      } else {
-        await assertNarrationHeard(p.id, "建整片");
-      }
-      const skipNote = skippedGates.length ? SKIPPED_NOTE(skippedGates, bypass as string) + "\n" : "";
-      const nl = String.fromCharCode(10);
-      const fps = p.fps || 30;
-      const ops: Record<string, unknown>[] = [];
-
-      if (a.replace) {
-        for (const sc of p.scenes ?? []) ops.push({ op: "remove_scene", sceneId: (sc as any).id });
-      }
-
-      const animPreset = a.animations?.preset ?? "stagger";
-      const step = a.animations?.step ?? 3;
-      const inFrames = a.animations?.inFrames ?? 14;
-      const aliases: Record<string, string> = {};
-      const problems: string[] = [];
-      let lockApplied = 0;
-
-      for (const [i, sc] of a.scenes.entries()) {
-        const meta = getMeta(sc.type);
-        if (!meta) throw new Error(`第 ${i + 1} 幕：未知场景类型「${sc.type}」（先 list_scene_types）`);
-        const alias = (sc.as ?? `s${i + 1}`).trim();
-        const dur = sc.durationInFrames ?? meta.duration.default;
-
-        // props：内置版式按 schema 校验并填默认值；错了立刻报第几幕哪个字段（别等整批原子失败）
-        let props: Record<string, unknown> = { ...meta.defaultProps, ...(sc.props ?? {}) };
-        if (sc.elements?.length) {
-          if (sc.type !== "freeform") {
-            throw new Error(
-              `第 ${i + 1} 幕（${sc.type}）不是 freeform，不支持 elements —— 用 props 传业务数据，或把 type 改成 freeform`,
-            );
-          }
-          props = {
-            ...props,
-            elements: sc.elements.map((el: Record<string, unknown>, j: number) => {
-              const y = Number((el as { y?: number }).y ?? 50);
-              const base = { id: `e${j + 1}`, ...el } as Record<string, unknown>;
-              const hasAnim = Array.isArray((el as { anim?: unknown[] }).anim);
-              if (animPreset === "none" || hasAnim) return base;
-              return { ...base, anim: staggerAnim({ y, index: j, sceneDur: dur, step, inFrames }) };
-            }),
-          };
-        }
-
-        const parsed = meta.schema.safeParse(props);
-        if (!parsed.success) {
-          const errs = parsed.error.issues
-            .map((e) => `${e.path.join(".") || "(根)"}：${e.message}`)
-            .join("；");
-          throw new Error(`第 ${i + 1} 幕（${sc.type}）props 校验失败：${errs}`);
-        }
-
-        ops.push({
-          op: "add_scene",
-          type: sc.type,
-          name: sc.name ?? meta.name,
-          durationInFrames: dur,
-          props: parsed.data as Record<string, unknown>,
-          as: alias,
-        });
-
-        const subText = sc.subtitle ?? sc.text;
-        if (a.subtitles !== false && subText && String(subText).trim()) {
-          ops.push({
-            op: "set_subtitle",
-            sceneId: `@${alias}`,
-            text: subtitleToField(normalizeSubtitle(String(subText), { maxChars: SUBTITLE_LIMITS.max }).lines),
-          });
-        }
-
-        // 转场取值优先级：单幕显式 > 本次统一参数 > **设计锁**（brief.designLock 的白名单 + 帧数上限）
-        // 少最后一档时，建幕会用版式默认 fade 12 帧，把契约里的「利落」冲掉，之后还得手动补 set_transitions
-        const lock: any = (brief as any)?.designLock;
-        const lockTypes: string[] = Array.isArray(lock?.transitionWhitelist) ? lock.transitionWhitelist : [];
-        const lockFrames = Number(lock?.transitionMaxFrames ?? 0);
-        const lockPick =
-          lockTypes.length && !lockTypes.includes("none")
-            ? { type: lockTypes[0], durationInFrames: lockFrames > 0 ? lockFrames : TRANSITION_DEFAULT_FRAMES }
-            : undefined;
-        const tin =
-          sc.transitionIn !== undefined
-            ? sc.transitionIn
-            : a.transitions
-              ? { type: a.transitions.type, durationInFrames: a.transitions.durationInFrames ?? TRANSITION_DEFAULT_FRAMES }
-              : lockPick;
-        const patch: Record<string, unknown> = {};
-        if (tin !== undefined) patch.transitionIn = tin;
-        if (sc.transitionOut !== undefined) patch.transitionOut = sc.transitionOut;
-        if (Object.keys(patch).length) ops.push({ op: "update_scene", sceneId: `@${alias}`, patch });
-        if (!a.transitions && sc.transitionIn === undefined && lockPick) lockApplied++;
-      }
-
-      const res = await api<{
-        project: { rev: number; scenes: { id: string; durationInFrames: number }[] };
-        createdIds?: Record<string, string>;
-      }>(`/api/projects/${p.id}/ops`, {
-        method: "POST",
-        body: JSON.stringify({ actor: "agent", ops }),
-      });
-
-      const ids = res.createdIds ?? {};
-      const built = a.scenes.map((sc: { as?: string; type: string }, i: number) => {
-        const alias = (sc.as ?? `s${i + 1}`).trim();
-        aliases[alias] = ids[alias] ?? "?";
-        return { alias, id: ids[alias] ?? "?", type: sc.type };
-      }).filter((x: { alias: string; id: string; type: string }) => x.id !== "?");
-
-      const totalFrames = (res.project.scenes ?? []).reduce((n: number, s: { durationInFrames?: number }) => n + Number(s.durationInFrames ?? 0), 0);
-      const totalSec = totalFrames / fps;
-      const planned = Number((brief as any)?.durationSec ?? 0);
-      const devNote =
-        planned > 0
-          ? `；brief 计划 ${planned}s → 实际 ${totalSec.toFixed(1)}s（${(((totalSec - planned) / planned) * 100).toFixed(0)}%）`
-          : "";
-      if (planned > 0 && Math.abs(totalSec - planned) / planned > 0.15) {
-        problems.push(`总时长偏离 brief 超过 15%：段落表 / 稿子 / 幕长需要重新对齐（口播片以 TTS 实测为准）`);
-      }
-
-      return (
-        skipNote +
-        `已建成 ${built.length} 幕${a.replace ? "（已清空原有场景）" : "（追加）"}，rev=${res.project.rev}` +
-        `${nl}共 ${totalFrames} 帧 / ${totalSec.toFixed(1)}s${devNote}` +
-        `${nl}别名：${built.map((x: { alias: string; id: string }) => `${x.alias} → ${x.id}`).join("、")}` +
-        (lockApplied
-          ? `${nl}转场已按设计锁套用（${lockApplied} 幕）：${(brief as any)?.designLock?.transitionWhitelist?.join(" / ") ?? ""} ` +
-            `${Number((brief as any)?.designLock?.transitionMaxFrames ?? 0) || TRANSITION_DEFAULT_FRAMES} 帧（单幕显式指定优先）`
-          : "") +
-        (problems.length ? `${nl}⚠️ ${problems.join(`${nl}⚠️ `)}` : "") +
-        `${nl}下一步：render_preview_clip 出一段 6 秒看动态（转场/字幕/BGM）→ 再 check_project 自检 → request_review`
-      );
-    },
-  },
-  {
-    name: "delete_template",
-    description:
-      "删除「我的模板」（不可撤销，内置模板删不掉）。id 见 list_templates。文件会向用户确认，agent 调用即代表用户已要求删除。",
-    shape: {
-      templateId: z.string().describe("模板 id（tpl_ 开头，list_templates 里查）"),
-    },
-    run: async (a) => {
-      const res = await api<{ ok: boolean }>(`/api/templates/${a.templateId}`, { method: "DELETE" });
-      return `已删除模板 ${a.templateId}（ok=${res.ok}）。用 list_templates 确认。`;
-    },
-  },
-  {
-    name: "delete_asset",
-    description:
-      "从素材库删除一个素材条目并回收文件（不可撤销）。仍在被工程引用的文件会自动保留，只删条目。删除前建议先和用户确认。",
-    shape: {
-      assetId: z.string().optional().describe("素材条目 id（list_assets 里查）"),
-      id: z.string().optional().describe("同 assetId（别名）"),
-    },
-    run: async (a) => {
-      const id = a.assetId ?? a.id;
-      if (!id) throw new Error("缺少 assetId（素材条目 id，list_assets 里查；也认 id）");
-      const res = await api<{ removed: any; reclaimed: number }>(`/api/library/${id}`, {
-        method: "DELETE",
-      });
-      const n = Number(res.reclaimed ?? 0);
-      const tail = n > 0 ? `，已回收 ${n} 个文件` : "（文件仍被工程引用，只删了条目、文件保留）";
-      return `已删除素材条目 ${id}${tail}`;
-    },
-  },
-  {
-    name: "delete_project",
-    description:
-      "删除整个工程（含它的历史快照），不可撤销。demo 示例工程删不掉，只能用「重置 demo」恢复。\n" +
-      "会一并清掉它的素材（assets/projects/<id>/）与渲染产物（out/projects/<id>/）；被别的工程或素材库还引用的素材文件会保留。",
-    shape: {
-      projectId: z.string().describe("要删除的工程 id"),
-      confirm: z.boolean().describe("必须显式传 true —— 这是不可撤销的操作"),
-    },
-    run: async (a) => {
-      if (a.confirm !== true) {
-        throw new Error("删除工程不可撤销：确认要删再进行，调用时传 confirm: true");
-      }
-      if (a.projectId === "demo") throw new Error("demo 是示例工程，不能删除");
-      // resolveProject 不改指针，prev 一定还是「删除前」的当前工程（v2 N-01 的根因就在这里）
-      const prev = lastProjectId;
-      const p = await resolveProject(a.projectId);
-      const res = await api<{
-        assets?: { removed: number; kept: number; freedBytes: number };
-        renders?: { removed: number; freedBytes: number };
-      }>(`/api/projects/${a.projectId}`, { method: "DELETE" });
-      const nl = String.fromCharCode(10);
-      const assets = res?.assets;
-      const renders = res?.renders;
-      const assetLine = [
-        assets
-          ? `素材目录：清掉 ${assets.removed} 个文件（${formatBytes(assets.freedBytes)}）` +
-            (assets.kept ? `，${assets.kept} 个仍被别的工程/素材库引用，保留` : "")
-          : "",
-        renders && renders.removed
-          ? `产物目录：清掉 ${renders.removed} 个成片/关键帧/字幕（${formatBytes(renders.freedBytes)}）`
-          : "",
-      ]
-        .filter(Boolean)
-        .join(nl);
-      if (prev && prev !== p.id) {
-        // 删的是别的工程：指针还原，别把当前工程冲掉
-        setCurrentProject(prev);
-        return `已删除工程「${p.name}」（id=${p.id}）${nl}${assetLine}${nl}当前工程仍是 ${prev}（未受影响）。`;
-      }
-      // 删的就是当前工程：明说接下来落在哪个工程上
-      const { projects } = await api<{ projects: { id: string; name: string }[] }>("/api/projects");
-      const next = projects[0];
-      setCurrentProject(next?.id ?? null);
-      return (
-        `已删除工程「${p.name}」（id=${p.id}）${nl}` +
-        assetLine +
-        nl +
-        (next
-          ? `当前工程已切到「${next.name}」（id=${next.id}）——之后不带 projectId 的调用落在这里，要换工程用 switch_project。`
-          : "已经没有工程了，用 create_project 新建。")
-      );
-    },
-  },
+  /*
+   * 下面五组原来是塞在 scene3d.ts 里的（那个文件一度混着工程/稿件/分镜类工具）。
+   * 现在按主题分文件，但仍**按原位、按原顺序**依次展开：TOOLS 的顺序是 tool_search
+   * 同分时的排序依据，也是 `tool_search(all:true)` 的目录顺序，别随意调换。
+   */
+  ...PROJECT_TOOLS,
+  ...BRIEF_TOOLS,
+  ...SCRIPT_TOOLS,
+  ...STORYBOARD_TOOLS,
+  ...CLEANUP_TOOLS,
 
   /* ───────────── 工具门面：按需发现与执行（其余工具经这两层调用） ───────────── */
   {
@@ -8423,326 +5653,25 @@ const TOOLS: ToolDef[] = [
       return out;
     },
   },
+  {
+    name: "tool_stats",
+    description:
+      "看本机最近几天的工具调用统计：调用次数、失败率、平均/慢速耗时、高频失败原因。\n" +
+      "什么时候用：① 连续几次同一工具报错，先看是不是自己参数总写错（topErrors 里会有原话）；" +
+      "② 用户问「为什么这么慢/是不是卡了」时，用 p95 耗时给依据；③ 想确认某个工具是不是根本没人调。\n" +
+      "数据来自 data/logs/tool-calls-*.jsonl，只记摘要（参数截断 400 字），保留 7 天。",
+    shape: {
+      days: z
+        .number()
+        .int()
+        .min(1)
+        .max(7)
+        .optional()
+        .describe("统计最近几天，默认 1（今天）；最多 7（日志保留上限）"),
+    },
+    run: async (a) => toolStatsToText(toolStats(a.days ?? 1)),
+  },
 ];
-
-/** 工具门面：常驻暴露的核心工具；其余工具经 tool_search 发现、tool_call 执行 */
-export const CORE_TOOL_NAMES = new Set(["start_guide", "get_guide", "tool_search", "tool_call"]);
-
-/** MCP_EXPOSE=all 时恢复全量暴露（调试用） */
-export const exposeAllTools = () => (process.env.MCP_EXPOSE ?? "").trim().toLowerCase() === "all";
-
-const firstLine = (s: string) => s.split("\n")[0].trim();
-
-/* ───────────── 响度辅助：削波提醒（供 set_audio / 音轨工具复用） ───────────── */
-
-/** 音频角色：决定配平的目标响度（人声是主角，BGM 要让位，音效居中） */
-type Role = "voice" | "bgm" | "sfx";
-
-type AudioEntry =
-  | { kind: "bgm"; label: string; src: string; role: Role; current: number }
-  | { kind: "track"; label: string; id: string; src: string; role: Role; current: number }
-  | { kind: "element"; label: string; sceneId: string; id: string; src: string; role: Role; current: number };
-
-function collectAudioEntries(
-  p: ProjectLite,
-  scope: "all" | "bgm" | "tracks" | "elements",
-): AudioEntry[] {
-  const out: AudioEntry[] = [];
-  if ((scope === "all" || scope === "bgm") && p.audio?.src) {
-    out.push({ kind: "bgm", label: "背景音乐", src: p.audio.src, role: "bgm", current: p.audio.volume ?? 1 });
-  }
-  if (scope === "all" || scope === "tracks") {
-    for (const t of p.audioTracks ?? []) {
-      out.push({ kind: "track", label: `音效「${t.name}」`, id: t.id, src: t.src, role: "sfx", current: t.volume ?? 1 });
-    }
-  }
-  if (scope === "all" || scope === "elements") {
-    for (const s of p.scenes) {
-      for (const el of s.elements ?? []) {
-        if (el.kind !== "audio" || !el.src) continue;
-        out.push({
-          kind: "element",
-          label: `「${s.name}」/${el.name}`,
-          sceneId: s.id,
-          id: el.id,
-          src: el.src,
-          role: "voice",
-          current: el.audioVolume ?? 1,
-        });
-      }
-    }
-  }
-  return out;
-}
-
-/** 本工程素材目录里的一行（/api/projects/:id/assets 的返回） */
-type ProjectAssetLite = {
-  name: string;
-  url: string;
-  rel: string;
-  kind: "image" | "video" | "audio" | "file";
-  bytes: number;
-  at: number;
-  referenced: boolean;
-};
-
-/** 整理旧素材的方案（/api/assets/organize 的返回，只取回执需要的字段） */
-type OrganizeResultLite = {
-  dryRun: boolean;
-  moves: { from: string; to: string; bytes: number; reason: string }[];
-  rewrites: { projectId: string; name: string; changed: number }[];
-  libraryUpdated: { id: string; name: string; changed: number }[];
-  skipped: { rel: string; reason: string }[];
-  freedDirs: string[];
-  libraryMissing: number;
-};
-
-const formatBytes = (n: number): string =>
-  n >= 1024 * 1024 ? `${(n / 1024 / 1024).toFixed(1)}MB` : `${Math.max(1, Math.round(n / 1024))}KB`;
-
-type LoudnessLite = {  src: string;
-  durationSec: number;
-  lufs: number;
-  peakDb: number;
-  rmsDb: number;
-  curve: number[];
-  /** 逐点窗口峰值（dBFS），压缩限幅用；旧缓存可能没有 */
-  peakCurve?: number[];
-  stepMs: number;
-  cached?: boolean;
-};
-
-/**
- * 读素材响度。只对本地素材有效：公网 URL 我们不下载文件，返回 null 让调用方跳过检查。
- * 服务端有缓存（文件 size+mtime 指纹），同一个文件重复调是毫秒级。
- */
-async function loudnessOf(src: string): Promise<LoudnessLite | null> {
-  if (!src.startsWith("/assets/")) return null;
-  try {
-    const res = await fetch(`${BASE}/api/audio/loudness`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ src }),
-    });
-    if (!res.ok) return null;
-    const data = (await res.json()) as { result?: LoudnessLite };
-    return data.result ?? null;
-  } catch {
-    return null; // 分析失败（格式不支持等）不该阻塞主操作
-  }
-}
-
-/**
- * 放大后的削波提醒。
- *
- * 为什么必须有：>1 是数字放大，源文件峰值本来就接近满刻度时放大直接爆音，
- * 而代码不会报任何错 —— 只有听完才知道。这里用真实峰值算一次，提前把"最大安全音量"给出来。
- */
-async function clipWarning(src: string, gain: number): Promise<string | null> {
-  if (gain <= 1.001) return null;
-  const info = await loudnessOf(src);
-  if (!info || !Number.isFinite(info.peakDb)) return null;
-  const afterDb = info.peakDb + 20 * Math.log10(gain);
-  if (afterDb <= -0.1) return null;
-
-  const safeGain = Math.min(MAX_VOLUME, Math.pow(10, (-1 - info.peakDb) / 20));
-  const safePct = Math.max(1, Math.floor(safeGain * 100));
-  const capped = safeGain >= MAX_VOLUME ? `（该素材即使放到上限 ${MAX_VOLUME}× 也仍会削波，建议先换更好的源文件）` : "";
-  return (
-    `⚠️ 削波提醒：素材峰值 ${info.peakDb}dBFS × ${Math.round(gain * 100)}% = ${afterDb.toFixed(1)}dBFS，` +
-    `超过 0dBFS 会爆音。不削波的最大音量约 ${safePct}%${capped}`
-  );
-}
-
-/** 严格参数校验：未知 key 报错、类型不符报错、缺必填报错。
- * 为什么不用 SDK 默认（non-strict）：未知 key 会被静默剥掉，工具拿到 undefined 后
- * 静默失败或泄漏 undefined（黑盒验证报告 P1-04~07 的一整类问题）。
- *
- * 2026-10-31 补充：顶层 strict 只兜住第一层。`segments: [{dur:0,end:3}]` 这种
- * **数组元素内部**的错名会被 zod 静默 strip —— 于是工具回「已保存」，回显却是 `?–?s`。
- * 那次制作里 8 次「假成功」全是这一个口子。下面这层递归把任意深度的未知 key 都揪出来。 */
-export function validateToolArgs(def: ToolDef, args: Record<string, unknown>): Record<string, unknown> {
-  const schema = z.object(def.shape).strict();
-  const parsed = schema.safeParse(args ?? {});
-  if (!parsed.success) {
-    const issues: any[] = (parsed.error as any)?.issues ?? [];
-    const msgs = issues.map((iss) => {
-      if (iss.code === "unrecognized_keys") {
-        const allowed = Object.keys(def.shape);
-        return (iss.keys ?? [])
-          .map((k: string) => {
-            const retired = RETIRED_FIELDS[k.toLowerCase()];
-            if (retired) return `不认识的参数：${k} —— 该字段已退役，请改用 ${retired}`;
-            const near = nearestKeys(k, allowed);
-            return near.length
-              ? `不认识的参数：${k}，你是不是要 ${near.join(" / ")}`
-              : `不认识的参数：${k}（本工具可用：${allowed.slice(0, 10).join("、")}…共 ${allowed.length} 个，全表用 tool_search）`;
-          })
-          .join("；");
-      }
-      const p = iss.path?.length ? iss.path.join(".") : "(根)";
-      // elementId 收数字不是"类型错"，是把下标塞进了 id 槽 —— 这种错必须指路
-      if (iss.code === "invalid_type" && p === "elementId") {
-        return `elementId 要的是元素 id（字符串）。按下标改请用 index: N（从 0 开始）`;
-      }
-      return `参数「${p}」不合法：${iss.message}`;
-    });
-    throw new Error(`参数校验失败（${def.name}）：${msgs.join("；")}`);
-  }
-  const unknown = findUnknownKeys(schema, args ?? {}, "");
-  if (unknown.length) {
-    const lines = unknown.slice(0, 6).map((u) => {
-      const near = nearestKeys(u.key, u.allowed);
-      const hint = near.length ? `，你是不是要 ${near.join(" / ")}` : "";
-      return `  · ${u.path}.${u.key} 不认识${hint}（该处可用：${u.allowed.slice(0, 12).join("、")}）`;
-    });
-    if (unknown.length > 6) lines.push(`  …还有 ${unknown.length - 6} 处`);
-    throw new Error(
-      `参数校验失败（${def.name}）：${unknown.length} 个字段名对不上，没有被保存。\n` +
-        lines.join("\n") +
-        `\n（嵌套字段写错时以前会「保存成功但字段没生效」，现在直接拒绝）`,
-    );
-  }
-  return parsed.data as Record<string, unknown>;
-}
-
-type UnknownHit = { path: string; key: string; allowed: string[] };
-
-/** 已退役的字段名 → 现在该用的名字。报「不认识」不够，得告诉它换哪个 */
-const RETIRED_FIELDS: Record<string, string> = {
-  mustinclude: "mustInfo（[{text, where}]）",
-  delivery: "deliverables（[{type, spec}]）",
-};
-
-/** 递归找未知 key：只走 object / array / optional 这条链，碰上 record、union 就停（那是开放结构） */
-function findUnknownKeys(schema: unknown, value: unknown, path: string): UnknownHit[] {
-  const out: UnknownHit[] = [];
-  if (value === null || value === undefined) return out;
-  const t = unwrapZod(schema);
-  const tn = (t as any)?._def?.typeName as string | undefined;
-  if (!tn) return out;
-
-  if (tn === "ZodObject") {
-    if (typeof value !== "object" || Array.isArray(value)) return out;
-    const rawShape = (t as any)._def.shape;
-    const shape = (typeof rawShape === "function" ? rawShape() : rawShape) as Record<string, unknown>;
-    const allowed = Object.keys(shape ?? {});
-    for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
-      const here = path ? `${path}.${k}` : k;
-      if (!(k in (shape ?? {}))) out.push({ path: path || "(根)", key: k, allowed });
-      else out.push(...findUnknownKeys(shape[k], v, here));
-    }
-    return out;
-  }
-  if (tn === "ZodArray") {
-    if (!Array.isArray(value)) return out;
-    value.forEach((v, i) => out.push(...findUnknownKeys((t as any)._def.type, v, `${path}[${i}]`)));
-    return out;
-  }
-  return out;
-}
-
-/** 剥掉 optional / default / nullable / effects，拿到真正的结构 */
-function unwrapZod(t: unknown): unknown {
-  let cur = t as any;
-  for (let i = 0; i < 6 && cur?._def; i++) {
-    const tn = cur._def.typeName as string;
-    if (tn === "ZodOptional" || tn === "ZodNullable" || tn === "ZodDefault") cur = cur._def.innerType;
-    else if (tn === "ZodEffects") cur = cur._def.schema;
-    else break;
-  }
-  return cur;
-}
-
-/** 拼错的字段名 → 最像的正确名字（按编辑距离，阈值随长度放宽） */
-function nearestKeys(wrong: string, allowed: string[]): string[] {
-  // 时间区间的同义词：`dur` / `from-to` / `start-end` 与 startSec/endSec 的编辑距离太远，
-  // 纯距离算法给不出建议 —— 而那一族恰恰是那次制作里连试四次的错。
-  const TIME_WORDS = ["dur", "duration", "durationsec", "from", "to", "start", "end", "begin", "finish", "time", "sec", "seconds"];
-  const w = wrong.toLowerCase();
-  if (TIME_WORDS.includes(w)) {
-    const timeKeys = allowed.filter((k) => /^(start|end|from|to|dur)/i.test(k));
-    if (timeKeys.length) return timeKeys.slice(0, 2);
-  }
-  const scored = allowed
-    .map((k) => ({ k, d: editDistance(w, k.toLowerCase()) }))
-    .filter((x) => x.d <= Math.max(2, Math.floor(wrong.length / 3)))
-    .sort((a, b) => a.d - b.d);
-  return scored.slice(0, 2).map((x) => x.k);
-}
-
-function editDistance(a: string, b: string): number {
-  if (a === b) return 0;
-  const m = a.length;
-  const n = b.length;
-  if (!m) return n;
-  if (!n) return m;
-  let prev = Array.from({ length: n + 1 }, (_, i) => i);
-  for (let i = 1; i <= m; i++) {
-    const cur = [i];
-    for (let j = 1; j <= n; j++) {
-      cur[j] = Math.min(prev[j] + 1, cur[j - 1] + 1, prev[j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1));
-    }
-    prev = cur;
-  }
-  return prev[n];
-}
-
-/** zod shape → { 参数名?: 说明 + 嵌套字段 }（describe 写在 optional 内外都能取到）
- *
- * 为什么必须带嵌套字段：门面模式下 agent 只看到 tool_search 的回执，看不到 JSON Schema。
- * 以前这里只输出顶层 key + 描述，于是 `segments` 里到底叫 startSec 还是 from/to
- * 完全不可见 —— 那次试了四次才命中（前三次还都返回"已保存"）。 */
-function paramDocs(shape: Record<string, z.ZodTypeAny>): Record<string, string> {
-  const out: Record<string, string> = {};
-  for (const [k, t] of Object.entries(shape)) {
-    const anyT = t as any;
-    const optional = !!anyT?.isOptional?.();
-    const desc = descOf(t);
-    const hint = structHint(t);
-    out[`${k}${optional ? "?" : ""}`] = `${desc || "—"}${hint ? ` 【${hint}】` : ""}`;
-  }
-  return out;
-}
-
-/** 参数自带的描述（写在外层或 unwrap 后的都认） */
-function descOf(t: unknown): string {
-  const outer = (t as { description?: string })?.description;
-  if (outer) return outer;
-  const inner = (unwrapZod(t) as { description?: string })?.description;
-  return inner ?? "";
-}
-
-/** 描述取第一句，给嵌套字段列表用（太长会把回执撑爆） */
-function firstClause(s: string, max = 16): string {
-  const head = s.split(/[。；;\n]/)[0] ?? s;
-  return head.length > max ? `${head.slice(0, max)}…` : head;
-}
-
-/** 嵌套结构提示：对象给字段清单，数组给"数组项字段" */
-function structHint(t: unknown, depth = 0): string {
-  const u = unwrapZod(t) as any;
-  const tn = u?._def?.typeName as string | undefined;
-  const fieldsOf = (obj: any) => {
-    const raw = obj?._def?.shape;
-    const shape = (typeof raw === "function" ? raw() : raw) ?? {};
-    return Object.entries(shape).map(([k, v]: [string, any]) => {
-      const d = descOf(v);
-      return d ? `${k}(${firstClause(d)})` : k;
-    });
-  };
-  if (depth > 0) return "";
-  if (tn === "ZodObject") return `字段：${fieldsOf(u).join("、")}`;
-  if (tn === "ZodArray") {
-    const el = unwrapZod(u._def.type) as any;
-    if (el?._def?.typeName === "ZodObject") return `数组项字段：${fieldsOf(el).join("、")}`;
-  }
-  return "";
-}
-
-function fullDoc(d: ToolDef) {
-  return { name: d.name, description: d.description, params: paramDocs(d.shape) };
-}
 
 /** 中文口语意图 → 工具名别名（搜索加分项；描述里已含的词不用写这里） */
 const SEARCH_ALIASES: Record<string, string[]> = {
@@ -8843,6 +5772,11 @@ const SEARCH_ALIASES: Record<string, string[]> = {
   自检: ["check_project"],
   记住: ["remember"],
   回忆: ["recall"],
+  统计: ["tool_stats"],
+  调用日志: ["tool_stats"],
+  失败率: ["tool_stats"],
+  慢: ["tool_stats"],
+  性能: ["tool_stats"],
 };
 
 
@@ -8855,17 +5789,26 @@ export type { ToolDef };
  * 但非核心工具在注册表里标记 enabled=false —— SDK 的 tools/list 只返回 enabled 的，
  * 于是宿主只看到 4 个核心入口。MCP_EXPOSE=all 恢复全量暴露（调试用）。 */
 export function buildMcpServer(): McpServer {
-  const server = new McpServer({ name: "remotion-studio", version: "1.1.0" });
+  const server = new McpServer({ name: "remotion-studio", version: VERSION });
   const exposeAll = exposeAllTools();
   for (const def of TOOLS) {
     const handler = async (args: Record<string, any>) => {
+      /**
+       * 日志记真实工具名：门面模式下所有调用都经 tool_call，
+       * 只记 "tool_call" 会让统计全是同一个名字，等于没记。
+       */
+      const inner = def.name === "tool_call" ? String(args?.name ?? "") : "";
+      const logAs = inner || def.name;
+      const startedAt = performance.now();
       try {
         let out = await def.run(args ?? {});
         out = liftWarnings(String(out));
         if (dirtySincePreview && needsDirtyHint(def.name)) out = String(out) + DIRTY_HINT;
+        logToolCall({ tool: logAs, args: inner ? args?.args : args, startedAt, ok: true });
         return { content: [{ type: "text" as const, text: text(out) }] };
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
+        logToolCall({ tool: logAs, args, startedAt, ok: false, error: err });
         return {
           content: [{ type: "text" as const, text: `失败：${message}` }],
           isError: true,

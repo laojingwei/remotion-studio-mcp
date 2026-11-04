@@ -3,7 +3,8 @@
 一份 `Project JSON`，三个消费方：**Agent 改它、用户在 Web 上拖它、Remotion 渲染它**。
 因为共用同一个数据源，agent 和用户的编辑天然互通 —— 不是后期加的功能，是架构的结果。
 
-> **版本** 1.1.0（开发线 v1.01）· **MCP 工具** 112 个（4 个常驻 + 108 个按需发现）·
+> **版本** 1.1.0（开发线 v1.01）· **MCP 工具** 123 个（4 个常驻 + 119 个按需发现）·
+> **变更** 每一版改了什么见 [CHANGELOG.md](CHANGELOG.md)
 > **许可** 本仓库代码 MIT，依赖里有两个非宽松（Remotion License / AGPL），见 [开源协议](#开源协议)
 
 ---
@@ -41,15 +42,32 @@ npm run dev          # API(4380) + 编辑器(5173)
   ```
 - 改完代码自检：
   ```bash
-  npm test                  # op reducer 单测（纯函数，不需要服务）
-  npm run build && npm run verify   # 端到端冒烟：临时工程 + 无头浏览器真实拖动，跑完自动清理
+  npm test                  # 单测：op reducer / 场景 / 音频 / 3D DSL / 安全边界（不需要服务）
+  npm run build && npm run test:e2e  # 编辑器 E2E：真浏览器跑 5 条核心路径（临时数据目录，不碰你的工程）
+  npm run build && npm run verify    # 端到端冒烟：临时工程 + 无头浏览器真实拖动，跑完自动清理
   ```
+
+> 推到 `main` 或开 PR 时，GitHub Actions 会跑同一套命令（typecheck → 全量测试 → build → 真浏览器 E2E），
+> 见 `.github/workflows/ci.yml`。CI 是全新 Ubuntu，`data/ out/ public/` 都不在仓库里，
+> 所以 `npm test` 开头会先跑 `scripts/ensure-dirs.mjs` 建目录。
 
 > **两种端口别混用**：`npm start` / bat 启动后编辑器在 **4380**；
 > `npm run dev` 启动后编辑器在 **5173**（4380 是后端）。打开错了会看到 JSON。
 
 > **端口注意**：默认 4380。如果本机被别的软件占用（例如 QQ 会监听 4310），
 > 用 `PORT=4400 npm run dev:server` 换端口，并同步 `SERVER_URL` 环境变量给 MCP 代理。
+
+### 本地服务的安全边界
+
+编辑器能删文件、能起渲染、能改工程，所以默认**只监听 `127.0.0.1`**：
+
+- 同网段的其它设备连不上（不是靠防火墙，是根本没监听在网卡上）。
+- 写请求额外校验 `Host` 与 `Origin`：挡住 DNS rebinding 和"任意网页跨站调 `/mcp` 的 `tool_call`"。
+  注意 CORS 缺省**不等于**防 CSRF —— `text/plain` 的简单请求不触发预检，照样会被执行。
+- 真要给同事看，显式开放：`HOST=0.0.0.0 npm start`（启动日志会打一行 ⚠️ 提醒）。
+- 排障时 `/api/health` 会回 `version / host / lan`，先确认这三项再怀疑别处。
+- 想把运行期数据放到别处（多实例并行、CI、换盘）：`STUDIO_DATA_ROOT=/path/to/data npm start`。
+  设了它之后「工作空间」页签的迁移会被明确拒绝——两套路径机制同时开只会互相打架。
 
 ---
 
@@ -121,9 +139,9 @@ http://127.0.0.1:4380/mcp
 
 > 注意地址要带 `/mcp`：`/` 是编辑器本身的 HTTP API（REST + SSE），不是 MCP 端点。
 
-### 工具清单（112 个 = 4 常驻 + 108 按需）
+### 工具清单（123 个 = 4 常驻 + 119 按需）
 
-**门面模式**：宿主只看到 4 个常驻工具，其余 108 个用 `tool_search` 按意图现找、用 `tool_call` 执行。
+**门面模式**：宿主只看到 4 个常驻工具，其余 119 个用 `tool_search` 按意图现找、用 `tool_call` 执行。
 这样工具描述不占常驻上下文（否则光工具说明就要几万 token）。
 
 ```
@@ -139,7 +157,7 @@ get_guide(name="manual", section="…")   → 按需读指南（不常驻）
 | 分组 | 工具 |
 |---|---|
 | 门面（常驻） | `start_guide` / `get_guide` / `tool_search` / `tool_call` |
-| 工程 | `create_project` / `list_projects` / `switch_project` / `get_project` / `delete_project` / `export_project` / `import_project` / `restore_rev` / `get_history` / `list_templates` / `save_template` / `delete_template` |
+| 工程 | `create_project` / `list_projects` / `switch_project` / `get_project` / `archive_project` / `delete_project` / `export_project` / `import_project` / `restore_rev` / `get_history` / `list_templates` / `save_template` / `delete_template` |
 | 场景 | `list_scene_types` / `add_scene` / `update_scene` / `get_scene` / `set_scene_type` / `set_scene_timing` / `remove_scene` / `duplicate_scene` / `reorder_scenes` / `move_scene`（多轨定位）/ `set_scene_box`（画中画） |
 | 批量 | `apply_ops`（整批原子，回传新增的 scene/element id） |
 | 元素 | `list_element_library` / `add_element` / `update_element` / `remove_element` / `set_transform` / `layout_grid` / `align_elements` |
@@ -147,7 +165,7 @@ get_guide(name="manual", section="…")   → 按需读指南（不常驻）
 | 特效轨 | `list_effect_types` / `add_effect` / `update_effect` / `remove_effect` |
 | 转场 | `set_transition`（单幕）/ `set_transitions`（批量，给全部或指定场景套同一套） |
 | 音频 | `set_audio`（含 ducking 人声避让）/ `add_audio_track` / `update_audio_track` / `remove_audio_track` / `balance_audio`（响度配平）/ `compress_audio`（动态压缩）/ `analyze_audio`（BPM + 拍点）/ `set_beat_grid`（手填 BPM） |
-| 语音 | `get_tts_config` / `set_tts_config` / `tts_check`（预检，`deep=true` 会真合成一句）/ `tts_synthesize` / `tts_narration`（多段旁白一次合成 + 对齐幕长） |
+| 语音 | `get_tts_config` / `set_tts_config` / `tts_check`（预检，`deep=true` 会真合成一句）/ `tts_synthesize` / `tts_narration`（多段旁白一次合成 + 对齐幕长）/ `revise_script`（**改稿即改片**：只重配改动的段，同步幕长/字幕/分镜/时间骨架） |
 | 字幕 | `set_subtitle` / `set_subtitle_style` / `export_subtitles` |
 | 主题 / 画幅 | `set_theme` / `set_formats` |
 | 渲染 | `preview_frame` / `preview_frames` / `render_video` / `get_render_status` / `cancel_render` / `refresh_bundle` / `cleanup_renders` |
@@ -155,7 +173,8 @@ get_guide(name="manual", section="…")   → 按需读指南（不常驻）
 | 风格 | `list_styles` / `get_style` / `apply_style`（一键套风格） |
 | 需求 / 分镜 | `intake`（9 步问诊）/ `save_brief` / `get_brief` / `confirm_brief` / `save_storyboard` / `get_storyboard` / `build_storyboard` / `check_project`（只读诊断） |
 | 技能 / 记忆 | `list_guides` / `remember` / `recall` |
-| 协作 | `get_user_messages` / `reply_user` |
+| 协作 | `get_user_messages` / `reply_user` / `get_annotations`（逐帧批注）/ `resolve_annotation`（标已修） |
+| 自检 | `tool_stats`（最近 7 天的调用次数 / 失败率 / 高频报错，来自 `data/logs/tool-calls-*.jsonl`） |
 
 几个省 token 的开关：
 
@@ -185,7 +204,7 @@ get_guide(name="manual", section="…")   → 按需读指南（不常驻）
 | `scene-recipes` | 75 个版式配方（适用场景 / items 建议 / 坑） |
 | `craft` | 画面质感：签名时刻、层次、留白、动效节奏 |
 | `freeform` | 自由画布写法（`add_freeform_element` 的元素/关键帧/fx） |
-| `scene3d` | **3D 场景**：6 个预设、`graph` 全字段、公转/卫星、太阳系完整示例、13 个坑 |
+| `scene3d` | **3D 场景**：6 个预设、`graph` 全字段、世界背景/全景图/地面阴影、公转/卫星、太阳系完整示例、13 个坑 |
 | `external-tools` | **iso 图解**：anatomy 出图 → 落盘 → 套主题 |
 | `sound` | 声音设计：BGM 选择、人声避让、响度配平、卡点 |
 | `narration` | 旁白写法 / TTS 分段 / 时长对齐公式 |
@@ -535,7 +554,11 @@ screen = stageCenter + pan + zoom * localPoint
 | 增删画幅 / 自定义尺寸 | 顶部画幅条末尾的 `＋`：切预设，或输入任意宽高（16–7680）加一个自定义画幅 |
 | **从模板新建** | 工程下拉菜单 → `＋ 新建项目` → 选模板 |
 | 复制 / 删除工程 | 工程下拉菜单底部（删除会二次确认） |
-| 清理渲染产物 | 工程下拉菜单 → 「清理渲染产物」（保留最近 5 次成片） |
+| 看产物 / 预览 | 顶栏「产物」（渲染左边）：点一行就地看图 / 视频 / 音频 / 字幕 |
+| 锁定产物（防自动清理） | 产物浮框里点行尾的 🔓；锁定后自动清理跳过它 |
+| 清理渲染产物 | 工程下拉菜单 → 「清理渲染产物」或产物浮框右上「管理…」（保留最近 5 次成片） |
+| **对某一帧提意见** | 画面右上「批注」→ 停到出问题的那一帧 → 写一句 → 保存（Ctrl/⌘+Enter）。agent 用 `get_annotations` 读到「第几幕 + 幕内第几帧 + 原话」，改完标「已修」 |
+| 看 agent 干了什么 | 顶栏 `⋯` → 「运行日志」：每次工具调用的时间 / 工具名 / 耗时 / 参数 / 报错，2.5 秒自动刷新（可暂停） |
 | 取消渲染 | 渲染进度旁出现的「取消」按钮 |
 
 ### 场景类型
@@ -582,10 +605,13 @@ screen = stageCenter + pan + zoom * localPoint
     "post": { "bloom": 1.2 } } } }
 ```
 
-- **几何体白名单 13 种**：`box` `sphere` `cylinder` `cone` `torus` `torusKnot` `plane` `capsule` `icosahedron` `dodecahedron` `octahedron` `ring`（环/行星环）`dashRing`（轨道虚线）
+- **几何体白名单 14 种**：`box` `sphere` `cylinder` `cone` `torus` `torusKnot` `plane` `capsule` `icosahedron` `dodecahedron` `octahedron` `ring`（环/行星环）`dashRing`（轨道虚线）`group`（纯枢轴，不渲染，只带子节点；`geometry` 省略即 group）
 - **材质**：`standard`（PBR）/ `physical`（玻璃）/ `basic`（线框、剪影）；支持 `emissive` 自发光、`map` 外部贴图、`opacity`、`side`、`flatShading`
 - **`parent` 层级**：子节点继承父节点的位移/旋转 —— 行星挂在旋转的轨道环下面是"公转"，行星自己的 `rotY` 是"自转"，土星环挂在土星上跟着倾斜
 - **`lights`**：给了它就接管打光（预设的四盏方向光撤掉）。点光放在太阳位置，行星转到哪儿就照到哪儿 —— 昼夜面就对了
+- **`world` 世界**：默认不再是主题底色，而是独立的渐变天空（带 `haze` 空气透视与 `vignette` 暗角）；`mode:"image"` 换成等距柱状全景图，同一张 HDR 同时当环境照明 —— 太阳方位、天光颜色、地面反光都来自照片，这是"像真的"最大的一步
+- **`ground` 自动地面**：不写高度就落在所有节点的最低点，主光自动投影。接触阴影是"落地感"的全部来源；配全景图时用 `mode:"shadow"`，只落影子、让照片里的地透出来
+- **换背景最省事**：`set_graph_scene { worldPreset:"golden-hour" }` —— 12 组题材配方（春夏秋冬 / 晨午黄昏 / 城市夜景 / 银河 / 工业厂房 / 居家），连补光和后处理一起配好；`list_world_skies` 列清单并检查本机文件在不在。素材是 Poly Haven 的 CC0 HDRI，**不进仓库**（`public/` 被忽略），要自己下载或让用户提供
 - 上限：节点 48、每节点动画 8 段、灯 8 盏、粒子 6000。**中文不进 3D**，标题走 `title` / `sub` 的 2D 叠层
 
 写完整参数、套路（公转/卫星、太阳 + 昼夜面、土星环）和一个 18 节点的太阳系示例见
@@ -603,7 +629,7 @@ screen = stageCenter + pan + zoom * localPoint
 三条实现约定值得知道：
 
 - **一次手势 = 一条 `update_graph_node` = 一步撤销**，和自由画布拖拽一致；写请求走 store 的串行队列，不会互相覆盖。
-- **agent 和人是同一批 op**：`get_graph` 看大纲，`update_graph_node` 改单个节点，`set_graph_scene` 改相机/灯光/粒子/辉光。整份 `update_scene({props:{graph}})` 会把面板上的改动一起抹掉，所以文档里明确要求改节点别整份覆盖。
+- **agent 和人是同一批 op**：`get_graph` 看大纲，`update_graph_node` 改单个节点，`set_graph_scene` 改相机/世界/灯光/地面/粒子/辉光。整份 `update_scene({props:{graph}})` 会把面板上的改动一起抹掉，所以文档里明确要求改节点别整份覆盖。
 - **换父级保持世界变换**：把行星拖到另一个枢轴下，位置/角度/大小都不变（矩阵换算在 `shared/scene3dTransform.ts`，不依赖 three，有单测）。
 - 预置场景（没有 `graph`）的面板里有一个「换成可编辑场景图」入口 —— 它**不是**把预设翻译成节点树，而是新建一张最小可编辑的图，文案里写清了。
 
@@ -771,6 +797,27 @@ agent 通过 MCP 工具 `get_user_messages` 读取、`reply_user` 回复，回�
 - 消息存在 `data/agent-chat.json`（本机数据，已 gitignore）
 - 接口：`GET /api/agent/messages`、`POST /api/agent/messages`、`POST /api/agent/reply`、`POST /api/agent/read`
 
+### 时间码批注（把"哪里不对"钉到帧上）
+
+用户看完片说「第 3 幕有点怪」，agent 只能猜是哪一帧——这是返工最大的来源。
+所以编辑器里可以**停到出问题的那一帧**写一句：
+
+- 画面右上「批注」→ 输入框写原话 → 保存（`Ctrl/⌘ + Enter`）
+- 列表里每条带「第 N 幕 · 时间码」，点一下跳回那一帧；改完点「已修」（不删数据，可以「恢复」）
+- agent 侧：`get_annotations` 读全部未解决批注（含 `sceneId` / 幕内帧 / 时间码），
+  逐条 `preview_frames(sceneId, frames=[幕内帧])` 看现场，改完 `resolve_annotation(ids=[...])`
+- 存 `data/projects/<id>/annotations.json`，记**幕内帧**（别的幕改时长不会让它错位）
+- 接口：`GET/POST /api/projects/:id/annotations`、`POST …/annotations/resolve`、`DELETE …/annotations/:aid`
+
+### 运行日志（agent 到底做了什么）
+
+顶栏 `⋯` → 「运行日志」：实时看 agent 每次工具调用——时间、工具名、耗时、参数摘要、报错，
+支持按工具名/参数搜索、只看失败、切近 3/7 天。日志来自 `data/logs/tool-calls-*.jsonl`
+（按天轮转、保留 7 天），和 agent 侧的 `tool_stats` 是同一份数据。
+
+> 注意：日志由**服务进程**写。stdio 代理（`mcp-proxy.ts`）里的工具调用也会经 HTTP 打到服务端，
+> 所以正常都记；只有代理自己在本地就报错的情况不记。
+
 ### 音频
 
 - **背景音乐**：属性面板里设置，支持淡入淡出，从头铺到尾
@@ -804,12 +851,22 @@ agent 通过 MCP 工具 `get_user_messages` 读取、`reply_user` 回复，回�
 ```
 out/projects/<工程id>/
 ├── videos/      <工程名>_<时间>_<画幅>__<工程id>.mp4
-├── stills/      <画幅>-<帧>.png
+├── covers/      <画幅>-<帧>-r<rev>.png        ← 封面候选（render_cover）
+├── stills/      <画幅>-<帧>-r<rev>.png        ← 关键帧（preview_frames）
+├── previews/    clip_<画幅>_<起>-<止>_r<rev>_<时间>-preview.mp4
 └── subtitles/   <工程名>_<时间>.srt
 ```
 
+`covers/` 是 2026-11 才独立出来的：在这之前封面和关键帧同目录同命名，
+产物列表里根本分不清哪张是封面（老工程的封面仍留在 `stills/` 里，不迁移）。
+`previews/` 是临时产物，**只保留最近 10 个**（`cleanup_renders` 会收）。
+
 `out/videos`、`out/stills`、`out/subtitles` 三个老目录已退役（如果还有，清理时会一并收掉）。
-产物面板按工程分组，**工程已删的产物单独一组显示为孤儿**，可以一次清掉。
+
+**顶栏「产物」按钮**（渲染左边）：点开是当前工程的产物浮框，按成片 / 封面 / 预览片段 /
+关键帧 / 字幕分 tab，点一行就地预览（图片直接显示、视频音频带进度条、字幕出文本）。
+行尾的锁图标可以**锁定**一条产物：锁定的文件不会被自动清理删掉（手动勾选删除仍然可以）。
+浮框右上「管理…」进到清理弹窗。
 
 工程菜单里的「清理渲染产物」/ MCP 的 `cleanup_renders`：
 
@@ -916,7 +973,7 @@ server/              唯一写入口 + 渲染队列 + MCP 代理
   store             project.json 读写 + 脏数据自愈（坏字段不让整个列表挂掉）
   assets.service    素材布局：library/ 共用库、projects/<id>/ 工程私有、_preview/ 临时
   library.service   「我的素材」索引（data/library.json）
-  outputs.service   渲染产物（out/projects/<工程 id>/{videos,stills,subtitles}）
+  outputs.service   渲染产物（out/projects/<工程 id>/{videos,covers,stills,previews,subtitles}）
   workspace.service 工作空间：data/public/out 迁到别的盘（留 junction）、目录浏览
   audio-analysis.service  BPM / 拍点（essentia 懒加载，喂之前重采样到 22050）
   loudness.service  LUFS / 峰值 / 增益曲线
@@ -925,7 +982,7 @@ server/              唯一写入口 + 渲染队列 + MCP 代理
   bundle.service    工程包导入导出（project.json + assets + manifest）
   zip.ts            最小 zip 读写（写 stored，读兼容 deflate）
   render.service    bundle 缓存 + 素材同步 + 渲染队列
-  mcp-tools.ts      全部工具定义（112 个，含 4 个常驻门面）
+  mcp-tools.ts      工具聚合与门面（123 个 = 4 常驻 + 119 按需）
   mcp-proxy.ts      stdio 代理（工具调用转发给 HTTP 服务）
   skills/           18 篇技能指南（list_guides / get_guide 读）
 web/                 编辑器：预览 / 属性面板 / 时间轴 / 素材面板 / 详情浮窗
@@ -937,7 +994,7 @@ public/assets/
   library/           「我的素材」共用池（跨工程复用，删工程不动它）
   projects/<id>/     工程私有素材（含 TTS 配音，删工程连带清）
   _preview/          试听 / 预检的临时产物（按需创建，可被「清理未引用」收掉）
-out/projects/<id>/   渲染产物（videos / stills / subtitles）
+out/projects/<id>/   渲染产物（videos / covers / stills / previews / subtitles）
 out/project-bundles/ 导出的工程包 zip（**不按工程删**，它是交付/备份）
 ```
 

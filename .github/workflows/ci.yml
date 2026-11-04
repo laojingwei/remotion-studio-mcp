@@ -1,0 +1,92 @@
+name: ci
+
+# 合码前的质量门：类型检查 → 全量测试 → 构建 →（独立 job）真浏览器 E2E。
+#
+# 只在这些时机跑：
+#   - 推 main（日常主干）
+#   - 任意 PR（这是主要用途）
+#   - 手动触发
+# 之前是 `push: branches: ['**']`，意味着推每个特性分支都会跑两遍（push + PR），
+# 私人仓库会白烧 Actions 额度，公开仓库也会把队列排满。
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+
+      # test-media 用 ffprobe 读时长。runner 镜像通常自带，显式装一次免得随镜像变化。
+      - name: 安装 ffmpeg
+        run: |
+          if ! command -v ffprobe >/dev/null 2>&1; then
+            sudo apt-get update -qq && sudo apt-get install -y -qq ffmpeg
+          fi
+          ffprobe -version | head -1
+
+      - name: 安装依赖
+        run: npm ci --no-audit --no-fund
+
+      - name: 类型检查
+        run: npm run typecheck
+
+      # 全新 clone 没有 data/ out/ public/（都在 .gitignore 里），
+      # 有测试会往里写临时 wav，缺目录直接 ENOENT。ensure-dirs 是幂等的。
+      - name: 准备运行期目录
+        run: node scripts/ensure-dirs.mjs
+
+      - name: 测试（全量）
+        run: npm test
+
+      - name: 构建编辑器
+        run: npm run build
+
+      - name: 版本一致性
+        run: node scripts/check-version.mjs
+
+  # 真浏览器回归：起服务 + 临时数据目录 + 5 条核心路径。
+  # 单独一个 job：它要装 Chromium、要 build，失败原因和单测完全不同。
+  e2e:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+
+      - name: 安装依赖
+        run: npm ci --no-audit --no-fund
+
+      - name: 安装 Chromium
+        run: npx playwright install --with-deps chromium
+
+      - name: 构建编辑器
+        run: npm run build
+
+      - name: 编辑器 E2E
+        run: npm run test:e2e
+
+      - name: 失败时保留截图
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-failure
+          path: out/e2e/
+          if-no-files-found: ignore

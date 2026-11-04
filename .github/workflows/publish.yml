@@ -47,6 +47,27 @@ jobs:
             exit 1
           fi
 
+      # 发布前先过一遍质量门。
+      # 之前这里直接 npm pack + publish：类型错误或测试挂了照样能发出去，
+      # 三个版本号漂移（package/README/代码）也查不出来。
+      - name: 安装依赖
+        run: npm ci --no-audit --no-fund
+
+      - name: 版本一致性
+        run: node scripts/check-version.mjs
+
+      - name: 类型检查
+        run: npm run typecheck
+
+      # 发版只跑「核心纯函数测试」：ops / store / 安全边界 / 并发语义 / 3D DSL。
+      # 全量 46 个脚本交给 ci.yml（它在同一个 commit 上已经跑过一遍）——
+      # 把带 ffmpeg / 音频 fixture 的全量链塞进发版流程，一旦平台差异导致某条挂了，
+      # 版本就永远发不出去，而失败的又往往和这次改动无关。
+      - name: 核心测试
+        run: |
+          node scripts/ensure-dirs.mjs
+          npm run test:core
+
       # 发布的是源码（package.json 的 files 已限定范围），不需要 build
       - name: 确认包内容
         run: npm pack --dry-run 2>&1 | tail -12

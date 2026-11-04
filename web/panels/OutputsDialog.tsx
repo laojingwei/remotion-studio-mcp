@@ -14,7 +14,9 @@ const fmtTime = (ms: number) =>
 
 const KIND_LABEL: Record<OutputEntry["kind"], string> = {
   video: "成片",
+  preview: "预览片段",
   still: "关键帧",
+  cover: "封面",
   subtitle: "字幕",
 };
 

@@ -2,6 +2,7 @@ import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { ROOT as PROJECT_ROOT } from "./root";
+import { PROJECTS_ROOT } from "./paths";
 import { sceneSpans } from "../shared/schema";
 import type { Project } from "../shared/schema";
 
@@ -110,7 +111,7 @@ export type VoiceState = {
 
 const fileOf = (projectId: string): string => {
   if (!/^[\w-]+$/.test(projectId)) throw new Error("非法的工程 id");
-  return path.join(PROJECT_ROOT, "data", "projects", projectId, "narration-voice.json");
+  return path.join(PROJECTS_ROOT, projectId, "narration-voice.json");
 };
 
 export function readVoiceState(projectId: string): VoiceState | null {

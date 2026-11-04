@@ -18,17 +18,21 @@ import { OUT_DIR, listProjectIds, readProject } from "./store";
 export const OUT_PROJECTS_REL = "projects";
 export const OUT_PROJECTS_DIR = path.join(OUT_DIR, "projects");
 
-export type OutputKind = "video" | "still" | "subtitle";
+export type OutputKind = "video" | "still" | "subtitle" | "preview" | "cover";
 
 const KIND_DIR: Record<OutputKind, string> = {
   video: "videos",
   still: "stills",
   subtitle: "subtitles",
+  preview: "previews",
+  cover: "covers",
 };
 const DIR_KIND: Record<string, OutputKind> = {
   videos: "video",
   stills: "still",
   subtitles: "subtitle",
+  previews: "preview",
+  covers: "cover",
 };
 
 /** 旧版扁平目录：v0.99 之后不再写入，只在清理时一并收掉 */
@@ -69,17 +73,27 @@ export type OutputEntry = {
   projectId: string;
   /** 工程还在 → 名字；工程已删 → null（孤儿产物，可一键清） */
   projectName: string | null;
+  /** 已锁定：自动清理会跳过它（用户手动勾选删除仍然能删） */
+  locked?: boolean;
 };
 
-/** 列出所有工程目录下的产物，新的在前 */
-export function listOutputs(): OutputEntry[] {
+/**
+ * 列出产物，新的在前。
+ *
+ * 传 projectId 只扫那一个工程的目录——编辑器顶栏的「产物」浮框就只要当前工程，
+ * 而全库扫一遍要 stat 上千个文件（实测 out/ 里单工程最多 316 个），
+ * 每开一次面板都付这个代价没有意义。
+ */
+export function listOutputs(opts: { projectId?: string } = {}): OutputEntry[] {
   if (!fs.existsSync(OUT_PROJECTS_DIR)) return [];
   const alive = new Set(listProjectIds());
   const out: OutputEntry[] = [];
+  const only = opts.projectId;
 
   for (const entry of fs.readdirSync(OUT_PROJECTS_DIR, { withFileTypes: true })) {
     if (!entry.isDirectory() || entry.name.startsWith(".")) continue;
     const projectId = entry.name;
+    if (only && projectId !== only) continue;
     let projectName: string | null = null;
     if (alive.has(projectId)) {
       try {
@@ -88,6 +102,7 @@ export function listOutputs(): OutputEntry[] {
         projectName = null;
       }
     }
+    const locks = readLocks(projectId);
     for (const [dir, kind] of Object.entries(DIR_KIND)) {
       const full = path.join(OUT_PROJECTS_DIR, projectId, dir);
       if (!fs.existsSync(full)) continue;
@@ -109,11 +124,62 @@ export function listOutputs(): OutputEntry[] {
           mtimeMs: Math.round(st.mtimeMs),
           projectId,
           projectName,
+          locked: locks.has(`${dir}/${f.name}`) || undefined,
         });
       }
     }
   }
   return out.sort((a, b) => b.mtimeMs - a.mtimeMs);
+}
+
+/* ─────────────────────────── 锁定（防清理） ─────────────────────────── */
+
+/**
+ * 锁定 = 「这条别给我自动清掉」。
+ *
+ * 为什么需要：cleanupOutputs 的策略是"每个工程只留最近 5 个成片"，
+ * 而真正值钱的那一版往往不是最新的（改到第 6 版才发现第 3 版最好）。
+ * 锁只影响**自动清理**，用户手动勾选删除照样能删——锁不是权限。
+ *
+ * 存成一个隐藏文件而不是塞进 project.json：产物是"磁盘上的东西"，
+ * 工程被删/被导出时不该把这些标记跟着带走。
+ */
+const locksFileOf = (projectId: string) => path.join(projectOutDir(projectId), ".locks.json");
+
+export function readLocks(projectId: string): Set<string> {
+  try {
+    const raw = fs.readFileSync(locksFileOf(projectId), "utf8");
+    const data = JSON.parse(raw) as Record<string, boolean> | string[];
+    const list = Array.isArray(data) ? data : Object.keys(data).filter((k) => data[k]);
+    return new Set(list);
+  } catch {
+    return new Set();
+  }
+}
+
+const writeLocks = (projectId: string, locks: Set<string>): void => {
+  const file = locksFileOf(projectId);
+  try {
+    if (!locks.size) {
+      if (fs.existsSync(file)) fs.unlinkSync(file);
+      return;
+    }
+    fs.writeFileSync(file, JSON.stringify([...locks].sort(), null, 2), "utf8");
+  } catch {
+    /* 锁写不进去不影响看片，下次再写 */
+  }
+};
+
+/** 锁定/解锁一条产物。path 与 OutputEntry.path 同格式（projects/<id>/<dir>/<file>） */
+export function setOutputLock(rel: string, locked: boolean): { path: string; locked: boolean } {
+  const parsed = parseOutputPath(rel);
+  if (!parsed) throw new Error("产物路径不合法");
+  const key = `${KIND_DIR[parsed.kind]}/${parsed.file}`;
+  const locks = readLocks(parsed.projectId);
+  if (locked) locks.add(key);
+  else locks.delete(key);
+  writeLocks(parsed.projectId, locks);
+  return { path: rel, locked };
 }
 
 /* ─────────────────────────── 删除 ─────────────────────────── */
@@ -264,6 +330,10 @@ export type CleanupResult = {
   removedVideos: number;
   removedStills: number;
   removedSubtitles: number;
+  /** 封面（covers/）被收掉的数量 */
+  removedCovers: number;
+  /** 因为被锁定、本轮跳过没删的数量 */
+  skippedLocked: number;
   removedFiles: number;
   /** 工程已删除、目录被整块收掉的数量（按目录里的文件数算进 removedFiles） */
   removedOrphanDirs: number;
@@ -357,6 +427,8 @@ export function cleanupOutputs(opts: CleanupOptions = {}): CleanupResult {
     removedVideos: 0,
     removedStills: 0,
     removedSubtitles: 0,
+    removedCovers: 0,
+    skippedLocked: 0,
     removedFiles: 0,
     removedOrphanDirs: 0,
     removedLegacy: 0,
@@ -399,15 +471,29 @@ export function cleanupOutputs(opts: CleanupOptions = {}): CleanupResult {
     const videos = listDir(outDirOf(projectId, "video"));
     const stills = listDir(outDirOf(projectId, "still"));
     const subs = listDir(outDirOf(projectId, "subtitle"));
-    result.scanned += videos.length + stills.length + subs.length;
+    const covers = listDir(outDirOf(projectId, "cover"));
+    result.scanned += videos.length + stills.length + subs.length + covers.length;
+
+    /** 锁定的文件不参与自动清理——用户标"这条别删"就该一直留着（手动删仍然可以） */
+    const locks = readLocks(projectId);
+    const unlocked = (kind: OutputKind, files: OutputFile[]) => {
+      const kept = files.filter((f) => locks.has(`${KIND_DIR[kind]}/${f.name}`));
+      result.skippedLocked += kept.length;
+      return files.filter((f) => !locks.has(`${KIND_DIR[kind]}/${f.name}`));
+    };
 
     // 预览片段（6 秒带声 MP4）：小（几十 KB）但会攒，只留最近 10 个。
-    // 不放进 OutputKind 体系是有意的：它不是交付物，不该出现在产物列表里让用户困惑。
+    // 它现在是 OutputKind 的一员（产物面板里能直接播），但保留策略比成片严格得多：
+    // 它是"给眼睛看的临时产物"，不是交付物，留着占地方。
     {
       const previewDir = path.join(projectOutDir(projectId), "previews");
       if (fs.existsSync(previewDir)) {
         const clips = listDir(previewDir).sort((a, b) => b.mtimeMs - a.mtimeMs);
         for (const f of clips.slice(10)) {
+          if (locks.has(`${KIND_DIR.preview}/${f.name}`)) {
+            result.skippedLocked++;
+            continue;
+          }
           if (!dryRun) {
             try {
               fs.unlinkSync(path.join(previewDir, f.name));
@@ -420,9 +506,10 @@ export function cleanupOutputs(opts: CleanupOptions = {}): CleanupResult {
       }
     }
 
-    const doomedVideos = planVideoRemoval(videos, keepVideos);
-    const doomedStills = stills.filter((f) => f.mtimeMs < cutoff);
-    const doomedSubs = subs.filter((f) => f.mtimeMs < cutoff);
+    const doomedVideos = unlocked("video", planVideoRemoval(videos, keepVideos));
+    const doomedStills = unlocked("still", stills.filter((f) => f.mtimeMs < cutoff));
+    const doomedSubs = unlocked("subtitle", subs.filter((f) => f.mtimeMs < cutoff));
+    const doomedCovers = unlocked("cover", covers.filter((f) => f.mtimeMs < cutoff));
 
     const remove = (kind: OutputKind, files: OutputFile[]) => {
       const dir = outDirOf(projectId, kind);
@@ -436,6 +523,7 @@ export function cleanupOutputs(opts: CleanupOptions = {}): CleanupResult {
           result.freedBytes += f.size;
           if (kind === "video") result.removedVideos++;
           else if (kind === "still") result.removedStills++;
+          else if (kind === "cover") result.removedCovers++;
           else result.removedSubtitles++;
           result.removedFiles++;
         } catch {
@@ -445,6 +533,7 @@ export function cleanupOutputs(opts: CleanupOptions = {}): CleanupResult {
       if (dryRun) {
         if (kind === "video") result.removedVideos += files.length;
         else if (kind === "still") result.removedStills += files.length;
+        else if (kind === "cover") result.removedCovers += files.length;
         else result.removedSubtitles += files.length;
         result.removedFiles += files.length;
       }
@@ -452,6 +541,7 @@ export function cleanupOutputs(opts: CleanupOptions = {}): CleanupResult {
     remove("video", doomedVideos);
     remove("still", doomedStills);
     remove("subtitle", doomedSubs);
+    remove("cover", doomedCovers);
 
     result.keptVideos += videos.length - doomedVideos.length;
     if (!dryRun) pruneProjectDirs(projectId);

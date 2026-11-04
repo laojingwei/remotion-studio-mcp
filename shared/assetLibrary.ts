@@ -37,6 +37,17 @@ export const assetIdOf = (libraryId: string) => libraryId.slice(ASSET_PREFIX.len
 export const assetLibraryId = (assetId: string) => `${ASSET_PREFIX}${assetId}`;
 
 /**
+ * 「用户/agent 手上那个字符串」→ 裸素材 id，带不带 `asset:` 前缀都收。
+ *
+ * 为什么需要：upload_asset 回执写的是 `素材 id：asset:as_xxx`（因为 add_element 的
+ * libraryId 要这个形式），而 delete_asset / rename_asset 打的是 `/api/library/<裸 id>`。
+ * 只认裸 id 的后果是——刚上传成功，照抄回执去删，得到「素材库里没有 asset:as_xxx」。
+ * 在入口处统一收口，比要求调用方记住哪几个接口用哪种写法可靠。
+ */
+export const toAssetId = (idOrLibraryId: string) =>
+  isAssetLibraryId(idOrLibraryId) ? assetIdOf(idOrLibraryId) : idOrLibraryId;
+
+/**
  * 默认摆放宽度（**短边百分比**，和自由元素同一套坐标）。
  *
  * 竖图不能按横图的宽度放：同样 30% 宽，16:9 的图只占半屏高，9:16 的图会顶穿画面。

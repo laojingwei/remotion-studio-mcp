@@ -16,6 +16,7 @@ import {
   readProjSort,
   sortProjects,
   timeOf,
+  countArchived,
 } from "../web/projectFilter";
 
 let passed = 0;
@@ -127,6 +128,39 @@ test("列表显示的时间跟着排序字段走", () => {
   assert.equal(timeOf(A, "created"), A.createdAt);
   // 按名称排时没有"时间维"，退回创建时间，至少不是空的
   assert.equal(timeOf(A, "name"), A.createdAt);
+});
+
+/* ───────────── 归档：默认不露面，但能按需调出来 ───────────── */
+
+const ARCHIVED: ProjectSummary[] = [
+  { ...p("p_keep", "在做的片子", "2026-11-01T00:00:00Z", "2026-11-04T00:00:00Z") },
+  { ...p("p_old", "旧测试 A", "2026-09-01T00:00:00Z", "2026-09-02T00:00:00Z"), archivedAt: "2026-11-01T00:00:00Z" },
+  { ...p("p_old2", "旧测试 B", "2026-09-03T00:00:00Z", "2026-09-04T00:00:00Z"), archivedAt: "2026-11-02T00:00:00Z" },
+];
+
+test("归档工程默认不出现在面板里（否则归档等于白做）", () => {
+  const got = filterProjects(ARCHIVED, "", PROJ_SORT_DEFAULT);
+  assert.equal(names(got), "在做的片子");
+  assert.equal(countArchived(ARCHIVED), 2);
+});
+
+test("打开「已归档」后能看到，并且照常参与搜索与排序", () => {
+  const all = filterProjects(ARCHIVED, "", PROJ_SORT_DEFAULT, { includeArchived: true });
+  assert.equal(all.length, 3);
+  // 搜索词对归档项同样生效：搜到老工程时不该"搜不到"才让人以为被删了
+  const hit = filterProjects(ARCHIVED, "测试 B", PROJ_SORT_DEFAULT, { includeArchived: true });
+  assert.equal(names(hit), "旧测试 B");
+  assert.equal(filterProjects(ARCHIVED, "测试 B", PROJ_SORT_DEFAULT).length, 0);
+});
+
+test("归档判定只看 archivedAt 有值，跟 rev / 时间字段无关", () => {
+  const weird: ProjectSummary[] = [
+    { id: "p_x", name: "x", rev: 0, scenes: 0, createdAt: "", updatedAt: "", archivedAt: "" },
+  ];
+  // 空串不算归档：服务端没给这个字段时是 undefined，给了空串说明是坏数据，
+  // 两种都按"在用"处理——宁可多列一行，也不能让坏数据把工程藏起来
+  assert.equal(filterProjects(weird, "", PROJ_SORT_DEFAULT).length, 1);
+  assert.equal(countArchived(weird), 0);
 });
 
 console.log(`\n${failures.length ? "FAILED" : "全部通过"}：${passed} 个用例`);

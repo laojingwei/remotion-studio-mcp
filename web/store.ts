@@ -2,7 +2,7 @@ import { create } from "zustand";
 import type { Project } from "@shared/schema";
 import { applyOps, type Op } from "@shared/ops";
 import type { CustomAsset } from "@shared/assetLibrary";
-import type { TemplateInfo } from "./apiClient";
+import type { ProjectSummary, TemplateInfo } from "./apiClient";
 import {
   CLIENT_ID,
   cleanupAssets as apiCleanupAssets,
@@ -12,6 +12,7 @@ import {
   deleteLibraryAsset,
   deleteLibraryAssets,
   deleteProject,
+  archiveProject,
   deleteProjectAssets,
   deleteTemplate as apiDeleteTemplate,
   downloadProjectBundle,
@@ -39,17 +40,6 @@ type Snapshot = Pick<
   Project,
   "scenes" | "theme" | "name" | "audio" | "audioTracks" | "effects"
 >;
-
-type ProjectSummary = {
-  id: string;
-  name: string;
-  rev: number;
-  scenes: number;
-  /** 工程文件的创建时间（ISO），列表里用来按时间找 */
-  createdAt?: string;
-  /** 最后一次修改时间（ISO） */
-  updatedAt?: string;
-};
 
 type State = {
   project: Project | null;
@@ -85,6 +75,20 @@ type State = {
   renameTemplate: (id: string, name: string) => Promise<void>;
   loadTemplates: () => Promise<void>;
   deleteCurrentProject: () => Promise<void>;
+  /**
+   * 归档 / 取消归档当前工程（默认归档）。
+   *
+   * 和删除的区别：归档**不删任何文件**，只是让它从切换面板的主列表里消失，
+   * 工程还留在画面上继续用——所以这里不切工程、不断订阅，只刷新列表。
+   */
+  archiveCurrentProject: (archived?: boolean) => Promise<void>;
+  /**
+   * 按 id 归档 / 恢复任意工程（列表里那颗「恢复」按钮走这里）。
+   *
+   * 和 archiveCurrentProject 的区别：作用对象是给定的 id，不要求它是当前工程——
+   * 归档/恢复只动列表元数据，本来就不需要先切过去。不切工程、不断订阅，只刷新列表。
+   */
+  setProjectArchived: (id: string, archived?: boolean) => Promise<void>;
   duplicateCurrentProject: () => Promise<void>;
   /** 导出当前工程为 .zip 并下载 */
   exportCurrentProject: () => Promise<void>;
@@ -332,6 +336,32 @@ export const useDoc = create<State>((set, get) => ({
       }
     } catch (err) {
       set({ error: err instanceof Error ? err.message : "删除失败" });
+    }
+  },
+
+  archiveCurrentProject: async (archived = true) => {
+    const project = get().project;
+    if (!project) return;
+    await get().setProjectArchived(project.id, archived);
+  },
+
+  setProjectArchived: async (id, archived = true) => {
+    // 名字从列表里拿：恢复一个不是当前工程的项时，界面上唯一能告诉用户"恢复了哪个"的就是名字
+    const name =
+      get().projects.find((p) => p.id === id)?.name ??
+      (get().project?.id === id ? get().project?.name : undefined) ??
+      id;
+    try {
+      await archiveProject(id, archived);
+      await get().refreshProjects();
+      // 不切工程：归档只影响"列表里露面"，正在编辑的画面不该被收起动作打断
+      get().notify(
+        archived
+          ? `已归档「${name}」——没删任何文件，工程名旁的「已归档」标签点一下就能恢复`
+          : `已取消归档「${name}」，重新出现在项目列表里`,
+      );
+    } catch (err) {
+      set({ error: err instanceof Error ? err.message : archived ? "归档失败" : "取消归档失败" });
     }
   },
 
@@ -631,7 +661,8 @@ export const useDoc = create<State>((set, get) => ({
       // 排队期间可能已经切换工程：这批 ops 是按老工程算的，绝不能写到新工程上
       if (!project || project.id !== projectIdAtCall) return;
       try {
-        const res = await postOps(project.id, ops, "user");
+        // 带上"这笔 ops 是基于哪个 rev 算的"：agent 期间改过时服务端会在回执里说明
+        const res = await postOps(project.id, ops, "user", before?.rev);
         /**
          * 只有"这是最后一笔"时才用服务端结果覆盖。
          * 中途返回的响应属于更早的状态，覆盖上去会把后面已经乐观落地的编辑冲掉
@@ -642,6 +673,17 @@ export const useDoc = create<State>((set, get) => ({
             project: res.project,
             selectedId: res.createdSceneIds[0] ?? get().selectedId,
           });
+        }
+        /**
+         * 软冲突提示：agent 在这笔 ops 算出来之后改过这个工程。
+         * 照常合并（ops 是语义化的），但必须说出来——否则用户会以为"我改的怎么被吃了"。
+         * 只在最后一笔提示，避免连续拖动时弹一串。
+         */
+        if (res.revMismatch && seq === applySeq) {
+          get().notify(
+            `已合并 agent 的并发修改（你基于 rev ${res.revMismatch.expected}，服务端已到 ${res.revMismatch.actual}）。` +
+              `若发现刚改的地方被覆盖，撤销一步再改。`,
+          );
         }
       } catch (err) {
         // 乐观更新失败了：退回这一笔之前的状态，别让界面停在一个服务端没有的版本上

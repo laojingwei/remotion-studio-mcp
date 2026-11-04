@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { ROOT as PROJECT_ROOT } from "./root";
+import { PROJECTS_ROOT } from "./paths";
 
 /**
  * 决策审计日志：记录「agent 声称用户在某个闸口点了头」这件事。
@@ -46,7 +47,7 @@ export type Decision = {
 
 const dirOf = (projectId: string): string => {
   if (!/^[\w-]+$/.test(projectId)) throw new Error("非法的工程 id");
-  return path.join(PROJECT_ROOT, "data", "projects", projectId);
+  return path.join(PROJECTS_ROOT, projectId);
 };
 
 const fileOf = (projectId: string): string => path.join(dirOf(projectId), "decisions.jsonl");

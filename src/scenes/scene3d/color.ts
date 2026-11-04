@@ -47,6 +47,34 @@ export const metalBody = (hex: string, targetLum = 0.26, sat = 0.18): string => 
   return `#${((1 << 24) | (mix(r) << 16) | (mix(g) << 8) | mix(b)).toString(16).slice(1)}`;
 };
 
+/**
+ * 显式色值（`#RRGGBB`）的本体色：**只降饱和，不重设亮度**。
+ *
+ * `metalBody` 的问题是把每个节点都拉到同一条亮度线上 —— 33 个零件 albedo 全一样，
+ * 结构分界只能靠光照方向硬撑，渲出来就是「一堆颜色一样的灰块堆在一起、看不清」。
+ * 用户写 `#5C636B` 就是想要那个深灰，写 `#C08A3E` 就是想要黄铜；
+ * 把它们都归一化到 0.3，等于把美术的明暗设计扔了。
+ *
+ * 这里只做两件事：
+ * 1. 降饱和（默认 0.26）—— 高饱和色当金属本体永远像糖果，这是**类型级**的错，跟人无关；
+ * 2. 压过曝（只有亮度超过 `maxLum` 才压）—— 近白色在 PBR 下会直接把高光吃掉。
+ *
+ * 结果就是「写多少看多少」，材质的明暗层次留在数据里。
+ */
+export const explicitBody = (hex: string, sat = 0.26, maxLum = 0.62): string => {
+  const m = /^#?([0-9a-f]{6})$/i.exec(hex.trim());
+  if (!m) return hex;
+  const n = parseInt(m[1], 16);
+  const r = (n >> 16) & 255;
+  const g = (n >> 8) & 255;
+  const b = n & 255;
+  const lum = 0.2126 * r + 0.7152 * g + 0.0722 * b;
+  // 过亮才压：cap 是上限，不是目标值
+  const k = lum > maxLum * 255 ? (maxLum * 255) / lum : 1;
+  const mix = (v: number) => Math.max(0, Math.min(255, Math.round((lum + (v - lum) * sat) * k)));
+  return `#${((1 << 24) | (mix(r) << 16) | (mix(g) << 8) | mix(b)).toString(16).slice(1)}`;
+};
+
 /** 主题语义色 → 实际色值；已经是 `#RRGGBB` 或未知值就原样返回 */
 export const resolveColor = (token: string, theme: Theme): string => {
   const p = theme.palette;

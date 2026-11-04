@@ -13,8 +13,10 @@ import { GlobalDropZone } from "./GlobalDropZone";
 import { useUi } from "./ui";
 import { setLocalPref } from "./uiPrefs";
 import { cancelRender, fetchHistory, fetchTask, fetchTasks, requestRender, requestStills, resetDemoProject, type HistoryEntry, type ProjectSummary, type RenderTaskLite } from "./apiClient";
-import { PROJ_SORT_DEFAULT, filterProjects, nextSort, readProjSort, timeOf, type ProjSort, type ProjSortKey } from "./projectFilter";
+import { PROJ_SORT_DEFAULT, countArchived, filterProjects, nextSort, readProjSort, timeOf, type ProjSort, type ProjSortKey } from "./projectFilter";
 import { OutputsDialog } from "./panels/OutputsDialog";
+import { OutputsPopover } from "./panels/OutputsPopover";
+import { LogDrawer } from "./panels/LogDrawer";
 import { RenderDialog, type RenderFormat, type RenderQuality } from "./panels/RenderDialog";
 import { TtsDialog } from "./panels/TtsDialog";
 import { WorkspaceDialog } from "./panels/WorkspaceDialog";
@@ -262,6 +264,8 @@ export default function App() {
   const [stills, setStills] = useState<{ format: string; url: string }[] | null>(null);
   const [history, setHistory] = useState<HistoryEntry[] | null>(null);
   const [projectMenu, setProjectMenu] = useState(false);
+  /** 运行日志抽屉：agent 正在调什么、哪一步失败 */
+  const [logOpen, setLogOpen] = useState(false);
   /**
    * 项目面板的搜索词与排序。
    * 搜索词每次打开面板清空（上次筛掉的项目还在，会让人以为工程丢了）；
@@ -275,11 +279,22 @@ export default function App() {
       return PROJ_SORT_DEFAULT;
     }
   });
+  /**
+   * 面板里要不要连「已归档」一起显示。
+   *
+   * 默认不显示：归档就是为"测试工程太多"准备的，默认再列出来等于白归档。
+   * 不存 localStorage —— 这是一次性的查看动作，不是稳定偏好（和排序不同）。
+   */
+  const [showArchived, setShowArchived] = useState(false);
   /** 面板里真正渲染的列表：先按搜索词筛、再按当前字段排 */
   const visibleProjects = useMemo(
-    () => filterProjects(projects, projQuery, projSort),
-    [projects, projQuery, projSort],
+    () => filterProjects(projects, projQuery, projSort, { includeArchived: showArchived }),
+    [projects, projQuery, projSort, showArchived],
   );
+  /** 已归档数量（面板按钮上的角标） */
+  const archivedCount = useMemo(() => countArchived(projects), [projects]);
+  /** 当前工程是否已归档：顶栏要挂个标签，否则"列表里找不到自己"很吓人 */
+  const currentArchived = Boolean(projects.find((p) => p.id === project?.id)?.archivedAt);
   useEffect(() => {
     try {
       localStorage.setItem("rms:projSort", JSON.stringify(projSort));
@@ -287,7 +302,14 @@ export default function App() {
       // 无痕模式写不了 localStorage：只用不存，不影响功能
     }
   }, [projSort]);
+  /** 清理产物弹窗（勾选批量删）——和顶栏「产物」浮框（看片）是两个东西 */
+  const [outputsDialogOpen, setOutputsDialogOpen] = useState(false);
+  /** 顶栏产物浮框 */
   const [outputsOpen, setOutputsOpen] = useState(false);
+  /** 「产物」按钮所在的容器：弹层靠它把自己的触发器排除在"点外面"之外 */
+  const outputsAnchorRef = useRef<HTMLDivElement | null>(null);
+  /** 浮框的重拉信号：抽完帧、渲染完就 +1 */
+  const [outputsRefresh, setOutputsRefresh] = useState(0);
   const [workspaceOpen, setWorkspaceOpen] = useState(false);
   const [ttsOpen, setTtsOpen] = useState(false);
   const [showTpls, setShowTpls] = useState(false);
@@ -472,10 +494,20 @@ export default function App() {
     useDoc.getState().notify("正在渲染关键帧…");
     try {
       setStills(await requestStills(project.id, frame));
+      // 抽完帧立刻让「产物」浮框重拉：刚出的那张图应该马上能点开看
+      setOutputsRefresh((v) => v + 1);
     } catch (err) {
       useDoc.getState().notify(err instanceof Error ? err.message : "截图失败");
     }
   };
+
+  /**
+   * 渲染完成时让产物浮框重拉。
+   * 不这么做的话：渲完弹出结果卡、点开产物却看不到那一条，得关掉重开。
+   */
+  useEffect(() => {
+    if (render?.status === "done") setOutputsRefresh((v) => v + 1);
+  }, [render?.status]);
 
   const openHistory = async () => {
     if (!project) return;
@@ -579,6 +611,20 @@ export default function App() {
           >
             ▾
           </button>
+          {/*
+            当前工程已归档时挂个标签：归档后它从列表里消失了，
+            「我在编辑的东西怎么不在列表里」必须先有答案，再谈恢复入口。
+            点标签 = 取消归档（不弹确认：这一步本身就是撤销）。
+          */}
+          {currentArchived ? (
+            <button
+              className="proj-archived-pill"
+              title="这个工程已归档：只是从项目列表里收起来了，文件都在。点一下取消归档"
+              onClick={() => void useDoc.getState().archiveCurrentProject(false)}
+            >
+              已归档
+            </button>
+          ) : null}
           {projectMenu ? (
             <div className="menu">
               {/*
@@ -642,29 +688,90 @@ export default function App() {
                     );
                   })}
                 </div>
+                {/*
+                  已归档开关：只在真有归档工程时出现。它和排序不同——不属于稳定偏好，
+                  所以不存 localStorage，每次打开面板都回到"只看在用的"。
+                */}
+                {archivedCount ? (
+                  <button
+                    className={`proj-arch${showArchived ? " is-on" : ""}`}
+                    title={
+                      showArchived
+                        ? "收起已归档的工程"
+                        : `显示 ${archivedCount} 个已归档工程（只是收起来了，文件都还在）`
+                    }
+                    aria-pressed={showArchived}
+                    onClick={() => setShowArchived((v) => !v)}
+                  >
+                    {/* 「归档 17」被当成状态标签没人点它；带上 ▸/▴ 与"已归档"才像开关 */}
+                    {showArchived ? `收起归档 ▴` : `已归档 ${archivedCount} ▸`}
+                  </button>
+                ) : null}
               </div>
               <div className="menu-projects">
                 {visibleProjects.length ? (
-                  visibleProjects.map((p) => (
-                    <button
-                      key={p.id}
-                      className={`menu-item ${p.id === project.id ? "is-on" : ""}`}
-                      title={`${p.name}\n创建：${fmtTime(p.createdAt, true)}\n最后修改：${fmtTime(p.updatedAt, true)}`}
-                      onClick={() => {
-                        setProjectMenu(false);
-                        void useDoc.getState().loadProject(p.id);
-                      }}
-                    >
-                      <span className="menu-proj">
-                        <span className="menu-proj-name">{p.name}</span>
-                        {/* 右侧时间跟排序字段一致：按"修改"排却显示创建时间，看着像乱序 */}
-                        <span className="menu-proj-time">{fmtTime(timeOf(p, projSort.key))}</span>
-                      </span>
-                      <span className="menu-meta">
-                        rev{p.rev} · {p.scenes} 场景
-                      </span>
-                    </button>
-                  ))
+                  visibleProjects.map((p) =>
+                    p.archivedAt ? (
+                      /*
+                       * 归档行用 div 而不是 button：行内要放一颗「恢复」按钮，HTML 不允许 button 套 button。
+                       * 恢复一步到位——原来的路径是"点行切过去 → 再点顶栏的已归档标签"，
+                       * 两步，而且在找工程的时候根本想不到要先切换过去。
+                       */
+                      <div
+                        key={p.id}
+                        role="button"
+                        tabIndex={0}
+                        className={`menu-item ${p.id === project.id ? "is-on" : ""} is-archived`}
+                        title={`${p.name}\n创建：${fmtTime(p.createdAt, true)}\n最后修改：${fmtTime(p.updatedAt, true)}\n点行打开它；右侧「恢复」放回列表（文件本来就没删）`}
+                        onClick={() => {
+                          setProjectMenu(false);
+                          void useDoc.getState().loadProject(p.id);
+                        }}
+                        onKeyDown={(e) => {
+                          if (e.key === "Enter" || e.key === " ") {
+                            e.preventDefault();
+                            setProjectMenu(false);
+                            void useDoc.getState().loadProject(p.id);
+                          }
+                        }}
+                      >
+                        <span className="menu-proj">
+                          <span className="menu-proj-name">{p.name}</span>
+                          <span className="menu-proj-time">{fmtTime(timeOf(p, projSort.key))}</span>
+                        </span>
+                        <span className="menu-meta">
+                          已归档 {fmtTime(p.archivedAt)} · rev{p.rev} · {p.scenes} 场景
+                        </span>
+                        <button
+                          className="menu-restore"
+                          title="取消归档：放回项目列表（文件本来就没动过）"
+                          onClick={(e) => {
+                            e.stopPropagation(); // 别把"点行 = 切换工程"也触发了
+                            void useDoc.getState().setProjectArchived(p.id, false);
+                          }}
+                        >
+                          恢复
+                        </button>
+                      </div>
+                    ) : (
+                      <button
+                        key={p.id}
+                        className={`menu-item ${p.id === project.id ? "is-on" : ""}`}
+                        title={`${p.name}\n创建：${fmtTime(p.createdAt, true)}\n最后修改：${fmtTime(p.updatedAt, true)}`}
+                        onClick={() => {
+                          setProjectMenu(false);
+                          void useDoc.getState().loadProject(p.id);
+                        }}
+                      >
+                        <span className="menu-proj">
+                          <span className="menu-proj-name">{p.name}</span>
+                          {/* 右侧时间跟排序字段一致：按"修改"排却显示创建时间，看着像乱序 */}
+                          <span className="menu-proj-time">{fmtTime(timeOf(p, projSort.key))}</span>
+                        </span>
+                        <span className="menu-meta">rev{p.rev} · {p.scenes} 场景</span>
+                      </button>
+                    ),
+                  )
                 ) : (
                   <div className="proj-empty">
                     <span>没有匹配「{projQuery.trim()}」的工程</span>
@@ -846,11 +953,30 @@ export default function App() {
                 className="menu-item"
                 onClick={() => {
                   setProjectMenu(false);
-                  setOutputsOpen(true);
+                  setOutputsDialogOpen(true);
                 }}
               >
                 <span>渲染产物…</span>
                 <span className="menu-meta">勾选要删的文件</span>
+              </button>
+
+              {/*
+                归档可逆、也不删文件，所以它和下面那组「重置 / 删除」分开摆：
+                后者要么丢修改、要么找不回来，混在一起会让人不敢点。
+                示例工程也能归档（只是从列表收起来），所以这条不在 demo 的判断里。
+              */}
+              <button
+                className="menu-item"
+                onClick={() => {
+                  setProjectMenu(false);
+                  void useDoc.getState().archiveCurrentProject(!currentArchived);
+                }}
+                title="只是从项目列表里收起来，不删任何文件；随时可以取消归档"
+              >
+                <span>{currentArchived ? "取消归档这个工程" : "归档这个工程"}</span>
+                <span className="menu-meta">
+                  {currentArchived ? "放回项目列表" : "从列表收起来 · 不删文件"}
+                </span>
               </button>
 
               {project.id === "demo" || project.id === "demo3d" ? (
@@ -1045,6 +1171,17 @@ export default function App() {
               <button
                 className="menu-item"
                 role="menuitem"
+                onClick={() => {
+                  setMoreOpen(false);
+                  setLogOpen(true);
+                }}
+              >
+                <span>运行日志</span>
+                <span className="menu-meta">agent 调了什么</span>
+              </button>
+              <button
+                className="menu-item"
+                role="menuitem"
                 disabled={!past.length}
                 onClick={() => {
                   setMoreOpen(false);
@@ -1090,6 +1227,29 @@ export default function App() {
               </button>
             </div>
           ) : null}
+        </div>
+        <div className="topbar-outputs" ref={outputsAnchorRef}>
+          <button
+            className={`ghost outputs-toggle ${outputsOpen ? "is-on" : ""}`}
+            onClick={() => setOutputsOpen((v) => !v)}
+            title="这个工程的产物：成片 / 预览片段 / 关键帧 / 封面 / 字幕"
+            aria-haspopup="dialog"
+            aria-expanded={outputsOpen}
+          >
+            产物
+          </button>
+          <OutputsPopover
+            open={outputsOpen}
+            projectId={project?.id ?? ""}
+            projectName={project?.name ?? ""}
+            refreshKey={outputsRefresh}
+            onClose={() => setOutputsOpen(false)}
+            anchorRef={outputsAnchorRef}
+            onManage={() => {
+              setOutputsOpen(false);
+              setOutputsDialogOpen(true);
+            }}
+          />
         </div>
         <button className="primary" onClick={() => setRenderOpen(true)} disabled={busy}>
           {busy ? `渲染中 ${render?.progress ?? 0}%` : "渲染"}
@@ -1322,7 +1482,8 @@ export default function App() {
       {/* 暂时隐藏右下角「给 agent 留言」浮窗；恢复时把顶部 import 也一起打开
       <AgentChat />
       */}
-      <OutputsDialog open={outputsOpen} onClose={() => setOutputsOpen(false)} />
+      <OutputsDialog open={outputsDialogOpen} onClose={() => setOutputsDialogOpen(false)} />
+      <LogDrawer open={logOpen} onClose={() => setLogOpen(false)} />
       <WorkspaceDialog open={workspaceOpen} onClose={() => setWorkspaceOpen(false)} />
       <TtsDialog open={ttsOpen} onClose={() => setTtsOpen(false)} />
       <RenderDialog

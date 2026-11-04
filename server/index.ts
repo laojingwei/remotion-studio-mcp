@@ -15,7 +15,7 @@ import { projects } from "./project.service";
 import type { OpResult } from "../shared/ops";
 import { templates } from "./template.service";
 import { bundleService } from "./bundle.service";
-import { cleanupOutputs, deleteOutputs, listOutputs, removeProjectOutputs } from "./outputs.service";
+import { cleanupOutputs, deleteOutputs, listOutputs, removeProjectOutputs, setOutputLock } from "./outputs.service";
 import {
   absAssetPath,
   cleanupUnusedAssets,
@@ -30,6 +30,13 @@ import {
 } from "./assets.service";
 import { assetNameOf } from "../shared/customTemplate";
 import { addMessage, listMessages, markUserMessagesRead } from "./agentBridge.service";
+import {
+  addAnnotation,
+  deleteAnnotation,
+  listAnnotations,
+  resolveAnnotations,
+} from "./annotation.service";
+import { readToolCalls, toolStats } from "./tool-log.service";
 import { getTtsConfig, saveTtsConfig, synthesize } from "./tts.service";
 import { z } from "zod";
 import { zodToJsonSchema } from "zod-to-json-schema";
@@ -58,6 +65,10 @@ import { analyzeBeats } from "./audio-analysis.service";
 import { measureLoudness } from "./loudness.service";
 import { buildCompressCurve, summarizeCurve } from "../shared/audio";
 import { MAX_VOLUME } from "../shared/schema";
+import { checkRequest, corsAllowOrigin } from "./security";
+import { VERSION } from "./version";
+import { installRuntimeGuards } from "./runtime";
+import { logToolCall, pruneToolLogs } from "./tool-log.service";
 import {
   buildCues,
   renderSubtitles,
@@ -91,7 +102,49 @@ ensureDemo3D();
 }
 
 const PORT = Number(process.env.PORT ?? 4380);
+
+/**
+ * 监听地址：默认只给本机。
+ *
+ * 以前 `serve({ fetch, port })` 没传 hostname，Node 会监听 `::`/`0.0.0.0`——
+ * 同一局域网里任何人都能打开这个能删文件、能起渲染的编辑器。对外共享必须显式：
+ *   HOST=0.0.0.0 npm start
+ */
+const HOST = process.env.HOST?.trim() || "127.0.0.1";
+const ALLOW_LAN = !["127.0.0.1", "localhost", "::1"].includes(HOST.toLowerCase());
+
 const app = new Hono();
+
+/**
+ * 写请求的安全闸：Host 必须是本机名（防 DNS rebinding），Origin 若存在也必须是本机。
+ * 详见 server/security.ts 顶部注释——"没设 CORS" 挡不住 `text/plain` 的简单请求。
+ */
+app.use("*", async (c, next) => {
+  const decision = checkRequest({
+    method: c.req.method,
+    host: c.req.header("host"),
+    origin: c.req.header("origin"),
+    allowLan: ALLOW_LAN,
+  });
+  if (!decision.ok) {
+    return c.json({ error: decision.reason }, decision.status);
+  }
+  /**
+   * JSON-RPC 请求体上限。
+   *
+   * 工具参数都是短文本/路径，正常远小于 1MB；给个 4MB 上限是为了挡住"超大集合"把
+   * zod 校验或 JSON.parse 撑爆内存（zod 3 有一条已知的超大集合放大问题，
+   * 迁移 zod 4 需要单独验证 MCP SDK 兼容性，先用上限兜住）。
+   * 素材上传走 /api/projects/:id/assets 的 multipart，不受这里限制。
+   */
+  if (c.req.path === "/mcp") {
+    const len = Number(c.req.header("content-length") ?? 0);
+    if (Number.isFinite(len) && len > 4 * 1024 * 1024) {
+      return c.json({ error: "请求体超过 4MB 上限：工具参数不该有这么大，检查是否误把文件内容塞进 args" }, 413);
+    }
+  }
+  return next();
+});
 
 const fail = (c: any, err: unknown) => {
   const status = (err as { status?: number })?.status ?? 400;
@@ -142,7 +195,11 @@ app.get("/api/health", (c) => {
   const fe = frontendStale();
   return c.json({
     ok: true,
+    version: VERSION,
     port: PORT,
+    /** 仅本机 / 已对外：排障时先确认这个，比猜"为什么别人连不上"快 */
+    host: HOST,
+    lan: ALLOW_LAN,
     bundle: bundleState(),
     projects: projects.list().length,
     /** true = 编辑器产物比源码旧，需要 npm run build 再刷新（成片渲染不受影响） */
@@ -422,7 +479,7 @@ async function handleMcpMessage(msg: any): Promise<any | null> {
       return reply({
         protocolVersion: params?.protocolVersion ?? "2024-11-05",
         capabilities: { tools: {} },
-        serverInfo: { name: "remotion-studio", version: "0.44.0" },
+        serverInfo: { name: "remotion-studio", version: VERSION },
       });
     case "notifications/initialized":
     case "notifications/cancelled":
@@ -436,15 +493,24 @@ async function handleMcpMessage(msg: any): Promise<any | null> {
       const name = params?.name;
       const def = TOOLS.find((t) => t.name === name);
       if (!def) return error(-32602, `未知工具: ${name}`);
+      /**
+       * 日志里记**真实工具名**：门面模式下所有调用都走 tool_call，
+       * 只记 "tool_call" 的话统计出来全是同一个名字，等于没记。
+       */
+      const inner = name === "tool_call" ? String(params?.arguments?.name ?? "") : "";
+      const logAs = inner || name;
+      const startedAt = performance.now();
       try {
         const args = validateToolArgs(def, params?.arguments ?? {});
         const out = await def.run(args as never);
+        logToolCall({ tool: logAs, args: inner ? params?.arguments?.args : args, startedAt, ok: true });
         return reply({
           content: [{ type: "text", text: String(out) }],
           isError: false,
         });
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
+        logToolCall({ tool: logAs, args: params?.arguments, startedAt, ok: false, error: err });
         return reply({
           content: [{ type: "text", text: `失败：${message}` }],
           isError: true,
@@ -465,7 +531,9 @@ app.post("/mcp", async (c) => {
       const res = await handleMcpMessage(msg);
       if (res) responses.push(res);
     }
-    c.header("Access-Control-Allow-Origin", "*");
+    // 只回本机来源：以前是 `*`，等于允许任意网页跨站调用 tool_call 改工程
+    const origin = corsAllowOrigin(c.req.header("origin"));
+    if (origin) c.header("Access-Control-Allow-Origin", origin);
     if (!responses.length) return c.body(null, 202);
     return c.json(Array.isArray(body) ? responses : responses[0]);
   } catch (err) {
@@ -480,7 +548,11 @@ app.post("/mcp", async (c) => {
 // 不提供 server→client 的 SSE 推送流；GET 明确拒绝，避免客户端挂起
 app.get("/mcp", (c) => c.body(null, 405));
 app.options("/mcp", (c) => {
-  c.header("Access-Control-Allow-Origin", "*");
+  const origin = corsAllowOrigin(c.req.header("origin"));
+  if (origin) {
+    c.header("Access-Control-Allow-Origin", origin);
+    c.header("Vary", "Origin");
+  }
   c.header("Access-Control-Allow-Methods", "POST, GET, OPTIONS");
   c.header("Access-Control-Allow-Headers", "Content-Type, Accept, Mcp-Session-Id");
   return c.body(null, 204);
@@ -511,6 +583,70 @@ app.post("/api/agent/reply", async (c) => {
 });
 
 app.post("/api/agent/read", (c) => c.json({ ok: true, read: markUserMessagesRead() }));
+
+/* ───────────── 时间码批注（编辑器逐帧留言 → agent 用 get_annotations 读） ───────────── */
+
+app.get("/api/projects/:id/annotations", (c) => {
+  try {
+    return c.json({ annotations: listAnnotations(c.req.param("id")) });
+  } catch (err) {
+    return fail(c, err);
+  }
+});
+
+app.post("/api/projects/:id/annotations", async (c) => {
+  try {
+    const body = (await c.req.json().catch(() => ({}))) as {
+      sceneId?: string;
+      frameInScene?: number;
+      text?: string;
+      frameAtCreate?: number;
+    };
+    const item = addAnnotation(c.req.param("id"), {
+      sceneId: String(body.sceneId ?? ""),
+      frameInScene: Number(body.frameInScene ?? 0),
+      text: String(body.text ?? ""),
+      actor: "user",
+      frameAtCreate: Number(body.frameAtCreate ?? 0),
+    });
+    return c.json({ ok: true, annotation: item });
+  } catch (err) {
+    return fail(c, err);
+  }
+});
+
+app.post("/api/projects/:id/annotations/resolve", async (c) => {
+  try {
+    const body = (await c.req.json().catch(() => ({}))) as { ids?: string[]; resolved?: boolean };
+    const ids = Array.isArray(body.ids) ? body.ids.map(String) : [];
+    if (!ids.length) return c.json({ error: "缺少 ids" }, 400);
+    return c.json({ ok: true, ...resolveAnnotations(c.req.param("id"), ids, body.resolved !== false) });
+  } catch (err) {
+    return fail(c, err);
+  }
+});
+
+app.delete("/api/projects/:id/annotations/:aid", (c) => {
+  try {
+    const ok = deleteAnnotation(c.req.param("id"), c.req.param("aid"));
+    return ok ? c.json({ ok: true }) : c.json({ error: "没有这条批注" }, 404);
+  } catch (err) {
+    return fail(c, err);
+  }
+});
+
+/* ───────────── 运行日志（编辑器抽屉；agent 侧对应 tool_stats） ───────────── */
+
+app.get("/api/tool-log", (c) => {
+  const limit = Math.min(500, Math.max(1, Number(c.req.query("limit") ?? 150) || 150));
+  const days = Math.min(7, Math.max(1, Number(c.req.query("days") ?? 1) || 1));
+  const all = readToolCalls(days);
+  return c.json({
+    calls: all.slice(-limit).reverse(),
+    total: all.length,
+    stats: toolStats(days),
+  });
+});
 
 app.post("/api/projects", async (c) => {
   try {
@@ -630,6 +766,26 @@ app.put("/api/ui-prefs", async (c) => {
   return c.json({ ok: true, count: Object.keys(clean).length });
 });
 
+/**
+ * 归档 / 取消归档工程。
+ *
+ * 归档 = 从默认列表里收起来，**不删任何文件**：仍能打开、渲染、导出，
+ * 只是不再挤占 list_projects 和切换面板（测试工程最容易堆成这种噪音）。
+ * 挂在独立文件 data/archive.json 上，不写 project.json —— 归档不该改 rev、进历史。
+ */
+app.post("/api/projects/:id/archive", async (c) => {
+  const id = c.req.param("id");
+  const body = (await c.req.json().catch(() => ({}))) as { archived?: unknown; note?: unknown };
+  const on = body.archived === undefined ? true : Boolean(body.archived);
+  const note = typeof body.note === "string" ? body.note : undefined;
+  try {
+    const { archivedAt } = projects.archive(id, on, note);
+    return c.json({ ok: true, id, archived: Boolean(archivedAt), archivedAt });
+  } catch (err) {
+    return fail(c, err);
+  }
+});
+
 /** 删除工程 */
 app.delete("/api/projects/:id", (c) => {
   const id = c.req.param("id");
@@ -719,8 +875,25 @@ app.post("/api/workspace/reset", async (c) => {
   }
 });
 
-/** 渲染产物：列表 / 按选择删除 */
-app.get("/api/outputs", (c) => c.json({ files: listOutputs() }));
+/**
+ * 渲染产物：列表 / 锁定 / 按选择删除。
+ * `projectId` 只返回那个工程的产物（编辑器顶栏浮框用）——不传是全库（清理弹窗用）。
+ */
+app.get("/api/outputs", (c) => {
+  const projectId = c.req.query("projectId") || undefined;
+  return c.json({ files: listOutputs({ projectId }) });
+});
+
+/** 锁定/解锁一条产物：锁定的文件不会被自动清理删掉（手动删仍然可以） */
+app.post("/api/outputs/lock", async (c) => {
+  try {
+    const body = (await c.req.json().catch(() => ({}))) as { path?: string; locked?: boolean };
+    if (!body.path) return c.json({ error: "缺少 path" }, 400);
+    return c.json(setOutputLock(String(body.path), body.locked !== false));
+  } catch (err) {
+    return fail(c, err);
+  }
+});
 
 app.post("/api/outputs/delete", async (c) => {
   try {
@@ -868,6 +1041,8 @@ app.post("/api/projects/:id/ops", async (c) => {
     const body = (await c.req.json()) as {
       ops: Op[];
       expectedRev?: number;
+      /** 前端用：rev 对不上时按语义合并并回执说明，不整批拒绝（见 project.service 注释） */
+      softRev?: boolean;
       actor?: string;
       clientId?: string;
       opId?: string;
@@ -877,6 +1052,7 @@ app.post("/api/projects/:id/ops", async (c) => {
     }
     const result = projects.apply(c.req.param("id"), body.ops, {
       expectedRev: body.expectedRev,
+      softRevCheck: !!body.softRev,
       actor: body.actor ?? "user",
       clientId: body.clientId,
       opId: body.opId,
@@ -888,6 +1064,8 @@ app.post("/api/projects/:id/ops", async (c) => {
       createdSceneIds: result.createdSceneIds,
       createdIds: result.createdIds,
       summary: result.summary,
+      /** 只有软冲突时才有：前端据此提示"已合并 agent 的并发修改" */
+      revMismatch: result.revMismatch,
     });
   } catch (err) {
     return fail(c, err);
@@ -1301,8 +1479,18 @@ app.post("/api/library/delete", async (c) => {
 /** 清理 public/assets 里没有任何引用的文件（工程和素材库都不认它） */
 app.post("/api/assets/cleanup", async (c) => {
   try {
-    const body = (await c.req.json().catch(() => ({}))) as { dryRun?: boolean };
-    return c.json(cleanupUnusedAssets({ dryRun: !!body.dryRun }));
+    const body = (await c.req.json().catch(() => ({}))) as {
+      dryRun?: boolean;
+      includeLibrary?: boolean;
+      scope?: "root" | "all";
+    };
+    return c.json(
+      cleanupUnusedAssets({
+        dryRun: !!body.dryRun,
+        includeLibrary: !!body.includeLibrary,
+        scope: body.scope === "all" ? "all" : "root",
+      }),
+    );
   } catch (err) {
     return fail(c, err);
   }
@@ -1382,9 +1570,11 @@ app.post("/api/projects/:id/stills", async (c) => {
       frame?: number;
       formats?: string[];
       tag?: string;
+      /** "cover" = 封面候选，落 covers/；不传是关键帧，落 stills/ */
+      purpose?: "cover";
     };
     const project = projects.get(c.req.param("id"));
-    const stills = await renderStills(project, body.frame, body.formats, body.tag);
+    const stills = await renderStills(project, body.frame, body.formats, body.tag, body.purpose);
     return c.json({ stills });
   } catch (err) {
     return fail(c, err);
@@ -1582,9 +1772,15 @@ try {
   /* 提醒失败不影响启动 */
 }
 
-serve({ fetch: app.fetch, port: PORT }, (info) => {
+const httpServer = serve({ fetch: app.fetch, port: PORT, hostname: HOST }, (info) => {
   // 对外展示用 localhost（更好读）；内部探活仍走 127.0.0.1
-  console.log(`\n  ▸ 服务已启动      http://localhost:${info.port}`);
+  const shown = ALLOW_LAN ? `http://${HOST}:${info.port}` : `http://localhost:${info.port}`;
+  console.log(`\n  ▸ 服务已启动      ${shown}`);
+  console.log(
+    ALLOW_LAN
+      ? `  ▸ 监听            ${HOST}:${info.port}  ⚠️ 已对外网开放（同网段设备可访问；不需要时去掉 HOST 重启）`
+      : `  ▸ 监听            127.0.0.1:${info.port}（仅本机；需要局域网访问用 HOST=0.0.0.0 启动）`,
+  );
   // 数据目录单独打一行：同一台机器上多份 data/（不同 cwd 启动）时，
   // 「工程怎么不见了」只能靠这行路径判断，不打印就完全无从下手
   console.log(`  ▸ 数据目录        ${DATA_DIR}`);
@@ -1607,4 +1803,20 @@ serve({ fetch: app.fetch, port: PORT }, (info) => {
         "建议用 npm start 或「启动编辑器.bat」启动。\n",
     );
   }
+});
+
+/* ────────────────────────── 进程级兜底与优雅退出 ────────────────────────── */
+
+pruneToolLogs();
+
+installRuntimeGuards({
+  onShutdown: () => {
+    // 渲染子进程不取消的话，任务会永远停在 rendering，下次打开编辑器进度条卡住
+    for (const t of listTasks()) {
+      if (t.status === "queued" || t.status === "bundling" || t.status === "rendering") {
+        cancelTask(t.id);
+      }
+    }
+    httpServer.close();
+  },
 });

@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import { ROOT as PROJECT_ROOT } from "./root";
+import { PROJECTS_ROOT } from "./paths";
 import path from "node:path";
 
 /**
@@ -39,7 +40,7 @@ export const SCRIPT_TYPES = ["口播稿", "屏幕文案", "双轨", "无稿", "�
 /** 中文口播的常见语速（字/秒）；短视频偏快 4.5–5.5 */
 const CHARS_PER_SEC = 4.5;
 
-const ROOT = path.join(PROJECT_ROOT, "data", "projects");
+const ROOT = PROJECTS_ROOT;
 
 const fileOf = (projectId: string): string => {
   if (!/^[\w-]+$/.test(projectId)) throw new Error("非法的工程 id");

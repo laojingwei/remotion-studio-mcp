@@ -199,7 +199,7 @@ export function auditBriefAgainstProject(
     const inEnd = normForMatch(lastSceneText).includes(normForMatch(cta)) || corpus.includes(normForMatch(cta));
     if (!inEnd) {
       warnings.push(
-        `结尾动作「${cta}」在成片里没找到 → 要么补一句，要么它是二维码/图片（人工确认末帧）`,
+        `结尾动作「${cta}」在成片文本（字幕 + 画面文案）里没找到 → 要么补一句同义表述，要么它只以二维码/图片形式出现（人工看末帧）`,
       );
     } else {
       passed.push("结尾动作在成片里能找到");

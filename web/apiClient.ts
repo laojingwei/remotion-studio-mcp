@@ -6,6 +6,8 @@ export type OpResponse = {
   project: Project;
   createdSceneIds: string[];
   summary: string[];
+  /** 软冲突：这笔是基于旧 rev 算的，服务端已按语义合并（见 store.apply 的提示） */
+  revMismatch?: { expected: number; actual: number };
 };
 
 /**
@@ -45,6 +47,11 @@ export type ProjectSummary = {
   createdAt?: string;
   /** 最后一次被改的时间（ISO） */
   updatedAt?: string;
+  /**
+   * 归档时间（ISO）：有值 = 已归档，默认不出现在切换面板的主列表里。
+   * 归档只写 data/archive.json，**不动工程文件**，所以 rev / 内容都不变。
+   */
+  archivedAt?: string;
 };
 
 export async function fetchProjects(): Promise<ProjectSummary[]> {
@@ -85,6 +92,13 @@ export async function postOps(
   projectId: string,
   ops: Op[],
   actor: "user" | "agent" = "user",
+  /**
+   * 客户端算这批 ops 时看到的 rev。
+   *
+   * 带上它 + softRev，服务端就能发现"agent 在这期间改过"，并在回执里说明，
+   * 而不是让后写的一方静默覆盖。注意只是**告知**：ops 是语义化的，照常合并。
+   */
+  expectedRev?: number,
 ): Promise<OpResponse> {
   /**
    * 幂等键：一次逻辑写入 = 一个 opId，重试时不变。
@@ -94,7 +108,13 @@ export async function postOps(
    * 服务端按 opId 去重之后，重发是安全的。
    */
   const opId = `${CLIENT_ID}:${++opSeq}`;
-  const body = JSON.stringify({ ops, actor, clientId: CLIENT_ID, opId });
+  const body = JSON.stringify({
+    ops,
+    actor,
+    clientId: CLIENT_ID,
+    opId,
+    ...(expectedRev === undefined ? {} : { expectedRev, softRev: true }),
+  });
   /**
    * 超时 8 秒、最多试 3 次。本地写盘通常 <100ms，8 秒还没响应基本是连接被占满
    * （同 host 6 条连接被 SSE/预览占着）或服务端在跑重活。重试能自愈掉绝大多数瞬时拥塞，
@@ -202,6 +222,20 @@ export async function deleteProject(id: string): Promise<void> {
   const res = await fetch(`/api/projects/${id}`, { method: "DELETE" });
   const data = await res.json();
   if (!res.ok) throw new Error(data.error ?? "删除失败");
+}
+
+/**
+ * 归档 / 取消归档：**不删任何文件**，只是让它从切换面板的主列表里消失。
+ * 和删除的区别要跟用户说清楚——归档可逆，删除不可逆。
+ */
+export async function archiveProject(id: string, archived = true, note?: string): Promise<void> {
+  const res = await fetch(`/api/projects/${id}/archive`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ archived, note }),
+  });
+  const data = await res.json();
+  if (!res.ok) throw new Error(data.error ?? (archived ? "归档失败" : "取消归档失败"));
 }
 
 export async function duplicateProject(id: string, name?: string): Promise<Project> {
@@ -727,19 +761,129 @@ export type OutputEntry = {
   path: string;
   name: string;
   url: string;
-  kind: "video" | "still" | "subtitle";
+  kind: "video" | "still" | "subtitle" | "preview" | "cover";
   size: number;
   mtimeMs: number;
   projectId: string;
   /** 工程还在 → 名字；工程已删 → null（孤儿产物） */
   projectName: string | null;
+  /** 已锁定：自动清理跳过它（手动删仍然可以） */
+  locked?: boolean;
 };
 
-export async function fetchOutputs(): Promise<OutputEntry[]> {
-  const res = await fetch("/api/outputs");
+/** 产物列表。传 projectId 只取那个工程的（顶栏浮框用）；不传是全库（清理弹窗用） */
+export async function fetchOutputs(projectId?: string): Promise<OutputEntry[]> {
+  const qs = projectId ? `?projectId=${encodeURIComponent(projectId)}` : "";
+  const res = await fetch(`/api/outputs${qs}`);
   const data = await res.json();
   if (!res.ok) throw new Error(data.error ?? "读取产物失败");
   return data.files ?? [];
+}
+
+/** 锁定/解锁一条产物：锁定后自动清理会跳过它 */
+export async function setOutputLock(path: string, locked: boolean): Promise<void> {
+  const res = await fetch("/api/outputs/lock", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ path, locked }),
+  });
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({}));
+    throw new Error((data as { error?: string }).error ?? "锁定失败");
+  }
+}
+
+/* ───────────── 时间码批注 ───────────── */
+
+export type Annotation = {
+  id: string;
+  sceneId: string;
+  /** 幕内帧：全局帧会随别的幕改时长整体错位，这个不会 */
+  frameInScene: number;
+  frameAtCreate: number;
+  text: string;
+  actor: "user" | "agent";
+  at: string;
+  resolved: boolean;
+  resolvedAt?: string;
+};
+
+export async function fetchAnnotations(projectId: string): Promise<Annotation[]> {
+  const res = await fetch(`/api/projects/${encodeURIComponent(projectId)}/annotations`);
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error((data as { error?: string }).error ?? "读取批注失败");
+  return (data as { annotations?: Annotation[] }).annotations ?? [];
+}
+
+export async function addAnnotation(
+  projectId: string,
+  input: { sceneId: string; frameInScene: number; text: string; frameAtCreate: number },
+): Promise<Annotation> {
+  const res = await fetch(`/api/projects/${encodeURIComponent(projectId)}/annotations`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(input),
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error((data as { error?: string }).error ?? "保存批注失败");
+  return (data as { annotation: Annotation }).annotation;
+}
+
+export async function resolveAnnotations(
+  projectId: string,
+  ids: string[],
+  resolved = true,
+): Promise<{ changed: number; remaining: number }> {
+  const res = await fetch(`/api/projects/${encodeURIComponent(projectId)}/annotations/resolve`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ ids, resolved }),
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error((data as { error?: string }).error ?? "更新批注失败");
+  return data as { changed: number; remaining: number };
+}
+
+export async function deleteAnnotation(projectId: string, id: string): Promise<void> {
+  const res = await fetch(
+    `/api/projects/${encodeURIComponent(projectId)}/annotations/${encodeURIComponent(id)}`,
+    { method: "DELETE" },
+  );
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({}));
+    throw new Error((data as { error?: string }).error ?? "删除批注失败");
+  }
+}
+
+/* ───────────── 运行日志（工具调用） ───────────── */
+
+export type ToolCallEntry = {
+  ts: string;
+  tool: string;
+  args: string;
+  ms: number;
+  ok: boolean;
+  error?: string;
+};
+
+export type ToolCallLog = {
+  calls: ToolCallEntry[];
+  total: number;
+  stats: {
+    days: number;
+    total: number;
+    failed: number;
+    /** 按调用次数降序 */
+    byTool: { tool: string; calls: number; failed: number; avgMs: number; p95Ms: number }[];
+    topErrors: { tool: string; error: string; count: number }[];
+  };
+};
+
+export async function fetchToolLog(limit = 150, days = 1): Promise<ToolCallLog> {
+  const res = await fetch(`/api/tool-log?limit=${limit}&days=${days}`);
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error((data as { error?: string }).error ?? "读取运行日志失败");
+  return data as ToolCallLog;
 }
 
 export async function deleteOutputFiles(

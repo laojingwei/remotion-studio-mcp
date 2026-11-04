@@ -15,6 +15,7 @@ import fs from "node:fs";
 import path from "node:path";
 
 import { ROOT } from "./root";
+import { DATA_ROOT } from "./paths";
 import { decodeAudioFile } from "./audio-analysis.service";
 import { resolvePublicFile } from "./media.service";
 
@@ -38,7 +39,7 @@ export type LoudnessInfo = {
   cached: boolean;
 };
 
-const CACHE_FILE = path.join(ROOT, "data", "audio-loudness.json");
+const CACHE_FILE = path.join(DATA_ROOT, "audio-loudness.json");
 /** 曲线分辨率：200ms 足够跟上人耳的音量变化，3 分钟也只有 900 个数 */
 const CURVE_STEP_MS = 200;
 /** 短时响度窗口：与 LUFS 的分块口径一致（400ms），再短就受瞬态影响 */

@@ -2,6 +2,7 @@ import type { Project } from "../shared/schema";
 import { applyOps, type Op, type OpResult } from "../shared/ops";
 import { deleteProjectDir, listProjectIds, listSnapshots, projectFileTimes, readProject, readSnapshot, writeLastProjectId, writeProject } from "./store";
 import { assertTextureAssets } from "./texture-asset-check";
+import { forgetArchived, pruneArchived, readArchive, setArchived } from "./archive.service";
 
 type Listener = (event: BroadcastEvent) => void;
 
@@ -25,6 +26,9 @@ export type BroadcastEvent =
       projectId: string;
     };
 
+/** 应用结果；`revMismatch` 只在软冲突时出现（说明这笔是基于旧 rev 改的） */
+export type AppliedResult = OpResult & { revMismatch?: { expected: number; actual: number } };
+
 export type HistoryEntry = {
   rev: number;
   at: string;
@@ -46,22 +50,44 @@ class ProjectService {
   private listeners = new Map<string, Set<Listener>>();
   private logs = new Map<string, HistoryEntry[]>();
 
-  list(): { id: string; name: string; rev: number; scenes: number; createdAt: string; updatedAt: string; broken?: string }[] {
+  list(): { id: string; name: string; rev: number; scenes: number; createdAt: string; updatedAt: string; broken?: string; archivedAt?: string }[] {
+    // 归档标记放在独立的 data/archive.json 里（见 archive.service）：不动工程文件，
+    // 坏工程读不出来时也照样能归档。这里一次性读，避免每行都读一遍文件。
+    const archive = readArchive();
     // 单个工程读坏了不能连累整个列表（否则健康检查与所有工程一起 500）
     return listProjectIds().map((id) => {
       try {
         const p = this.get(id);
-        return { id: p.id, name: p.name, rev: p.rev, scenes: p.scenes.length, ...projectFileTimes(id) };
+        const row = { id: p.id, name: p.name, rev: p.rev, scenes: p.scenes.length, ...projectFileTimes(id) };
+        const at = archive[id]?.at;
+        return at ? { ...row, archivedAt: at } : row;
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
         console.error(`[projects] 读取失败 ${id}：${msg}`);
-        return {
+        const row = {
           id, name: `⚠️ ${id}（数据损坏）`, rev: -1, scenes: 0,
           createdAt: "", updatedAt: "", broken: msg,
         };
+        const at = archive[id]?.at;
+        return at ? { ...row, archivedAt: at } : row;
       }
     });
   }
+
+  /** 归档 / 取消归档。只写 data/archive.json，不碰工程的任何文件 */
+  archive(id: string, on: boolean, note?: string): { archivedAt: string | null } {
+    if (!listProjectIds().includes(id)) {
+      throw Object.assign(new Error(`工程不存在：${id}（list_projects 查 id）`), { status: 404 });
+    }
+    const entry = setArchived(id, on, note);
+    return { archivedAt: entry?.at ?? null };
+  }
+
+  /** 清掉指向已不存在工程的归档项（手动删目录 / 导入失败留下的孤儿） */
+  pruneArchive(): number {
+    return pruneArchived(listProjectIds());
+  }
+
 
   /**
    * 记住"最近在用的工程"。
@@ -92,6 +118,7 @@ class ProjectService {
       throw Object.assign(new Error("工程不存在"), { status: 404 });
     }
     deleteProjectDir(id);
+    forgetArchived(id);
     this.cache.delete(id);
     this.logs.delete(id);
     const set = this.listeners.get(id);
@@ -136,8 +163,22 @@ class ProjectService {
   apply(
     id: string,
     ops: Op[],
-    opts: { expectedRev?: number; actor?: string; clientId?: string; opId?: string } = {},
-  ): OpResult {
+    opts: {
+      expectedRev?: number;
+      actor?: string;
+      clientId?: string;
+      opId?: string;
+      /**
+       * 软冲突：rev 对不上时不拒绝，照常合并，只在回执里说明"你基于旧版本改的"。
+       *
+       * 为什么需要两种语义：ops 是**语义化**的（update_scene 的 patch 应用到当前文档上
+       * 通常仍然正确），硬拒会让人和 agent 交替编辑时频繁弹冲突；但完全不吭声又会
+       * 静默覆盖——尤其 update_scene.props.elements 这类整数组替换的 op。
+       * 前端要的是"合并且告知"，MCP 侧要的是"严格校验后重读"，所以由调用方选。
+       */
+      softRevCheck?: boolean;
+    } = {},
+  ): AppliedResult {
     const idemKey = opts.opId ? `${id}:${opts.opId}` : null;
     if (idemKey) {
       const hit = this.opResults.get(idemKey);
@@ -145,17 +186,29 @@ class ProjectService {
       if (hit) return hit;
     }
     const current = this.get(id);
+    let revMismatch: { expected: number; actual: number } | undefined;
     if (opts.expectedRev !== undefined && opts.expectedRev !== current.rev) {
-      const err = new Error(
-        `版本冲突：期望 rev=${opts.expectedRev}，当前 rev=${current.rev}。请重新读取文档后再修改。`,
-      );
-      (err as Error & { status?: number }).status = 409;
-      throw err;
+      if (!opts.softRevCheck) {
+        const err = new Error(
+          `版本冲突：期望 rev=${opts.expectedRev}，当前 rev=${current.rev}。请重新读取文档后再修改。`,
+        );
+        (err as Error & { status?: number }).status = 409;
+        throw err;
+      }
+      revMismatch = { expected: opts.expectedRev, actual: current.rev };
     }
 
     // 贴图素材校验（存在性/格式/体积/尺寸）在写库前挡——渲染端加载失败只会静默回退，agent 看不到
     assertTextureAssets(ops);
-    const result = applyOps(current, ops);
+    const result: AppliedResult = applyOps(current, ops);
+    if (revMismatch) {
+      // 合并且告知：不打断用户，但要让回执里能看见"这笔是基于旧版本算的"
+      result.summary.unshift(
+        `⚠️ 并发修改：这笔操作基于 rev ${revMismatch.expected}，服务端已是 rev ${revMismatch.actual}，已按语义合并。` +
+          `整数组替换类的修改（自由画布元素、场景图节点）可能覆盖 agent 刚做的调整，建议刷新后核对。`,
+      );
+      result.revMismatch = revMismatch;
+    }
     this.cache.set(id, result.project);
     writeProject(result.project);
 

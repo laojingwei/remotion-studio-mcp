@@ -137,6 +137,21 @@ const ring = z.object({
   thetaLength: z.number().min(0).max(360).optional().describe("扇区跨度（度）；不写=整环"),
 });
 
+/**
+ * 纯枢轴：**不画任何东西**，只提供一个可以位移/旋转的父级。
+ *
+ * 为什么必须有：整体移动一组节点（整列火车、整台车床、机器人的上半身）只能靠父子层级，
+ * 而在它之前「枢轴」只能用 `box: 0.001 + opacity 0` 硬凑 —— 那是个隐形实体：
+ * 它照样进渲染队列、照样参与拾取、照样在编辑器大纲里显示成"一个方盒子"，
+ * 用户点它一下才发现这是个假的。实跑时蒸汽机车就是这么搭的。
+ *
+ * `geometry` 整个省略时也按枢轴处理（见 nodeSchema），写 `{type:"group"}` 只是把
+ * 「我确实想要个空节点」这件事说明白。
+ */
+const group = z.object({
+  type: z.literal("group"),
+});
+
 export const geometrySchema = z
   .discriminatedUnion("type", [
     box,
@@ -152,8 +167,12 @@ export const geometrySchema = z
     octahedron,
     ring,
     dashRing,
+    group,
   ])
-  .describe("几何体（必填）：type 决定可用字段——sphere{radius,segments}、ring{innerRadius,outerRadius}、dashRing{radius,count,duty} 等，全表见 list_scene_types(type:\"scene3d\")");
+  .describe(
+    "几何体：type 决定可用字段——sphere{radius,segments}、ring{innerRadius,outerRadius}、dashRing{radius,count,duty}、group=纯枢轴（不画东西，只带子节点）等，" +
+      "全表见 list_scene_types(type:\"scene3d\")。**省略即 group**",
+  );
 
 /* ────────────────────────────── 材质白名单 ────────────────────────────── */
 
@@ -190,6 +209,15 @@ export const materialSchema = z.object({
   color: colorToken.default("accent"),
   metalness: z.number().min(0).max(1).default(0.4).describe("standard 有效：1=纯金属"),
   roughness: z.number().min(0).max(1).default(0.35).describe("standard/physical 有效：越小高光越锐"),
+  envMapIntensity: z
+    .number()
+    .min(0)
+    .max(4)
+    .default(1)
+    .describe(
+      "环境反射强度。金属的亮度**几乎全来自它**，比 metalness 更能直接影响观感：" +
+        "金属发黑先抬这个（1.4~2.0），想要哑光压到 0.4",
+    ),
   emissive: colorToken.optional().describe("自发光颜色，给了才发光（辉光只吃够亮的部分）"),
   emissiveIntensity: z.number().min(0).max(4).default(1),
   transmission: z.number().min(0).max(1).default(0.9).describe("physical 有效：0=实心 1=全透明"),
@@ -300,7 +328,16 @@ export const nodeSchema = z.object({
   hidden: z.boolean().optional().describe("true = 连同子树不渲染（编辑器临时隐藏，数据仍在）"),
   locked: z.boolean().optional().describe("true = 编辑器里锁住，防误拖误删（渲染照常）"),
   parent: z.string().optional().describe("父节点 id（做卫星、层级旋转用）。扁平数组 + parent 引用，不用嵌套"),
-  geometry: geometrySchema,
+  /**
+   * 不写 = `{type:"group"}` 纯枢轴。
+   *
+   * 用 `.default()` 而不是 `.optional()`：渲染端、编辑器、校验器几十处都在读
+   * `node.geometry.type`，做成可选就要在每一处加 `?.`，而"没有几何体"的语义
+   * 本来就是"这是个枢轴"，给个具名默认值比让字段变成 undefined 干净得多。
+   */
+  geometry: geometrySchema
+    .default({ type: "group" })
+    .describe("几何体；**不写 = 纯枢轴（group，不渲染，只带子节点）**"),
   material: materialSchema.optional().describe("不写就是一层中性暗金属"),
   transform: z
     .object({
@@ -463,10 +500,129 @@ export const dslSchema = z.object({
     })
     .optional()
     .describe("一层粒子（一次 draw call）。想要「星云感」就只给粒子、不给节点"),
+  /**
+   * 世界（背景）。**不是主题色**。
+   *
+   * 原来的做法是直接把主题的 `background` 当 3D 世界底色 —— 暗色主题下就是一张纯黑纸，
+   * 物体像贴在黑布上：没有空气感、地平线不存在、远景和主体糊成一片。
+   * 成熟软件里"世界"是一个独立的东西（Blender 的 world、C4D 的背景对象），
+   * 它有自己的一套亮度：天顶偏暗、地平线偏亮，中间带一道漫射光带。
+   *
+   * `auto` 按主题的**明暗**挑一套中性色（色相固定，不跟主题色走）：
+   * 暗主题给深蓝灰的夜，浅主题给冷白的天光。
+   */
+  world: z
+    .object({
+      /**
+       * 世界预设 id（`shared/worldPresets.ts`）。**op 层会把它展开成整组参数后删掉**，
+       * 不会留在 project.json 里；写在这里是为了让 `world:{preset:"…"}` 这种写法也能被接住。
+       */
+      preset: z.string().optional().describe("世界预设 id（list_world_skies 查），op 层展开后不落盘"),
+      mode: z
+        .enum(["auto", "gradient", "color", "image"])
+        .default("auto")
+        .describe(
+          "auto=按主题明暗自动挑中性色；gradient=用 top/bottom 自己给；color=纯色；" +
+            "image=用一张等距柱状全景图（.hdr / .jpg）当世界",
+        ),
+      color: colorToken.optional().describe("mode=color 时的纯色"),
+      top: colorToken.optional().describe("天顶色（mode=gradient）"),
+      bottom: colorToken.optional().describe("地平线色（mode=gradient）"),
+      glow: colorToken.optional().describe("地平线漫射光带的颜色（on gradient 才生效）"),
+      image: z
+        .string()
+        .optional()
+        .describe(
+          "等距柱状全景图（比例 2:1）。**优先 .hdr**：普通 JPG 只有 0–1 的亮度，" +
+            "当照明时没有太阳那种高动态，金属会发闷。站内素材写 /assets/…（先 upload_asset）",
+        ),
+      imageLighting: z
+        .boolean()
+        .default(true)
+        .describe(
+          "同一张全景图同时当环境光照（IBL）。**这是「像真的」的最大一步**：" +
+            "照片里有真实的太阳方位、天空梯度、地面反光，物体是被「那个地方」照亮的",
+        ),
+      imageRotation: z
+        .number()
+        .default(0)
+        .describe("背景绕 Y 轴转（度）。用来把太阳/地平线挪到想要的方位"),
+      imageIntensity: z
+        .number()
+        .min(0.2)
+        .max(2)
+        .default(1)
+        .describe(
+          "背景亮度倍数。**主体偏暗时先降这个**（0.7–0.85），不要降曝光：" +
+            "曝光一降，物体上辛苦打的光也一起没了。真实拍摄就是这么做的——按主体曝光，天空过曝或压暗",
+        ),
+      envIntensity: z
+        .number()
+        .min(0.05)
+        .max(3)
+        .optional()
+        .describe(
+          "全景图当照明时的环境强度（不写=1）。**城市夜景/室内这类「本身就很亮」的全景图**给 0.2–0.4：" +
+            "HDR 里的灯箱、玻璃幕墙是几千尼特的实测值，全强度照进来整张画面直接过曝",
+        ),
+      haze: z
+        .number()
+        .min(0)
+        .max(1)
+        .default(0.35)
+        .describe(
+          "空气透视（雾）浓度，0=关。真实感的一大半来自它：远处的东西必须淡进背景，" +
+            "否则再好的光照也像「把模型摆在黑房间里」。天文/星空场景给 0",
+        ),
+      vignette: z.number().min(0).max(1).default(0.32).describe("四角压暗（屏幕空间），0=关"),
+    })
+    .optional()
+    .describe("世界背景：独立于主题的渐变天空 / 全景图 + 空气透视，解决「背景乌漆麻黑」"),
+
+  /**
+   * 自动铺一块地面。
+   *
+   * 接触阴影是「真实」最便宜的那一半：物体有没有落地、零件之间有没有分界，
+   * 全靠投影和遮挡。没有地面时，一切都在虚空里飘着。
+   */
+  ground: z
+    .object({
+      y: z.number().default(0).describe("地面高度（世界单位）"),
+      /**
+       * `solid` = 实体地面（有自己的颜色，能反射环境）；`shadow` = **只留影子**。
+       *
+       * 用全景图当世界时必须用 `shadow`：照片里本来就有一片真实的地面，
+       * 再铺一块实体平面，等于在地上盖了块棕色塑料布 —— 照片的地平线、草的纹理全没了。
+       * `shadow` 材质是透明的，只在有阴影的地方变暗，看起来就像"影子落在照片的地上"。
+       */
+      mode: z.enum(["solid", "shadow"]).default("solid").describe("solid=实体地面；shadow=只接阴影（配全景图用）"),
+      color: colorToken.default("#191C22"),
+      /** shadow 模式下的阴影浓度（0–1），太黑会显脏 */
+      shadowOpacity: z.number().min(0).max(1).default(0.55),
+      roughness: z.number().min(0).max(1).default(0.72),
+      metalness: z.number().min(0).max(1).default(0.06),
+      size: z.number().positive().default(160).describe("边长，给大一点让边缘出画"),
+      shadow: z.boolean().default(true).describe("接收投影（关掉就只剩一块底色）"),
+    })
+    .optional()
+    .describe("自动地面：接投影、给反射底色，让物体「落地」"),
+
   post: z
     .object({
       bloom: z.number().min(0).max(2).default(1).describe("辉光强度倍数：1=当前 look 的默认值，0=关"),
       threshold: z.number().min(0).max(1).optional().describe("覆盖辉光阈值，不写就用 look 的"),
+      /**
+       * 色调映射。默认开 ACES：真实世界的动态范围远大于屏幕，
+       * 不做滚降就只能"高光切白、暗部糊死"（这正是不开时的观感）。
+       *
+       * 曝光 1.25 是配 ACES 的补偿系数：ACES 在中灰附近约压 20%，
+       * 乘 1.25 之后中间调回到原位，只有高光被压平 —— 白拿的层次。
+       */
+      tonemap: z
+        .enum(["aces", "none"])
+        .default("aces")
+        .describe("aces=电影感滚降（默认）；none=逐像素还原色值（要和 2D 精确对色时才用）"),
+      exposure: z.number().min(0.4).max(3).default(1.25).describe("曝光（仅 tonemap=aces 时生效）"),
     })
     .optional(),
 });
@@ -565,4 +721,76 @@ export function dslIssues(spec: Scene3DDsl): string[] {
     }
   }
   return issues;
+}
+
+/* ────────────────────────────── 软提示（不拦截写入） ────────────────────────────── */
+
+/**
+ * 「能写进去，但成片大概率不好看」的问题。**不能混进 dslIssues**：
+ * 那里是硬拦截（写完就 throw），而这些是"骨架搭到一半"的正常中间态。
+ *
+ * 现在只放三类，都是实测翻过车的：
+ *
+ * 1. **空枢轴**：agent 想整体移动一组节点，会先建 group 再加子节点。中间那一瞬间
+ *    它就是空的，写不进去等于不让它搭骨架 —— 但要提示它"这么渲出来什么都没有"。
+ * 2. **枢轴上的材质**：group 没有表面，material 无处施加。不报的话 agent 会反复调色。
+ * 3. **自定义灯把场景压黑**：给了 `lights` 就撤掉 look 的四盏方向光，同时环境反射
+ *    只剩 55%。金属材质的亮部**几乎全来自环境反射**，所以「metalness 0.9 + ambient 0.55」
+ *    这种看着挺亮的配置，渲出来是近剪影（蒸汽机车首版实测，只能靠抬 ambient 到 1.6 救）。
+ *    这条只给数值建议，不替 agent 改值 —— 天文场景就是要压暗夜面，硬提亮会毁掉昼夜对比。
+ */
+export function dslWarnings(spec: Scene3DDsl): string[] {
+  const out: string[] = [];
+  const hasChild = new Set(spec.nodes.map((n) => n.parent).filter(Boolean) as string[]);
+  for (const n of spec.nodes) {
+    const pivot = !n.geometry || n.geometry.type === "group";
+    if (!pivot) continue;
+    if (!hasChild.has(n.id)) {
+      out.push(
+        `节点「${n.id}」是纯枢轴（group）但下面没有任何子节点——它本身不渲染，这一幕里看不到它。` +
+          `要么给它几何体，要么把要一起动的节点 parent 到它下面`,
+      );
+    }
+    if (n.material) {
+      out.push(`节点「${n.id}」是纯枢轴（group），material 没有表面可施加，不会生效`);
+    }
+  }
+
+  const lights = spec.lights ?? [];
+  if (!lights.length) return out;
+  /**
+   * 全景图当照明时，环境反射是**满强度**（`world.mode=image` 且没关 imageLighting）。
+   *
+   * 这时候不能再套下面那套「环境只剩 55% → 抬 ambient」的规则：照片里的太阳
+   * 本身就是主光，再让 agent 把 ambient 抬到 1.2–2.0，画面会整体发灰发平 ——
+   * 等于用一层灰光盖掉 HDRI 的全部方向感。
+   */
+  const imageLit = spec.world?.mode === "image" && spec.world.imageLighting !== false;
+  const sum = (type: string) =>
+    lights.filter((l) => l.type === type).reduce((s, l) => s + (l.intensity ?? 0), 0);
+  const ambient = sum("ambient");
+  const directional = sum("directional");
+  const hasPointish = lights.some((l) => l.type === "point" || l.type === "spot");
+  const metals = spec.nodes.filter(
+    (n) => (n.material?.type ?? "standard") !== "basic" && (n.material?.metalness ?? 0.4) >= 0.6,
+  );
+  if (!ambient) {
+    out.push(
+      `自定义灯光里没有 ambient：背光面只剩 0.35 的内置兜底，形体容易糊成一片。` +
+        `想看清暗部就加 {type:"ambient", color:"…", intensity:1.2}（天文场景要暗夜面可以不加）`,
+    );
+  } else if (!imageLit && metals.length && ambient < 1.0) {
+    out.push(
+      `有 ${metals.length} 个金属节点（metalness ≥ 0.6，如「${metals[0].id}」），但 ambient 只有 ${ambient}：` +
+        `金属的亮部几乎全来自环境反射，而自定义灯场景的环境反射只保留 55% —— 渲出来容易是剪影。` +
+        `把 ambient 抬到 1.2–2.0，或把 metalness 降到 0.4–0.6（想要亮铬感就走前者）`,
+    );
+  }
+  if (!imageLit && !directional && !hasPointish && ambient < 0.6) {
+    out.push(
+      `这组灯既没有 directional/point/spot，ambient 也只有 ${ambient}：整场只剩一层平光，` +
+        `东西会是一块没有明暗的剪影。至少补一盏 directional（intensity 2 上下）做主光`,
+    );
+  }
+  return out;
 }
