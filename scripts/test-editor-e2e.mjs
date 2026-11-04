@@ -191,6 +191,18 @@ try {
     await page.keyboard.press("Escape");
     await page.waitForTimeout(300);
     check("Esc 关闭产物浮框", (await page.locator(".out-pop").count()) === 0);
+
+    /*
+     * 再点一次「产物」按钮也要能关上。这里有个真坑：外点关闭监听的是 document
+     * 的 mousedown，按钮自己的 onClick 是 click——mousedown 先关、click 再翻回来，
+     * 用户看到的就是"点按钮关不掉"。修复是让弹层把触发器排除在"外面"之外。
+     */
+    await outputsBtn.click();
+    await page.waitForTimeout(500);
+    check("产物浮框又打开了", (await page.locator(".out-pop").count()) === 1);
+    await outputsBtn.click();
+    await page.waitForTimeout(400);
+    check("再点「产物」按钮能关上", (await page.locator(".out-pop").count()) === 0);
   }
 
   /* 4c. 时间码批注：写完要落盘，并且能出现在列表里（agent 靠这份数据改片） */
@@ -279,6 +291,56 @@ try {
         archRows.join(" | ").slice(0, 120),
       );
     }
+
+    /*
+     * 行内「恢复」：悬停归档行出现按钮，点一下还原——不用先点行切过去再点顶栏标签。
+     * 用一个"非当前"的归档工程来测（demo），顺带压住"恢复不该切换当前工程"。
+     */
+    await page.locator(".caret").click();
+    await page.waitForTimeout(300);
+    // 临时数据根里不一定有 demo，自己造一个"非当前"的工程再归档它，确定性强
+    const created = await api("/api/projects", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ name: "E2E 归档对照" }),
+    });
+    const otherId = created.project?.id;
+    check("REST 能创建对照工程", Boolean(otherId), JSON.stringify(created).slice(0, 80));
+    if (otherId) {
+      await api(`/api/projects/${otherId}/archive`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ archived: true }),
+      });
+    }
+    // 面板列表来自首屏 load() 拉的快照，REST 改完必须整页重载才能看见
+    await page.reload({ waitUntil: "domcontentloaded" });
+    await page.waitForSelector(".project-name", { timeout: 20000 });
+    await openProjectMenu();
+    await page.locator(".proj-arch").click();
+    await page.waitForTimeout(400);
+    const demoRow = page
+      .locator(".menu-projects .menu-item.is-archived")
+      .filter({ hasText: "归档对照" })
+      .first();
+    check("对照工程出现在归档列表里", (await demoRow.count()) === 1);
+    if (await demoRow.count()) {
+      await demoRow.hover();
+      await page.waitForTimeout(300);
+      const restore = demoRow.locator(".menu-restore");
+      check("悬停归档行出现「恢复」按钮", (await restore.count()) === 1);
+      if (await restore.count()) {
+        await restore.click();
+        await page.waitForTimeout(1000);
+        const otherAfter = (await api("/api/projects")).projects.find((p) => p.id === otherId);
+        check("行内「恢复」一步还原对照工程", !otherAfter?.archivedAt, String(otherAfter?.archivedAt));
+        check("行内恢复不切换当前工程", (await page.inputValue(".project-name")) === newName);
+        check("恢复后面板还开着（没跳走）", (await page.locator(".menu").count()) === 1);
+      }
+    }
+    // 恢复归档开关到收起态，继续后面的"点顶栏标签恢复"流程
+    await page.locator(".proj-arch").click();
+    await page.waitForTimeout(300);
     await page.locator(".caret").click();
     await page.waitForTimeout(300);
     check("再点一次能收起项目面板", (await page.locator(".menu").count()) === 0);

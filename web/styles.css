@@ -3248,9 +3248,10 @@ button.mini.add {
 .proj-arch {
   height: 24px;
   padding: 0 8px;
-  border: 1px solid transparent;
+  /* 默认就带边框：纯文字的「归档 17」被当成状态标签，没人知道它能点 */
+  border: 1px solid var(--line);
   border-radius: 6px;
-  background: transparent;
+  background: rgba(255, 255, 255, 0.04);
   color: var(--muted);
   font-size: 11px;
   cursor: pointer;
@@ -3271,10 +3272,40 @@ button.mini.add {
 /* 已归档的工程：整行压暗，不跟"在用的"抢注意力；悬停恢复亮度免得看成禁用 */
 .menu-item.is-archived {
   opacity: 0.6;
+  /* 「恢复」按钮绝对定位在行右侧 */
+  position: relative;
 }
 
 .menu-item.is-archived:hover {
   opacity: 1;
+}
+
+/* 行内「恢复」：悬停才出现——恢复不常发生，常驻只会变成一行里多一个误点目标 */
+.menu-restore {
+  position: absolute;
+  right: 8px;
+  top: 50%;
+  transform: translateY(-50%);
+  height: 22px;
+  padding: 0 10px;
+  border: 1px solid var(--line-strong);
+  border-radius: 6px;
+  background: rgba(20, 20, 22, 0.92);
+  color: var(--text);
+  font-size: 11px;
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 120ms ease;
+}
+
+.menu-item:hover .menu-restore,
+.menu-restore:focus-visible {
+  opacity: 1;
+}
+
+.menu-restore:hover {
+  color: var(--accent);
+  border-color: var(--accent);
 }
 
 /* 顶栏「已归档」标签：只在当前工程被归档时出现，点一下就是取消归档 */

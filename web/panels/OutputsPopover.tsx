@@ -65,7 +65,15 @@ export const OutputsPopover: React.FC<{
   refreshKey: number;
   onClose: () => void;
   onManage: () => void;
-}> = ({ open, projectId, projectName, refreshKey, onClose, onManage }) => {
+  /**
+   * 触发器（顶栏「产物」按钮）所在的容器。
+   *
+   * 外点关闭用的是 document 的 mousedown，而按钮自己的 onClick 是 click——
+   * mousedown 先把 open 关掉、click 再把它翻回来，结果是"点按钮关不掉"。
+   * 所以按钮必须被排除在"外面"之外。
+   */
+  anchorRef?: React.RefObject<HTMLElement | null>;
+}> = ({ open, projectId, projectName, refreshKey, onClose, onManage, anchorRef }) => {
   const [files, setFiles] = useState<OutputEntry[]>([]);
   const [tab, setTab] = useState<Tab>("all");
   const [selected, setSelected] = useState<OutputEntry | null>(null);
@@ -96,7 +104,11 @@ export const OutputsPopover: React.FC<{
   useEffect(() => {
     if (!open) return;
     const onDown = (e: MouseEvent) => {
-      if (boxRef.current && !boxRef.current.contains(e.target as Node)) onClose();
+      const target = e.target as Node;
+      if (boxRef.current?.contains(target)) return;
+      // 点触发器交给按钮自己的 onClick 去 toggle；这里先关掉就变成"关不掉"
+      if (anchorRef?.current?.contains(target)) return;
+      onClose();
     };
     const onKey = (e: KeyboardEvent) => {
       if (e.key === "Escape") onClose();
@@ -107,7 +119,7 @@ export const OutputsPopover: React.FC<{
       document.removeEventListener("mousedown", onDown);
       document.removeEventListener("keydown", onKey);
     };
-  }, [open, onClose]);
+  }, [open, onClose, anchorRef]);
 
   // 字幕类产物要读文本才能预览（图片/视频/音频用原生标签就够）
   useEffect(() => {

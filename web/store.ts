@@ -82,6 +82,13 @@ type State = {
    * 工程还留在画面上继续用——所以这里不切工程、不断订阅，只刷新列表。
    */
   archiveCurrentProject: (archived?: boolean) => Promise<void>;
+  /**
+   * 按 id 归档 / 恢复任意工程（列表里那颗「恢复」按钮走这里）。
+   *
+   * 和 archiveCurrentProject 的区别：作用对象是给定的 id，不要求它是当前工程——
+   * 归档/恢复只动列表元数据，本来就不需要先切过去。不切工程、不断订阅，只刷新列表。
+   */
+  setProjectArchived: (id: string, archived?: boolean) => Promise<void>;
   duplicateCurrentProject: () => Promise<void>;
   /** 导出当前工程为 .zip 并下载 */
   exportCurrentProject: () => Promise<void>;
@@ -335,14 +342,23 @@ export const useDoc = create<State>((set, get) => ({
   archiveCurrentProject: async (archived = true) => {
     const project = get().project;
     if (!project) return;
+    await get().setProjectArchived(project.id, archived);
+  },
+
+  setProjectArchived: async (id, archived = true) => {
+    // 名字从列表里拿：恢复一个不是当前工程的项时，界面上唯一能告诉用户"恢复了哪个"的就是名字
+    const name =
+      get().projects.find((p) => p.id === id)?.name ??
+      (get().project?.id === id ? get().project?.name : undefined) ??
+      id;
     try {
-      await archiveProject(project.id, archived);
+      await archiveProject(id, archived);
       await get().refreshProjects();
       // 不切工程：归档只影响"列表里露面"，正在编辑的画面不该被收起动作打断
       get().notify(
         archived
-          ? `已归档「${project.name}」——没删任何文件，工程名旁的「已归档」标签点一下就能恢复`
-          : `已取消归档「${project.name}」，重新出现在项目列表里`,
+          ? `已归档「${name}」——没删任何文件，工程名旁的「已归档」标签点一下就能恢复`
+          : `已取消归档「${name}」，重新出现在项目列表里`,
       );
     } catch (err) {
       set({ error: err instanceof Error ? err.message : archived ? "归档失败" : "取消归档失败" });

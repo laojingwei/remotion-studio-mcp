@@ -306,6 +306,8 @@ export default function App() {
   const [outputsDialogOpen, setOutputsDialogOpen] = useState(false);
   /** 顶栏产物浮框 */
   const [outputsOpen, setOutputsOpen] = useState(false);
+  /** 「产物」按钮所在的容器：弹层靠它把自己的触发器排除在"点外面"之外 */
+  const outputsAnchorRef = useRef<HTMLDivElement | null>(null);
   /** 浮框的重拉信号：抽完帧、渲染完就 +1 */
   const [outputsRefresh, setOutputsRefresh] = useState(0);
   const [workspaceOpen, setWorkspaceOpen] = useState(false);
@@ -701,33 +703,75 @@ export default function App() {
                     aria-pressed={showArchived}
                     onClick={() => setShowArchived((v) => !v)}
                   >
-                    {showArchived ? "隐藏归档" : `归档 ${archivedCount}`}
+                    {/* 「归档 17」被当成状态标签没人点它；带上 ▸/▴ 与"已归档"才像开关 */}
+                    {showArchived ? `收起归档 ▴` : `已归档 ${archivedCount} ▸`}
                   </button>
                 ) : null}
               </div>
               <div className="menu-projects">
                 {visibleProjects.length ? (
-                  visibleProjects.map((p) => (
-                    <button
-                      key={p.id}
-                      className={`menu-item ${p.id === project.id ? "is-on" : ""}${p.archivedAt ? " is-archived" : ""}`}
-                      title={`${p.name}\n创建：${fmtTime(p.createdAt, true)}\n最后修改：${fmtTime(p.updatedAt, true)}`}
-                      onClick={() => {
-                        setProjectMenu(false);
-                        void useDoc.getState().loadProject(p.id);
-                      }}
-                    >
-                      <span className="menu-proj">
-                        <span className="menu-proj-name">{p.name}</span>
-                        {/* 右侧时间跟排序字段一致：按"修改"排却显示创建时间，看着像乱序 */}
-                        <span className="menu-proj-time">{fmtTime(timeOf(p, projSort.key))}</span>
-                      </span>
-                      <span className="menu-meta">
-                        {p.archivedAt ? `已归档 ${fmtTime(p.archivedAt)} · ` : ""}
-                        rev{p.rev} · {p.scenes} 场景
-                      </span>
-                    </button>
-                  ))
+                  visibleProjects.map((p) =>
+                    p.archivedAt ? (
+                      /*
+                       * 归档行用 div 而不是 button：行内要放一颗「恢复」按钮，HTML 不允许 button 套 button。
+                       * 恢复一步到位——原来的路径是"点行切过去 → 再点顶栏的已归档标签"，
+                       * 两步，而且在找工程的时候根本想不到要先切换过去。
+                       */
+                      <div
+                        key={p.id}
+                        role="button"
+                        tabIndex={0}
+                        className={`menu-item ${p.id === project.id ? "is-on" : ""} is-archived`}
+                        title={`${p.name}\n创建：${fmtTime(p.createdAt, true)}\n最后修改：${fmtTime(p.updatedAt, true)}\n点行打开它；右侧「恢复」放回列表（文件本来就没删）`}
+                        onClick={() => {
+                          setProjectMenu(false);
+                          void useDoc.getState().loadProject(p.id);
+                        }}
+                        onKeyDown={(e) => {
+                          if (e.key === "Enter" || e.key === " ") {
+                            e.preventDefault();
+                            setProjectMenu(false);
+                            void useDoc.getState().loadProject(p.id);
+                          }
+                        }}
+                      >
+                        <span className="menu-proj">
+                          <span className="menu-proj-name">{p.name}</span>
+                          <span className="menu-proj-time">{fmtTime(timeOf(p, projSort.key))}</span>
+                        </span>
+                        <span className="menu-meta">
+                          已归档 {fmtTime(p.archivedAt)} · rev{p.rev} · {p.scenes} 场景
+                        </span>
+                        <button
+                          className="menu-restore"
+                          title="取消归档：放回项目列表（文件本来就没动过）"
+                          onClick={(e) => {
+                            e.stopPropagation(); // 别把"点行 = 切换工程"也触发了
+                            void useDoc.getState().setProjectArchived(p.id, false);
+                          }}
+                        >
+                          恢复
+                        </button>
+                      </div>
+                    ) : (
+                      <button
+                        key={p.id}
+                        className={`menu-item ${p.id === project.id ? "is-on" : ""}`}
+                        title={`${p.name}\n创建：${fmtTime(p.createdAt, true)}\n最后修改：${fmtTime(p.updatedAt, true)}`}
+                        onClick={() => {
+                          setProjectMenu(false);
+                          void useDoc.getState().loadProject(p.id);
+                        }}
+                      >
+                        <span className="menu-proj">
+                          <span className="menu-proj-name">{p.name}</span>
+                          {/* 右侧时间跟排序字段一致：按"修改"排却显示创建时间，看着像乱序 */}
+                          <span className="menu-proj-time">{fmtTime(timeOf(p, projSort.key))}</span>
+                        </span>
+                        <span className="menu-meta">rev{p.rev} · {p.scenes} 场景</span>
+                      </button>
+                    ),
+                  )
                 ) : (
                   <div className="proj-empty">
                     <span>没有匹配「{projQuery.trim()}」的工程</span>
@@ -1184,7 +1228,7 @@ export default function App() {
             </div>
           ) : null}
         </div>
-        <div className="topbar-outputs">
+        <div className="topbar-outputs" ref={outputsAnchorRef}>
           <button
             className={`ghost outputs-toggle ${outputsOpen ? "is-on" : ""}`}
             onClick={() => setOutputsOpen((v) => !v)}
@@ -1200,6 +1244,7 @@ export default function App() {
             projectName={project?.name ?? ""}
             refreshKey={outputsRefresh}
             onClose={() => setOutputsOpen(false)}
+            anchorRef={outputsAnchorRef}
             onManage={() => {
               setOutputsOpen(false);
               setOutputsDialogOpen(true);
