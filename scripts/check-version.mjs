@@ -1,0 +1,82 @@
+/**
+ * 版本一致性检查：package.json 是唯一来源。
+ *
+ * 起因：同一个版本号曾经散在四个地方且各不相同
+ *   package.json 1.0.8 / mcp-tools.ts 1.1.0 / index.ts 0.44.0 / README 1.1.0
+ * 发版 workflow 只比对 tag 与 package.json，另外三处漂移永远查不出来。
+ *
+ * 用法：
+ *   node scripts/check-version.mjs          # 本地/CI 检查
+ *   （CI 里若是 tag 触发，会自动与 GITHUB_REF_NAME 比对）
+ */
+import fs from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+
+const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+const pkg = JSON.parse(fs.readFileSync(path.join(ROOT, "package.json"), "utf8"));
+const version = pkg.version;
+const errors = [];
+const notes = [];
+
+if (!/^\d+\.\d+\.\d+/.test(version ?? "")) {
+  errors.push(`package.json 的 version 不像版本号：${version}`);
+}
+
+/* 1) 代码里不允许再出现写死的版本（McpServer / initialize 回执必须读 VERSION） */
+const scanDirs = ["server", "shared", "src", "web"];
+const offenders = [];
+const walk = (dir) => {
+  for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+    const p = path.join(dir, entry.name);
+    if (entry.isDirectory()) {
+      if (entry.name === "node_modules" || entry.name.startsWith(".")) continue;
+      walk(p);
+      continue;
+    }
+    if (!/\.(ts|tsx)$/.test(entry.name)) continue;
+    const text = fs.readFileSync(p, "utf8");
+    // version: "1.2.3"（serverInfo / McpServer 选项）；注释里的不算
+    for (const line of text.split("\n")) {
+      if (/^\s*(\/\/|\*|\/\*)/.test(line)) continue;
+      const m = /version\s*:\s*["'](\d+\.\d+\.\d+)["']/.exec(line);
+      if (m) offenders.push(`${path.relative(ROOT, p)} → ${m[0]}`);
+    }
+  }
+};
+for (const d of scanDirs) {
+  const abs = path.join(ROOT, d);
+  if (fs.existsSync(abs)) walk(abs);
+}
+if (offenders.length) {
+  errors.push(`以下位置写死了版本号，应改为 import { VERSION } from "./version"：\n  - ${offenders.join("\n  - ")}`);
+}
+
+/* 2) README 里的版本行必须跟上（不要求格式统一，只要求出现同一个号） */
+const readmePath = path.join(ROOT, "README.md");
+if (fs.existsSync(readmePath)) {
+  const readme = fs.readFileSync(readmePath, "utf8");
+  const m = /版本\**\s*([0-9]+\.[0-9]+\.[0-9]+)/.exec(readme);
+  if (m && m[1] !== version) {
+    errors.push(`README 写的是 ${m[1]}，package.json 是 ${version}（发版时一起改）`);
+  } else if (m) {
+    notes.push(`README 版本一致：${m[1]}`);
+  }
+}
+
+/* 3) tag 触发时，tag 必须等于 package.json */
+const refType = process.env.GITHUB_REF_TYPE;
+const refName = process.env.GITHUB_REF_NAME;
+if (refType === "tag" && refName) {
+  const tag = refName.replace(/^v/, "");
+  if (tag !== version) errors.push(`tag ${refName} 与 package.json 版本 ${version} 不一致`);
+  else notes.push(`tag 与 package.json 一致：${tag}`);
+}
+
+if (errors.length) {
+  console.error("✗ 版本一致性检查未通过：");
+  for (const e of errors) console.error(`  - ${e}`);
+  process.exit(1);
+}
+console.log(`✓ 版本一致：${version}`);
+for (const n of notes) console.log(`  ${n}`);

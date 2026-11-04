@@ -116,7 +116,7 @@ export function readProject(id: string): Project {
   const first = projectSchema.safeParse(data);
   if (first.success) {
     if (migrateOverlaysToScenes(first.data)) {
-      fs.writeFileSync(fileOf(id), JSON.stringify(first.data, null, 2), "utf8");
+      writeJsonAtomic(fileOf(id), first.data);
     }
     return first.data;
   }
@@ -124,7 +124,7 @@ export function readProject(id: string): Project {
   if (repairKnownDirtyValues(data)) {
     const retry = projectSchema.safeParse(data);
     if (retry.success) {
-      fs.writeFileSync(fileOf(id), JSON.stringify(retry.data, null, 2), "utf8");
+      writeJsonAtomic(fileOf(id), retry.data);
       migrateOverlaysToScenes(retry.data);
       return retry.data;
     }
@@ -183,10 +183,61 @@ export function repairKnownDirtyValues(project: Record<string, unknown>): boolea
   return changed;
 }
 
+/**
+ * 原子写：先写同目录临时文件，再 rename 覆盖。
+ *
+ * 为什么不能直接 `writeFileSync(project.json)`：覆盖写不是原子操作，进程被强杀、
+ * 断电、或磁盘写满时，文件可能停在"写了一半"的状态。下次 `readProject` 的
+ * `JSON.parse` 直接抛错 —— 用户侧看到的就是"工程没了"，而 50 份 rev 快照虽然在
+ * `history/` 里，却需要人工翻文件才能救回来。
+ *
+ * rename 在同一磁盘卷上是原子的：要么看到旧文件，要么看到完整的新文件。
+ * Windows 上 `fs.renameSync` 覆盖已存在文件也是允许的（Node 内部走 MoveFileEx）。
+ */
+function writeJsonAtomic(file: string, data: unknown): void {
+  const tmp = `${file}.tmp`;
+  const text = JSON.stringify(data, null, 2);
+  const fd = fs.openSync(tmp, "w");
+  try {
+    fs.writeFileSync(fd, text, "utf8");
+    // 落盘顺序保证：内容先到磁盘，再改目录项；崩溃时最坏也只丢这次编辑
+    try {
+      fs.fsyncSync(fd);
+    } catch {
+      /* 某些文件系统（网络盘/虚拟盘）不支持 fsync，不因此中断写入 */
+    }
+  } finally {
+    fs.closeSync(fd);
+  }
+  renameWithRetry(tmp, file);
+}
+
+/**
+ * Windows 上 rename 覆盖可能被 EPERM/EBUSY 挡一下：杀软正在扫这个文件、
+ * 或者编辑器/网盘客户端开着一个只读句柄。这类锁通常几十毫秒就释放，
+ * 直接抛错会让用户看到一次莫名其妙的"保存失败"。
+ *
+ * 这里做同步短重试（Atomics.wait 是阻塞等待，不占用事件循环的其它任务），
+ * 5 次 × 20ms 足够覆盖杀软扫描；仍然失败才把错误抛出去。
+ */
+function renameWithRetry(from: string, to: string): void {
+  const blocked = new Set(["EPERM", "EBUSY", "EACCES"]);
+  for (let attempt = 0; attempt < 5; attempt++) {
+    try {
+      fs.renameSync(from, to);
+      return;
+    } catch (err) {
+      const code = (err as NodeJS.ErrnoException).code ?? "";
+      if (!blocked.has(code) || attempt === 4) throw err;
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 20);
+    }
+  }
+}
+
 export function writeProject(project: Project): void {
   ensureDirs();
   fs.mkdirSync(path.dirname(fileOf(project.id)), { recursive: true });
-  fs.writeFileSync(fileOf(project.id), JSON.stringify(project, null, 2), "utf8");
+  writeJsonAtomic(fileOf(project.id), project);
   // 每次落盘顺手存一份 rev 快照，历史面板才能"回滚到某一版"。
   // 快照失败不能影响主写入，所以内部自己 try/catch。
   saveSnapshot(project);

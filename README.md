@@ -3,7 +3,7 @@
 一份 `Project JSON`，三个消费方：**Agent 改它、用户在 Web 上拖它、Remotion 渲染它**。
 因为共用同一个数据源，agent 和用户的编辑天然互通 —— 不是后期加的功能，是架构的结果。
 
-> **版本** 1.1.0（开发线 v1.01）· **MCP 工具** 112 个（4 个常驻 + 108 个按需发现）·
+> **版本** 1.1.0（开发线 v1.01）· **MCP 工具** 113 个（4 个常驻 + 109 个按需发现）·
 > **许可** 本仓库代码 MIT，依赖里有两个非宽松（Remotion License / AGPL），见 [开源协议](#开源协议)
 
 ---
@@ -50,6 +50,16 @@ npm run dev          # API(4380) + 编辑器(5173)
 
 > **端口注意**：默认 4380。如果本机被别的软件占用（例如 QQ 会监听 4310），
 > 用 `PORT=4400 npm run dev:server` 换端口，并同步 `SERVER_URL` 环境变量给 MCP 代理。
+
+### 本地服务的安全边界
+
+编辑器能删文件、能起渲染、能改工程，所以默认**只监听 `127.0.0.1`**：
+
+- 同网段的其它设备连不上（不是靠防火墙，是根本没监听在网卡上）。
+- 写请求额外校验 `Host` 与 `Origin`：挡住 DNS rebinding 和"任意网页跨站调 `/mcp` 的 `tool_call`"。
+  注意 CORS 缺省**不等于**防 CSRF —— `text/plain` 的简单请求不触发预检，照样会被执行。
+- 真要给同事看，显式开放：`HOST=0.0.0.0 npm start`（启动日志会打一行 ⚠️ 提醒）。
+- 排障时 `/api/health` 会回 `version / host / lan`，先确认这三项再怀疑别处。
 
 ---
 
@@ -121,9 +131,9 @@ http://127.0.0.1:4380/mcp
 
 > 注意地址要带 `/mcp`：`/` 是编辑器本身的 HTTP API（REST + SSE），不是 MCP 端点。
 
-### 工具清单（112 个 = 4 常驻 + 108 按需）
+### 工具清单（113 个 = 4 常驻 + 109 按需）
 
-**门面模式**：宿主只看到 4 个常驻工具，其余 108 个用 `tool_search` 按意图现找、用 `tool_call` 执行。
+**门面模式**：宿主只看到 4 个常驻工具，其余 109 个用 `tool_search` 按意图现找、用 `tool_call` 执行。
 这样工具描述不占常驻上下文（否则光工具说明就要几万 token）。
 
 ```
@@ -156,6 +166,7 @@ get_guide(name="manual", section="…")   → 按需读指南（不常驻）
 | 需求 / 分镜 | `intake`（9 步问诊）/ `save_brief` / `get_brief` / `confirm_brief` / `save_storyboard` / `get_storyboard` / `build_storyboard` / `check_project`（只读诊断） |
 | 技能 / 记忆 | `list_guides` / `remember` / `recall` |
 | 协作 | `get_user_messages` / `reply_user` |
+| 自检 | `tool_stats`（最近 7 天的调用次数 / 失败率 / 高频报错，来自 `data/logs/tool-calls-*.jsonl`） |
 
 几个省 token 的开关：
 

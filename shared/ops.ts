@@ -832,6 +832,19 @@ function transformFromTrs(trs: Trs): Record<string, unknown> {
   return out;
 }
 
+/**
+ * 「这条 op 到底改了没有」的检测成本很高：要拿写入前后的整份文档序列化对比，
+ * 每条 op 两次全量 JSON.stringify = O(文档大小 × op 数)。
+ *
+ * 实测（本机）：34KB 工程 100 条 op 26ms 还能忽略；1.1MB 的 3D 工程 100 条 op 要 831ms，
+ * 而且这个开销随工程变大是平方级恶化 —— Web 端一次拖拽就是一条 op，体感会明显发涩。
+ *
+ * 取舍：单条/少量 op（agent 的常态，也是这条守卫最有用的时候——它能把
+ * "字段层级写错、值本来就等于目标"抓出来提示）保留检测；批量超过这个阈值就跳过，
+ * 批量的价值在吞吐，不在逐条诊断。
+ */
+const NOOP_DETECT_MAX_OPS = 8;
+
 export function applyOps(project: Project, ops: Op[]): OpResult {
   assertKnownOpFields(ops);
   let next: Project = structuredClone(project);
@@ -839,16 +852,17 @@ export function applyOps(project: Project, ops: Op[]): OpResult {
   const summary: string[] = [];
   const aliases = new Map<string, string>();
   const createdIds: Record<string, string> = {};
+  const detectNoop = ops.length <= NOOP_DETECT_MAX_OPS;
 
   for (let opIndex = 0; opIndex < ops.length; opIndex++) {
     // `as` 不参与落库，只用来把"刚建出来的东西"记到别名表里
     const { as: aliasName, ...restOp } = ops[opIndex] as Op & { as?: string };
     const op = resolveAliasRefs(restOp as Op, aliases);
-    /** 写入前快照：用来断言「这条 op 真的改了东西」（见循环末尾） */
+    /** 写入前快照：用来断言「这条 op 真的改了东西」（见循环末尾）；批量时为空串 */
     let beforeJson = "";
     const aliasBefore = aliasName ? idsOf(next) : null;
     try {
-    beforeJson = JSON.stringify(next);
+    if (detectNoop) beforeJson = JSON.stringify(next);
     switch (op.op) {
       case "add_scene": {
         const meta = getMeta(op.type);
@@ -2365,8 +2379,9 @@ export function applyOps(project: Project, ops: Op[]): OpResult {
      * 数据前后完全一致就说明这条 op 白跑了。逐个字段去测漏得太多——
      * update_scene 写错层级、add_element 字段拼错、值本来就等于目标，全都能被这一条抓住。
      * 不抛错（幂等重试本来就是合法的），但必须说出来，不能让它静默通过。
+     * 批量（> NOOP_DETECT_MAX_OPS）时不做：检测本身的代价是平方级的，见函数开头说明。
      */
-    if (JSON.stringify(next) === beforeJson) {
+    if (detectNoop && JSON.stringify(next) === beforeJson) {
       const head = ops.length > 1 ? `第 ${opIndex + 1}/${ops.length} 个操作（${op.op}）` : `操作（${op.op}）`;
       summary.push(
         `⚠️${head}没有产生任何数据变更：写入前后工程完全相同。` +

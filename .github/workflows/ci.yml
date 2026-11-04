@@ -1,0 +1,54 @@
+name: ci
+
+# 合码前的质量门：类型检查 → 全量测试 → 构建。
+#
+# 之前仓库只有 publish.yml，等于"发版时才第一次跑代码"。
+# 46 个测试脚本写完却没人自动跑，等于没有网。
+on:
+  push:
+    branches: ['**']
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+
+      # test-media 用 ffprobe 读时长；runner 镜像通常自带，显式装一次免得随镜像变化
+      - name: 安装 ffmpeg
+        run: |
+          if ! command -v ffprobe >/dev/null 2>&1; then
+            sudo apt-get update -qq && sudo apt-get install -y -qq ffmpeg
+          fi
+          ffprobe -version | head -1
+
+      - name: 安装依赖
+        run: npm ci --no-audit --no-fund
+
+      - name: 类型检查
+        run: npm run typecheck
+
+      # 测试里有渲染/打包相关用例，Chromium 缺失会静默跳过或失败；先装好
+      - name: 准备 Chromium（Remotion 渲染用）
+        run: npx remotion browser ensure || echo "（跳过：非渲染用例不依赖浏览器）"
+
+      - name: 测试
+        run: npm test
+
+      - name: 构建编辑器
+        run: npm run build
+
+      - name: 版本一致性（tag / package.json / 代码内）
+        run: node scripts/check-version.mjs

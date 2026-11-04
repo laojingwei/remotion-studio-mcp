@@ -47,6 +47,8 @@ import { detectFlavor } from "../shared/aiFlavor";
 import { lintCopyLines, lintScriptLines } from "../shared/copyLint";
 import { beatFrames, beatTimes, buildCompressCurve, DEFAULT_DUCKING, gainForTarget, nearestBeat, summarizeCurve } from "../shared/audio";
 import { analyzeBeats, BEAT_CONFIDENCE_MIN } from "./audio-analysis.service";
+import { VERSION } from "./version";
+import { logToolCall, toolStats, toolStatsToText } from "./tool-log.service";
 
 /** 元素入场/出场特效的 zod 结构 */
 const EFFECT_DESC = z.object({
@@ -8423,6 +8425,24 @@ const TOOLS: ToolDef[] = [
       return out;
     },
   },
+  {
+    name: "tool_stats",
+    description:
+      "看本机最近几天的工具调用统计：调用次数、失败率、平均/慢速耗时、高频失败原因。\n" +
+      "什么时候用：① 连续几次同一工具报错，先看是不是自己参数总写错（topErrors 里会有原话）；" +
+      "② 用户问「为什么这么慢/是不是卡了」时，用 p95 耗时给依据；③ 想确认某个工具是不是根本没人调。\n" +
+      "数据来自 data/logs/tool-calls-*.jsonl，只记摘要（参数截断 400 字），保留 7 天。",
+    shape: {
+      days: z
+        .number()
+        .int()
+        .min(1)
+        .max(7)
+        .optional()
+        .describe("统计最近几天，默认 1（今天）；最多 7（日志保留上限）"),
+    },
+    run: async (a) => toolStatsToText(toolStats(a.days ?? 1)),
+  },
 ];
 
 /** 工具门面：常驻暴露的核心工具；其余工具经 tool_search 发现、tool_call 执行 */
@@ -8843,6 +8863,11 @@ const SEARCH_ALIASES: Record<string, string[]> = {
   自检: ["check_project"],
   记住: ["remember"],
   回忆: ["recall"],
+  统计: ["tool_stats"],
+  调用日志: ["tool_stats"],
+  失败率: ["tool_stats"],
+  慢: ["tool_stats"],
+  性能: ["tool_stats"],
 };
 
 
@@ -8855,17 +8880,26 @@ export type { ToolDef };
  * 但非核心工具在注册表里标记 enabled=false —— SDK 的 tools/list 只返回 enabled 的，
  * 于是宿主只看到 4 个核心入口。MCP_EXPOSE=all 恢复全量暴露（调试用）。 */
 export function buildMcpServer(): McpServer {
-  const server = new McpServer({ name: "remotion-studio", version: "1.1.0" });
+  const server = new McpServer({ name: "remotion-studio", version: VERSION });
   const exposeAll = exposeAllTools();
   for (const def of TOOLS) {
     const handler = async (args: Record<string, any>) => {
+      /**
+       * 日志记真实工具名：门面模式下所有调用都经 tool_call，
+       * 只记 "tool_call" 会让统计全是同一个名字，等于没记。
+       */
+      const inner = def.name === "tool_call" ? String(args?.name ?? "") : "";
+      const logAs = inner || def.name;
+      const startedAt = performance.now();
       try {
         let out = await def.run(args ?? {});
         out = liftWarnings(String(out));
         if (dirtySincePreview && needsDirtyHint(def.name)) out = String(out) + DIRTY_HINT;
+        logToolCall({ tool: logAs, args: inner ? args?.args : args, startedAt, ok: true });
         return { content: [{ type: "text" as const, text: text(out) }] };
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
+        logToolCall({ tool: logAs, args, startedAt, ok: false, error: err });
         return {
           content: [{ type: "text" as const, text: `失败：${message}` }],
           isError: true,
