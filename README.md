@@ -604,7 +604,7 @@ screen = stageCenter + pan + zoom * localPoint
     "post": { "bloom": 1.2 } } } }
 ```
 
-- **几何体白名单 13 种**：`box` `sphere` `cylinder` `cone` `torus` `torusKnot` `plane` `capsule` `icosahedron` `dodecahedron` `octahedron` `ring`（环/行星环）`dashRing`（轨道虚线）
+- **几何体白名单 14 种**：`box` `sphere` `cylinder` `cone` `torus` `torusKnot` `plane` `capsule` `icosahedron` `dodecahedron` `octahedron` `ring`（环/行星环）`dashRing`（轨道虚线）`group`（纯枢轴，不渲染，只带子节点；`geometry` 省略即 group）
 - **材质**：`standard`（PBR）/ `physical`（玻璃）/ `basic`（线框、剪影）；支持 `emissive` 自发光、`map` 外部贴图、`opacity`、`side`、`flatShading`
 - **`parent` 层级**：子节点继承父节点的位移/旋转 —— 行星挂在旋转的轨道环下面是"公转"，行星自己的 `rotY` 是"自转"，土星环挂在土星上跟着倾斜
 - **`lights`**：给了它就接管打光（预设的四盏方向光撤掉）。点光放在太阳位置，行星转到哪儿就照到哪儿 —— 昼夜面就对了

@@ -288,3 +288,51 @@ export function seamOverlaps(
   }
   return out;
 }
+
+/**
+ * 接缝交叠区（给"抽帧/预览时看到两个画面叠在一起"提供**可解释的坐标**）。
+ *
+ * 背景：`seamOverlaps` 让上一幕多渲 N 帧定格淡出，于是 `[下一幕.start, +N)` 这段里
+ * 两幕真的同时存在。这在成片里是叠化，在**抽帧**里就是"上一幕的大字半透明地压在
+ * 新幕上"——看起来非常像渲染 bug（"为什么 3D 幕里出现了 outro 的谢谢观看"）。
+ *
+ * 实测代价：为了确认这是转场而不是状态泄漏，来回抽了 6 组帧（235/260/325/415）
+ * 才敢下结论。所以这段窗口必须能被工具直接报出来，而不是让人自己盯着帧号猜。
+ *
+ * 只对主轨首尾相接的幕生效，和 `seamOverlaps` 同一套判定——两处算不齐就会
+ * 出现"提示说这帧有交叠、画面其实是干净的"。
+ */
+export type SeamBlendWindow = {
+  /** 交叠区起始帧（= 下一幕的 start） */
+  start: number;
+  /** 交叠区结束帧（不含），start + 交叠帧数 */
+  end: number;
+  /** 交叠帧数（= 下一幕 transitionIn 的时长，被幕长夹过） */
+  frames: number;
+  /** 上一幕（定格淡出的那一幕） */
+  from: string;
+  /** 下一幕（正在渐显的那一幕） */
+  to: string;
+};
+
+export function seamBlendWindows(
+  scenes: readonly (SeamScene & { name?: string; id?: string })[],
+  spans: readonly SeamSpan[],
+): SeamBlendWindow[] {
+  const overlaps = seamOverlaps(scenes, spans);
+  const out: SeamBlendWindow[] = [];
+  for (let i = 0; i < scenes.length - 1; i++) {
+    const n = overlaps[i] ?? 0;
+    if (!n) continue;
+    const cur = spans[i + 1];
+    if (!cur) continue;
+    out.push({
+      start: cur.start,
+      end: cur.start + n,
+      frames: n,
+      from: String(scenes[i].name ?? scenes[i].id ?? `第 ${i + 1} 幕`),
+      to: String(scenes[i + 1].name ?? scenes[i + 1].id ?? `第 ${i + 2} 幕`),
+    });
+  }
+  return out;
+}

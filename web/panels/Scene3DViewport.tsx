@@ -393,8 +393,10 @@ const OrbitRig: React.FC<{
             }
             const node = g.nodes.find((n) => n.id === owner);
             if (!node || node.hidden) continue;
-            const t = node.geometry.type;
+            const t = node.geometry?.type ?? "group";
             if (t === "ring" || t === "dashRing") continue; // 环：丢弃，不向上冒认
+            // 纯枢轴没有表面：只有它是"包围盒代理"时才命中不了，这里同样不当拾取结果
+            if (t === "group") continue;
             return owner;
           }
         }
@@ -406,8 +408,8 @@ const OrbitRig: React.FC<{
         let best: string | null = null;
         let bestScore = 14;
         for (const n of g.nodes) {
-          const t = n.geometry.type;
-          if (t === "ring" || t === "dashRing") continue; // 轨道线不当拾取目标：与 DslScene 的 pickable 口径一致，环只从树选
+          const t = n.geometry?.type ?? "group";
+          if (t === "ring" || t === "dashRing" || t === "group") continue; // 轨道线/纯枢轴不参与拾取：与 DslScene 的 pickable 口径一致，只从树里选
           const obj = objects.current?.get(n.id);
           if (!obj || !obj.visible) continue;
           obj.getWorldPosition(world);

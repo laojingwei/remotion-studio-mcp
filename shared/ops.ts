@@ -23,7 +23,7 @@ import {
 } from "./schema";
 import { describeSceneBox, normalizeSceneBox, type SceneBox } from "./sceneBox";
 import { droppedProps, getMeta, MIN_SCENE_FRAMES, normalizeProps } from "./sceneMetas";
-import { dslIssues, dslSchema, nodeSchema, type DslNode, type Scene3DDsl } from "./scene3dDsl";
+import { dslIssues, dslSchema, dslWarnings, nodeSchema, type DslNode, type Scene3DDsl } from "./scene3dDsl";
 import { hasAnimatedChain, reparentLocalTrs, type Trs } from "./scene3dTransform";
 import { effectLabel, effectSummaryText } from "./effects";
 import { TRANSITION_TYPES } from "./transitions";
@@ -767,7 +767,7 @@ function graphOf(scene: Scene, opName: string): GraphDoc {
 }
 
 /** 校验并落库。任何不合法都在**写进去之前**报出来，不留半成品场景 */
-function saveGraph(scene: Scene, graph: GraphDoc, opName: string): GraphDoc {
+function saveGraph(scene: Scene, graph: GraphDoc, opName: string, warn?: string[]): GraphDoc {
   const parsed = dslSchema.safeParse(graph);
   if (!parsed.success) {
     const errs = parsed.error.issues.slice(0, 4).map((i) => describeIssue(i as unknown as Record<string, unknown>));
@@ -777,6 +777,12 @@ function saveGraph(scene: Scene, graph: GraphDoc, opName: string): GraphDoc {
   if (issues.length) {
     throw new Error(`${opName} 改完的场景图有结构问题（**没有写入**）：\n- ${issues.slice(0, 4).join("\n- ")}`);
   }
+  /**
+   * 软提示（不拦写入）：空枢轴、枢轴上的材质、自定义灯把场景压黑。
+   * 走回执而不是 throw —— 这些是"骨架搭到一半"的正常中间态，
+   * 拦下来等于不让 agent 分步搭场景。
+   */
+  warn?.push(...dslWarnings(parsed.data).map((m) => `⚠️ ${m}`));
   // 返回**归一化后**的图：调用方要用它写回执（未归一化的对象缺 schema 默认值，
   // 回执里就会出现 "fov undefined"、"size undefined" 这种半句话）
   const props = normalizeProps("scene3d", {
@@ -1787,13 +1793,27 @@ export function applyOps(project: Project, ops: Op[]): OpResult {
           }
         }
 
-        if (isPlainObject(patch.geometry)) {
-          const cur = node.geometry as unknown as Record<string, unknown>;
+        if ("geometry" in patch && patch.geometry === null) {
+          // null = 退回纯枢轴（不渲染，只带子节点）。默认值就是 group，这里显式写出来
+          node.geometry = { type: "group" } as never;
+          changed.push("几何体改成纯枢轴（group，不再渲染实体）");
+        } else if (isPlainObject(patch.geometry)) {
+          const cur = (node.geometry ?? { type: "group" }) as unknown as Record<string, unknown>;
           const g = patch.geometry;
           if (typeof g.type === "string" && g.type !== cur.type) {
             // 换形状：整份替换（旧形状的 radius/segments 对新形状没有意义）
             node.geometry = g as never;
             changed.push(`几何体换成 ${g.type}`);
+          } else if (cur.type === "group") {
+            /**
+             * 纯枢轴没有任何形状参数。不拦的话 deepMerge 会产出一个
+             * `{type:"group", radius:1}` —— zod 把多余键静默剥掉，写完回执却说"几何体已改"，
+             * agent 会以为生效了（这是"改了没变化"里最难查的一类）。
+             */
+            throw new Error(
+              `update_graph_node：节点「${node.id}」是纯枢轴（group），没有形状参数可改。` +
+                `要给它一个实体，传 patch:{geometry:{type:"sphere", radius:0.5}}（必须带 type）`,
+            );
           } else {
             node.geometry = deepMerge(cur, g) as never;
             changed.push("几何体");
@@ -1871,7 +1891,7 @@ export function applyOps(project: Project, ops: Op[]): OpResult {
           summary.push(`「${scene.name}」节点「${name}」没有需要改的东西（patch 为空或与原值相同）`);
           break;
         }
-        saveGraph(scene, graph, "update_graph_node");
+        saveGraph(scene, graph, "update_graph_node", summary);
         summary.push(`「${scene.name}」节点「${name}」：${changed.join("、")}`);
         break;
       }
@@ -1879,7 +1899,7 @@ export function applyOps(project: Project, ops: Op[]): OpResult {
       case "add_graph_node": {
         const scene = mustFind(next, op.sceneId);
         const graph = graphOf(scene, "add_graph_node");
-        if (!isPlainObject(op.node)) throw new Error("add_graph_node：node 必须是对象（至少给 geometry）");
+        if (!isPlainObject(op.node)) throw new Error("add_graph_node：node 必须是对象（geometry 省略即纯枢轴 group）");
         if (graph.nodes.length >= 48) {
           throw new Error(`add_graph_node：节点已到上限 48 个（「${scene.name}」）。先删掉不用的节点`);
         }
@@ -1908,10 +1928,10 @@ export function applyOps(project: Project, ops: Op[]): OpResult {
           at = i + 1;
         }
         graph.nodes.splice(at, 0, nodeIn as unknown as DslNode);
-        saveGraph(scene, graph, "add_graph_node");
+        saveGraph(scene, graph, "add_graph_node", summary);
         const g = nodeIn.geometry as { type?: string } | undefined;
         summary.push(
-          `「${scene.name}」加了节点「${id}」（${g?.type ?? "?"}${nodeIn.parent ? `，挂在 ${nodeIn.parent} 下` : ""}）`,
+          `「${scene.name}」加了节点「${id}」（${g?.type ?? "group 纯枢轴"}${nodeIn.parent ? `，挂在 ${nodeIn.parent} 下` : ""}）`,
         );
         break;
       }
@@ -1933,7 +1953,7 @@ export function applyOps(project: Project, ops: Op[]): OpResult {
           throw new Error(`remove_graph_node：场景图至少要留一个节点（现在共 ${graph.nodes.length} 个）`);
         }
         graph.nodes = graph.nodes.filter((n) => !drop.has(n.id));
-        saveGraph(scene, graph, "remove_graph_node");
+        saveGraph(scene, graph, "remove_graph_node", summary);
         summary.push(
           `「${scene.name}」删了节点「${node.label ?? node.id}」` + (kids.length ? `及其 ${kids.length} 个子节点` : ""),
         );
@@ -1945,7 +1965,7 @@ export function applyOps(project: Project, ops: Op[]): OpResult {
         const graph = graphOf(scene, "set_graph_camera");
         if (op.camera === null) {
           delete graph.camera;
-          saveGraph(scene, graph, "set_graph_camera");
+          saveGraph(scene, graph, "set_graph_camera", summary);
           summary.push(`「${scene.name}」相机交还给自动取景`);
           break;
         }
@@ -1955,7 +1975,7 @@ export function applyOps(project: Project, ops: Op[]): OpResult {
           op.camera,
         ) as unknown as NonNullable<Scene3DDsl["camera"]>;
         graph.camera = cam;
-        const savedCam = saveGraph(scene, graph, "set_graph_camera").camera!;
+        const savedCam = saveGraph(scene, graph, "set_graph_camera", summary).camera!;
         const lockSegs = (savedCam.anim ?? []).filter((a) => a.lookAt);
         summary.push(
           `「${scene.name}」相机：位置 [${savedCam.position.join(", ")}] → 看向 [${savedCam.target.join(", ")}]` +
@@ -1973,7 +1993,7 @@ export function applyOps(project: Project, ops: Op[]): OpResult {
         const graph = graphOf(scene, "set_graph_lights");
         if (op.lights === null || (Array.isArray(op.lights) && op.lights.length === 0)) {
           delete graph.lights;
-          saveGraph(scene, graph, "set_graph_lights");
+          saveGraph(scene, graph, "set_graph_lights", summary);
           summary.push(`「${scene.name}」撤掉自定义光源，回到 look 的默认打光`);
           break;
         }
@@ -1983,7 +2003,7 @@ export function applyOps(project: Project, ops: Op[]): OpResult {
         }
         const lights = op.lights as unknown as NonNullable<Scene3DDsl["lights"]>;
         graph.lights = lights;
-        const savedLights = saveGraph(scene, graph, "set_graph_lights").lights ?? [];
+        const savedLights = saveGraph(scene, graph, "set_graph_lights", summary).lights ?? [];
         summary.push(
           `「${scene.name}」光源：${savedLights
             .map((l) => `${l.type}@[${l.position.join(", ")}] i=${l.intensity}`)
@@ -1997,7 +2017,7 @@ export function applyOps(project: Project, ops: Op[]): OpResult {
         const graph = graphOf(scene, "set_graph_particles");
         if (op.particles === null) {
           delete graph.particles;
-          saveGraph(scene, graph, "set_graph_particles");
+          saveGraph(scene, graph, "set_graph_particles", summary);
           summary.push(`「${scene.name}」关掉粒子层`);
           break;
         }
@@ -2007,7 +2027,7 @@ export function applyOps(project: Project, ops: Op[]): OpResult {
           op.particles,
         ) as unknown as NonNullable<Scene3DDsl["particles"]>;
         graph.particles = parts;
-        const savedParts = saveGraph(scene, graph, "set_graph_particles").particles!;
+        const savedParts = saveGraph(scene, graph, "set_graph_particles", summary).particles!;
         summary.push(`「${scene.name}」粒子：${savedParts.count} 个，size ${savedParts.size}`);
         break;
       }
@@ -2017,7 +2037,7 @@ export function applyOps(project: Project, ops: Op[]): OpResult {
         const graph = graphOf(scene, "set_graph_post");
         if (op.post === null) {
           delete graph.post;
-          saveGraph(scene, graph, "set_graph_post");
+          saveGraph(scene, graph, "set_graph_post", summary);
           summary.push(`「${scene.name}」辉光回到 look 默认值`);
           break;
         }
@@ -2027,7 +2047,7 @@ export function applyOps(project: Project, ops: Op[]): OpResult {
           op.post,
         ) as unknown as NonNullable<Scene3DDsl["post"]>;
         graph.post = post;
-        const savedPost = saveGraph(scene, graph, "set_graph_post").post!;
+        const savedPost = saveGraph(scene, graph, "set_graph_post", summary).post!;
         summary.push(`「${scene.name}」辉光强度 ×${savedPost.bloom}`);
         break;
       }

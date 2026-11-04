@@ -1299,7 +1299,7 @@ export const Scene3DInspector: React.FC<{ scene: Scene; fps: number }> = ({ scen
                     setOverId(null);
                   }}
                   onClick={(e) => clickNode(n, e)}
-                  title={`${n.id} · ${n.geometry.type} · 拖到其它节点上换父级，拖到空白处回根级`}
+                  title={`${n.id} · ${n.geometry?.type ?? "group"} · 拖到其它节点上换父级，拖到空白处回根级`}
                 >
                   <button
                     className="s3d-icon-btn"
@@ -1312,7 +1312,7 @@ export const Scene3DInspector: React.FC<{ scene: Scene; fps: number }> = ({ scen
                     {n.hidden ? <EyeOffIcon /> : <EyeOnIcon />}
                   </button>
                   <span className="s3d-node-name">{n.label ?? n.id}</span>
-                  <span className="s3d-node-geo">{n.geometry.type}</span>
+                  <span className="s3d-node-geo">{n.geometry?.type ?? "group"}</span>
                   <button
                     className={`s3d-icon-btn ${n.locked ? "is-on" : ""}`}
                     title={n.locked ? "解锁" : "锁定（防误拖误删）"}
@@ -1553,7 +1553,7 @@ export const Scene3DInspector: React.FC<{ scene: Scene; fps: number }> = ({ scen
                 <div className="field">
                   <label>形状</label>
                   <select
-                    value={node.geometry.type}
+                    value={node.geometry?.type ?? "group"}
                     onChange={(e) => patchNode(node.id, { geometry: { type: e.target.value } })}
                   >
                     {GEOMETRY_VARIANTS.map((v) => (
@@ -1562,10 +1562,14 @@ export const Scene3DInspector: React.FC<{ scene: Scene; fps: number }> = ({ scen
                       </option>
                     ))}
                   </select>
-                  <p className="s3d-hint">换形状会重置该形状的参数（旧形状的半径对新形状没意义）</p>
+                  <p className="s3d-hint">
+                    {node.geometry?.type === "group"
+                      ? "纯枢轴：不渲染任何东西，只作为「整组一起动」的父级——把零件拖到它下面即可"
+                      : "换形状会重置该形状的参数（旧形状的半径对新形状没意义）"}
+                  </p>
                 </div>
                 <div className="ff-grid">
-                  {geometryFieldsOf(node.geometry.type).map((f) => (
+                  {geometryFieldsOf(node.geometry?.type ?? "group").map((f) => (
                     <label className="ff-num" key={f.key} title={f.label}>
                       {f.key}
                       <NumInput
@@ -1709,7 +1713,7 @@ export const Scene3DInspector: React.FC<{ scene: Scene; fps: number }> = ({ scen
                   </div>
                 ) : null}
                 {(["sphere", "cylinder", "cone", "torus", "icosahedron"] as string[]).includes(
-                  node.geometry.type,
+                  node.geometry?.type ?? "group",
                 ) ? (
                   <div className="field row">
                     <label title="棱角分明：低多边形风格靠它">平面着色</label>
@@ -1724,11 +1728,11 @@ export const Scene3DInspector: React.FC<{ scene: Scene; fps: number }> = ({ scen
 
                 {(() => {
                   const map = mat.map as { src?: string } | undefined;
-                  const poly = ["icosahedron", "dodecahedron", "octahedron"].includes(node.geometry.type);
+                  const poly = ["icosahedron", "dodecahedron", "octahedron"].includes(node.geometry?.type ?? "group");
                   if (poly) {
                     return (
                       <p className="s3d-hint">
-                        {node.geometry.type} 的 UV 是球面投影碎面，**不能贴图**；要低多边形风格用 sphere +
+                        {node.geometry?.type ?? "group"} 的 UV 是球面投影碎面，**不能贴图**；要低多边形风格用 sphere +
                         平面着色 + 低 segments。
                       </p>
                     );

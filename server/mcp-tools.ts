@@ -52,6 +52,7 @@ import {
   type CustomAsset,
 } from "../shared/assetLibrary";
 import { TRANSITION_TYPES } from "../shared/transitions";
+import { seamBlendWindows } from "../shared/transitions";
 import {
   CUSTOM_EASES,
   EFFECT_CURVES,
@@ -1641,7 +1642,10 @@ const TOOLS: ToolDef[] = [
     description:
       "批量设置转场：① 套同一套（给全部或指定场景）② **逐幕指定，每幕不同类型**（items:[{sceneId,in,out}]）。" +
       "direction=both 时入出场都设；type=none 清除该方向的转场。\n" +
-      "文字密集的幕建议只用 硬切 / blur / 短 fade：circle/wipe/flip 在文字页容易显脏（不是不能，是不划算）。",
+      "文字密集的幕建议只用 硬切 / blur / 短 fade：circle/wipe/flip 在文字页容易显脏（不是不能，是不划算）。\n" +
+      "ℹ️ **接缝是「叠」出来的**：幕与幕首尾相接时，上一幕会多渲 N 帧（N = 下一幕的 transitionIn 时长）定格淡出，" +
+      "下一幕在它上面渐显。所以这 N 帧里两幕同时可见——**上一幕的最后一个画面（含大字、结论数字）会半透明地压在新幕上**。" +
+      "抽帧看到「两个大字叠在一起」通常就是这个，不是渲染错；不想要就缩短转场、把大字提前淡出，或给下一幕硬切。",
     shape: {
       type: z.enum(TRANSITION_TYPES).optional().describe("转场类型；none=清除（给了 items 时可省略）"),
       durationInFrames: z.number().int().min(0).max(120).optional().describe("转场时长（帧），默认 12"),
@@ -4562,7 +4566,9 @@ const TOOLS: ToolDef[] = [
       "① 全局帧：frames:[90,210]（不带 sceneId）；\n" +
       "② 某一幕内部：sceneId + frames:[90,210]（**此时 frames 是该幕内的帧号**，不用换算全局）或 sceneId+offset（单帧快捷）；\n" +
       '③ 转场交界：around="transitions" 自动取每幕交界前后几帧。\n' +
-      "⚠️ 别只抽第 0 帧——文字入场动画从 0 开始，第 0 帧经常是空背景；要等动画落定的帧（如幕内 60% 处）。",
+      "⚠️ 别只抽第 0 帧——文字入场动画从 0 开始，第 0 帧经常是空背景；要等动画落定的帧（如幕内 60% 处）。\n" +
+      "ℹ️ 交界那几帧（= 下一幕 transitionIn 的时长）里，上一幕会定格淡出、下一幕渐显，**两幕同时在画面上**：" +
+      "看到上一幕的大字/标题半透明压在新幕上属叠化本身，工具会在回执里点名这个区间，别当成渲染 bug。",
     shape: {
       frames: z
         .array(z.number())
@@ -4649,6 +4655,26 @@ const TOOLS: ToolDef[] = [
           );
           frames = frames.map((f) => Math.max(0, Math.min(totalFrames - 1, f)));
         }
+      }
+      /**
+       * 抽到的帧落在接缝交叠区时**必须说明**。
+       *
+       * 叠化的实现是"上一幕多渲 N 帧定格淡出、下一幕渐显覆盖"，所以交叠区里
+       * 两幕真的同时在画面上 —— 抽帧看到的是两个画面叠在一起（例如 3D 幕开头
+       * 压着上一幕的「谢谢观看」大字）。这看起来极像渲染 bug：实测为了确认它是
+       * 转场而不是状态泄漏，来回抽了 6 组帧。这里直接点名，省掉那 6 组。
+       */
+      const spanAll = sceneSpans(p.scenes as any[]);
+      const blends = seamBlendWindows((p.scenes ?? []) as any[], spanAll);
+      const inBlend = frames.filter((f) => blends.some((w) => f >= w.start && f < w.end));
+      if (inBlend.length) {
+        const w = blends.find((x) => inBlend[0] >= x.start && inBlend[0] < x.end)!;
+        lines.push(
+          `ℹ️ 第 ${inBlend.join("、")} 帧落在**接缝交叠区**（「${w.from}」→「${w.to}」的第 ${w.start}–${w.end - 1} 帧）：` +
+            `${w.frames} 帧里上一幕定格淡出、下一幕渐显，两幕同时在画面上——` +
+            `看到上一幕的标题/大字半透明地压在新幕上属叠化本身，不是渲染错。` +
+            `要干净的画面就抽交叠区之外（≥ 第 ${w.end} 帧）；想彻底不要这层残影就缩短转场或给下一幕硬切`,
+        );
       }
       for (const f of frames) {
         const res = await api<{ stills: { format: string; url: string }[] }>(

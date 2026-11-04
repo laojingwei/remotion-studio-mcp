@@ -137,6 +137,21 @@ const ring = z.object({
   thetaLength: z.number().min(0).max(360).optional().describe("扇区跨度（度）；不写=整环"),
 });
 
+/**
+ * 纯枢轴：**不画任何东西**，只提供一个可以位移/旋转的父级。
+ *
+ * 为什么必须有：整体移动一组节点（整列火车、整台车床、机器人的上半身）只能靠父子层级，
+ * 而在它之前「枢轴」只能用 `box: 0.001 + opacity 0` 硬凑 —— 那是个隐形实体：
+ * 它照样进渲染队列、照样参与拾取、照样在编辑器大纲里显示成"一个方盒子"，
+ * 用户点它一下才发现这是个假的。实跑时蒸汽机车就是这么搭的。
+ *
+ * `geometry` 整个省略时也按枢轴处理（见 nodeSchema），写 `{type:"group"}` 只是把
+ * 「我确实想要个空节点」这件事说明白。
+ */
+const group = z.object({
+  type: z.literal("group"),
+});
+
 export const geometrySchema = z
   .discriminatedUnion("type", [
     box,
@@ -152,8 +167,12 @@ export const geometrySchema = z
     octahedron,
     ring,
     dashRing,
+    group,
   ])
-  .describe("几何体（必填）：type 决定可用字段——sphere{radius,segments}、ring{innerRadius,outerRadius}、dashRing{radius,count,duty} 等，全表见 list_scene_types(type:\"scene3d\")");
+  .describe(
+    "几何体：type 决定可用字段——sphere{radius,segments}、ring{innerRadius,outerRadius}、dashRing{radius,count,duty}、group=纯枢轴（不画东西，只带子节点）等，" +
+      "全表见 list_scene_types(type:\"scene3d\")。**省略即 group**",
+  );
 
 /* ────────────────────────────── 材质白名单 ────────────────────────────── */
 
@@ -300,7 +319,16 @@ export const nodeSchema = z.object({
   hidden: z.boolean().optional().describe("true = 连同子树不渲染（编辑器临时隐藏，数据仍在）"),
   locked: z.boolean().optional().describe("true = 编辑器里锁住，防误拖误删（渲染照常）"),
   parent: z.string().optional().describe("父节点 id（做卫星、层级旋转用）。扁平数组 + parent 引用，不用嵌套"),
-  geometry: geometrySchema,
+  /**
+   * 不写 = `{type:"group"}` 纯枢轴。
+   *
+   * 用 `.default()` 而不是 `.optional()`：渲染端、编辑器、校验器几十处都在读
+   * `node.geometry.type`，做成可选就要在每一处加 `?.`，而"没有几何体"的语义
+   * 本来就是"这是个枢轴"，给个具名默认值比让字段变成 undefined 干净得多。
+   */
+  geometry: geometrySchema
+    .default({ type: "group" })
+    .describe("几何体；**不写 = 纯枢轴（group，不渲染，只带子节点）**"),
   material: materialSchema.optional().describe("不写就是一层中性暗金属"),
   transform: z
     .object({
@@ -565,4 +593,68 @@ export function dslIssues(spec: Scene3DDsl): string[] {
     }
   }
   return issues;
+}
+
+/* ────────────────────────────── 软提示（不拦截写入） ────────────────────────────── */
+
+/**
+ * 「能写进去，但成片大概率不好看」的问题。**不能混进 dslIssues**：
+ * 那里是硬拦截（写完就 throw），而这些是"骨架搭到一半"的正常中间态。
+ *
+ * 现在只放三类，都是实测翻过车的：
+ *
+ * 1. **空枢轴**：agent 想整体移动一组节点，会先建 group 再加子节点。中间那一瞬间
+ *    它就是空的，写不进去等于不让它搭骨架 —— 但要提示它"这么渲出来什么都没有"。
+ * 2. **枢轴上的材质**：group 没有表面，material 无处施加。不报的话 agent 会反复调色。
+ * 3. **自定义灯把场景压黑**：给了 `lights` 就撤掉 look 的四盏方向光，同时环境反射
+ *    只剩 45%。金属材质的亮部**几乎全来自环境反射**，所以「metalness 0.9 + ambient 0.55」
+ *    这种看着挺亮的配置，渲出来是近剪影（蒸汽机车首版实测，只能靠抬 ambient 到 1.6 救）。
+ *    这条只给数值建议，不替 agent 改值 —— 天文场景就是要压暗夜面，硬提亮会毁掉昼夜对比。
+ */
+export function dslWarnings(spec: Scene3DDsl): string[] {
+  const out: string[] = [];
+  const hasChild = new Set(spec.nodes.map((n) => n.parent).filter(Boolean) as string[]);
+  for (const n of spec.nodes) {
+    const pivot = !n.geometry || n.geometry.type === "group";
+    if (!pivot) continue;
+    if (!hasChild.has(n.id)) {
+      out.push(
+        `节点「${n.id}」是纯枢轴（group）但下面没有任何子节点——它本身不渲染，这一幕里看不到它。` +
+          `要么给它几何体，要么把要一起动的节点 parent 到它下面`,
+      );
+    }
+    if (n.material) {
+      out.push(`节点「${n.id}」是纯枢轴（group），material 没有表面可施加，不会生效`);
+    }
+  }
+
+  const lights = spec.lights ?? [];
+  if (!lights.length) return out;
+  const sum = (type: string) =>
+    lights.filter((l) => l.type === type).reduce((s, l) => s + (l.intensity ?? 0), 0);
+  const ambient = sum("ambient");
+  const directional = sum("directional");
+  const hasPointish = lights.some((l) => l.type === "point" || l.type === "spot");
+  const metals = spec.nodes.filter(
+    (n) => (n.material?.type ?? "standard") !== "basic" && (n.material?.metalness ?? 0.4) >= 0.6,
+  );
+  if (!ambient) {
+    out.push(
+      `自定义灯光里没有 ambient：背光面只剩 0.35 的内置兜底，形体容易糊成一片。` +
+        `想看清暗部就加 {type:"ambient", color:"…", intensity:1.2}（天文场景要暗夜面可以不加）`,
+    );
+  } else if (metals.length && ambient < 1.0) {
+    out.push(
+      `有 ${metals.length} 个金属节点（metalness ≥ 0.6，如「${metals[0].id}」），但 ambient 只有 ${ambient}：` +
+        `金属的亮部几乎全来自环境反射，而自定义灯场景的环境反射只保留 45% —— 渲出来容易是剪影。` +
+        `把 ambient 抬到 1.2–2.0，或把 metalness 降到 0.4–0.6（想要亮铬感就走前者）`,
+    );
+  }
+  if (!directional && !hasPointish && ambient < 0.6) {
+    out.push(
+      `这组灯既没有 directional/point/spot，ambient 也只有 ${ambient}：整场只剩一层平光，` +
+        `东西会是一块没有明暗的剪影。至少补一盏 directional（intensity 2 上下）做主光`,
+    );
+  }
+  return out;
 }

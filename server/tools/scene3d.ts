@@ -9,6 +9,7 @@
  */
 
 import { z } from "zod";
+import { dslWarnings } from "../../shared/scene3dDsl";
 import {
   api,
   fmtSummary,
@@ -46,7 +47,7 @@ export const SCENE3D_TOOLS: ToolDef[] = [
             parent?: string;
             hidden?: boolean;
             locked?: boolean;
-            geometry: { type: string; [k: string]: unknown };
+            geometry?: { type: string; [k: string]: unknown };
             material?: { color?: string; emissive?: string; map?: { src?: string }; wireframe?: boolean };
             transform?: { position?: number[] };
             anim?: unknown[];
@@ -72,10 +73,12 @@ export const SCENE3D_TOOLS: ToolDef[] = [
         );
       }
       const keyNums = ["radius", "innerRadius", "outerRadius", "width", "height", "depth", "count", "duty"];
-      const geoOf = (geo: { type: string; [k: string]: unknown }) =>
-        [geo.type, ...keyNums.filter((k) => typeof geo[k] === "number").map((k) => `${k}=${geo[k]}`)]
-          .slice(0, 4)
-          .join(" ");
+      const geoOf = (geo?: { type: string; [k: string]: unknown }) =>
+        geo
+          ? [geo.type, ...keyNums.filter((k) => typeof geo[k] === "number").map((k) => `${k}=${geo[k]}`)]
+              .slice(0, 4)
+              .join(" ")
+          : "group（纯枢轴）";
       const byId = new Map(g.nodes.map((n) => [n.id, n]));
       /**
        * 按父子关系做一趟 DFS 展开，不能拿数组顺序 + 缩进硬套。
@@ -162,6 +165,13 @@ export const SCENE3D_TOOLS: ToolDef[] = [
         "改单个节点：update_graph_node(sceneId, nodeId, patch:{…})（不要整份覆盖 graph）；" +
           "节点增删：add_graph_node / remove_graph_node；相机·灯光·粒子·辉光：set_graph_scene。",
       );
+      /**
+       * 软提示随大纲一起给：这些是"写得进去但渲出来不对劲"的问题（空枢轴、枢轴上的材质、
+       * 自定义灯把场景压黑）。放在 get_graph 里最有用——agent 拿大纲时顺手就看到，
+       * 不用等抽帧才发现。
+       */
+      const warns = dslWarnings(g as never);
+      if (warns.length) out.push(...warns.map((w) => `⚠️ ${w}`));
       return out.join("\n");
     },
   },
@@ -173,7 +183,8 @@ export const SCENE3D_TOOLS: ToolDef[] = [
       "patch:{material:{color:\"#FFD27A\", emissive:\"#FF8A3D\"}} 改颜色/自发光（深合并）、" +
       "patch:{transform:{position:[0,1,0]}} 移动（position/rotation/scale 整个替换，其余保留）、" +
       "patch:{label:\"地球\"} 起名、patch:{hidden:true} 临时隐藏（子树一起）、" +
-      "patch:{parent:\"sun\"} 换父级（**保持世界位置不变**，做卫星就靠它）、patch:{anim:[…]} 整段替换关键帧、anim:null 清空。\n" +
+      "patch:{parent:\"sun\"} 换父级（**保持世界位置不变**，做卫星就靠它）、patch:{anim:[…]} 整段替换关键帧、anim:null 清空。" +
+      "geometry:null 或 geometry:{type:\"group\"} = 退回纯枢轴（不渲染，只带子节点）。\n" +
       "轨迹想走曲线：段里加 curve:{out:[x,y,z], in:[x,y,z]}（相对直线方向的偏移，世界单位；不写=直线；两个给相同值=这段朝那个方向鼓）。\n" +
       "⚠️ 节点有关键帧时，基础 transform 在关键帧区间内会被覆盖——改了看不到变化就检查 anim。\n" +
       "nodeId 从 get_graph 拿。不知道有什么节点就先 get_graph，别整份改 graph。",
@@ -215,18 +226,19 @@ export const SCENE3D_TOOLS: ToolDef[] = [
   {
     name: "add_graph_node",
     description:
-      "往 scene3d 场景图里加一个节点（上限 48 个）。至少给 geometry，例如 {type:\"sphere\", radius:0.5}；" +
+      "往 scene3d 场景图里加一个节点（上限 48 个）。" +
+      "**要给实体就传 geometry**（如 {type:\"sphere\", radius:0.5}）；**不传 geometry 或传 {type:\"group\"} 就是纯枢轴**——不渲染，只作为「整组一起动」的父级（整列车、整台机器、机器人上半身）。" +
       "可选 id（不给自动起 n1/n2…）、parent（挂在某个节点下，跟着它公转）、transform:{position:[…]}、material:{…}、label。\n" +
-      "几何体白名单：box/sphere/cylinder/cone/torus/torusKnot/plane/capsule/icosahedron/dodecahedron/octahedron/ring/dashRing。" +
+      "几何体白名单：box/sphere/cylinder/cone/torus/torusKnot/plane/capsule/icosahedron/dodecahedron/octahedron/ring/dashRing/group。" +
       "画行星轨道用 dashRing（扁平虚线，torus 会变成甜甜圈）。返回新节点 id。",
     shape: {
       projectId: z.string().optional().describe("要操作的工程 id，不传 = 当前默认工程（list_projects 查）"),
       sceneId: z.string(),
-      node: z.record(z.any()).optional().describe("完整节点对象，如 {id:\"moon\", geometry:{type:\"sphere\",radius:0.15}, parent:\"earth\", transform:{position:[1,0,0]}}"),
+      node: z.record(z.any()).optional().describe("完整节点对象，如 {id:\"moon\", geometry:{type:\"sphere\",radius:0.15}, parent:\"earth\", transform:{position:[1,0,0]}}；省略 geometry = 纯枢轴"),
       afterId: z.string().optional().describe("插到这个节点之后（决定渲染顺序与大纲顺序）"),
       id: z.string().optional().describe("节点 id（不传自动 n1/n2…）"),
       parent: z.string().optional().describe("父节点 id"),
-      geometry: z.record(z.any()).optional().describe("几何体，如 {type:\"sphere\", radius:0.5}"),
+      geometry: z.record(z.any()).optional().describe("几何体，如 {type:\"sphere\", radius:0.5}；不给 = group 纯枢轴"),
       material: z.record(z.any()).optional().describe("材质，如 {color:\"#5AC8FA\"}"),
       transform: z.record(z.any()).optional().describe("变换，如 {position:[2,0,0]}"),
       label: z.string().optional().describe("大纲里显示的名字"),
@@ -241,10 +253,10 @@ export const SCENE3D_TOOLS: ToolDef[] = [
         nodeObj = {};
         for (const [k, v] of Object.entries(flat)) if (v !== undefined) nodeObj[k] = v;
       }
-      if (!nodeObj.geometry) {
+      if (nodeObj.material && (nodeObj.geometry == null || (nodeObj.geometry as { type?: string }).type === "group")) {
         throw new Error(
-          'add_graph_node 缺少 geometry：如 node:{geometry:{type:"sphere", radius:0.5}}' +
-            "（几何体白名单见 get_guide(\"scene3d\")）",
+          "纯枢轴（没有 geometry）不能挂 material：group 没有表面，材质无处施加。" +
+            "要实体就传 geometry:{type:\"sphere\", …}；要「整组一起动」就保留 group 并把零件 parent 到它下面",
         );
       }
       const p = await resolveProject(projectId);
@@ -291,7 +303,10 @@ export const SCENE3D_TOOLS: ToolDef[] = [
       "（target 每帧重算，targetX/Y/Z 在该段失效；退出锁定=下一段不给 lookAt 且不写 from.target，镜头会自动接上）；" +
       "想让镜头走弧线用 anim[].curve:{out,in}（相对直线的偏移，绕拍/甩镜）；" +
       "光源（给了就顶掉预设打光，最多 8 盏）：[{type:\"point\", position:[0,0,0], intensity:20, color:\"#FFE9B0\"}]" +
-      "（point/spot 按 1/距离² 衰减，距离 2 时要 20 上下才亮；directional 1~3 就够）；" +
+      "（point/spot 按 1/距离² 衰减，距离 2 时要 20 上下才亮；directional 1~3 就够）。" +
+      "**给自定义灯前先算好环境光**：look 的四盏灯会被撤掉、环境反射只剩 45%，" +
+      "金属材质（metalness ≥ 0.6）的亮部几乎全来自环境反射 —— 至少给一盏 ambient intensity 1.2–2.0，否则渲成剪影；" +
+      "天文片要压暗夜面才可以只给 0.1–0.3；" +
       "粒子：{count:800, spread:[6,4,6], size:0.06, drift:0.3}；辉光：{bloom:1.2}。",
     shape: {
       projectId: z.string().optional().describe("要操作的工程 id，不传 = 当前默认工程（list_projects 查）"),

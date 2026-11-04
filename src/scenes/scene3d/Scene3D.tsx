@@ -229,10 +229,19 @@ export const LookLights: React.FC<{
   dot: string;
   /** 场景自带 lights：look 的固定方向光会把昼夜面抹平，只留一点环境底光 */
   custom?: boolean;
-}> = ({ spec, core, dot, custom }) => {
+  /**
+   * 自定义灯里是否已经有 ambient。
+   *
+   * 有 → 只加 0.12 的"防死黑"底光（老行为，天文片的夜面靠这个数值才不会发灰）；
+   * 没有 → 兜底抬到 0.35。原因：0.12 连"形体"都读不出来，而 agent 给自定义灯时
+   * 常常只写一两盏 directional，暗部就直接糊死了（蒸汽机车首版实测：抬到 0.35 起步
+   * 才有可读的暗部层次，最终救场值是 1.6）。
+   */
+  customHasAmbient?: boolean;
+}> = ({ spec, core, dot, custom, customHasAmbient }) => {
   if (custom) {
-    // 数值很小是有意的：作用只是让背光面留一点形，不参与照明
-    return <ambientLight intensity={0.12} color="#ffffff" />;
+    // 数值都很小是有意的：作用只是让背光面留一点形，不参与照明
+    return <ambientLight intensity={customHasAmbient ? 0.12 : 0.35} color="#ffffff" />;
   }
   return (
     <>
@@ -1144,7 +1153,20 @@ export const Scene3DScene: React.FC<Scene3DProps> = ({
    * 同时把环境贴图降到四分之一：`RoomEnvironment` 是一圈均匀柔光，
    * 它本身就是"从四面八方打光"，留着会直接抹平明暗交界。
    */
+  /**
+   * 同时把环境贴图压到 45%：`RoomEnvironment` 是一圈均匀柔光，它本身就是
+   * "从四面八方打光"，留着会抹平明暗交界。
+   *
+   * 但**不能压到 0.25**：金属（metalness ≥ 0.6）的亮部几乎全来自环境反射，
+   * 压太狠时「灯明明都在」却渲成一片剪影，agent 只会去加灯、越加越过曝。
+   * 蒸汽机车那场实测就是 0.25 + ambient 0.55 → 车体近黑。
+   */
   const dslLights = !!graph?.lights?.length;
+  /**
+   * 自定义灯里已经写了 ambient 的话，内置兜底就不用抬（兜底是为了救"没写环境光"的人，
+   * 而不是替写了的人再加一层 —— 那会让天文片故意压暗的夜面整体发灰）。
+   */
+  const dslHasAmbient = !!graph?.lights?.some((l) => l.type === "ambient");
   /** WebGL 后处理装不上时的降级：CSS 全屏混合（观感差一档，但不会黑屏） */
   const [cssBloom, setCssBloom] = React.useState(false);
   const bloomBlur = Math.round(Math.min(width, height) * 0.012);
@@ -1184,7 +1206,7 @@ export const Scene3DScene: React.FC<Scene3DProps> = ({
         // 环境贴图和辉光都必须在这里装：onCreated 同步执行、早于首帧，
         // 放 useEffect 里会晚于 Remotion 截走的那一帧（踩过两次，症状都是"改了代码、md5 不变"）
         onCreated={(state) => {
-          setupEnvironment(state, dslLights ? lookSpec.env * 0.25 : lookSpec.env);
+          setupEnvironment(state, dslLights ? lookSpec.env * 0.45 : lookSpec.env);
           try {
             installBloom(state, bloomOpts);
           } catch {
@@ -1212,7 +1234,7 @@ export const Scene3DScene: React.FC<Scene3DProps> = ({
           正面必须是中性光——彩色正面光会把整颗物体涂满颜色，那是"彩色塑料"不是"科技感"。
           四套 look 差在环境强度、主光色温、边光强度、以及有没有补光。
         */}
-        <LookLights spec={lookSpec} core={core} dot={dot} custom={dslLights} />
+        <LookLights spec={lookSpec} core={core} dot={dot} custom={dslLights} customHasAmbient={dslHasAmbient} />
 
         {graph ? (
           /*

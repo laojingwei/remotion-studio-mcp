@@ -295,6 +295,15 @@ const geometryOf = (g: DslNode["geometry"]): React.ReactElement | null => {
     case "dashRing":
       // 由 NodeView 用 useMemo 烘成 geometry（每次 render 重建会掉帧）
       return null;
+    case "group":
+      /**
+       * 纯枢轴：不画任何东西。
+       *
+       * 它存在的意义只是给子节点一个共同的父级（整列火车、整台机器）。
+       * **不能**退化成"一个 0.001 的隐形 box"——那种做法会让它参与拾取、
+       * 在编辑器里被当成实体选中，用户根本分不清哪个是操控点、哪个是零件。
+       */
+      return null;
   }
 };
 
@@ -451,7 +460,15 @@ const NodeView: React.FC<{
    * 射线永远先命中环——太阳系这种图里表现为"怎么点都选不中行星"。
    * 环要从大纲树里选（它们是结构性的枢轴，很少直接改变换）。
    */
-  const pickable = Boolean(onPick) && node.geometry.type !== "ring" && node.geometry.type !== "dashRing";
+  /**
+   * 纯枢轴（group / 没有几何体）：只留一个 `<group>` 承载变换和子节点。
+   *
+   * 拾取和环一样从**大纲**走：枢轴没有表面，视口里点不到它是对的——
+   * 给隐形枢轴做一个可点的代理几何，用户就会在画面上点到"空气"。
+   */
+  const pivot = !node.geometry || node.geometry.type === "group";
+  const pickable =
+    Boolean(onPick) && !pivot && node.geometry.type !== "ring" && node.geometry.type !== "dashRing";
   /*
    * 隐藏节点：**连子树一起不渲染**（返回 null 而不是 visible={false}）。
    * 星空挡住行星时用户会临时藏掉它，藏一个父节点却露出子节点是最难理解的行为。
@@ -485,7 +502,7 @@ const NodeView: React.FC<{
           : undefined
       }
     >
-      {dashGeo ? (
+      {pivot ? null : dashGeo ? (
         <lineSegments>
           <primitive object={dashGeo} attach="geometry" />
           <lineBasicMaterial
@@ -506,7 +523,7 @@ const NodeView: React.FC<{
         和选中线框必须分色（accent），否则"我选的是它"和"镜头锁的是它"混成一个状态——
         用户在调运镜时最需要一眼分清这两件事。
       */}
-      {locked && !dashGeo ? (
+      {locked && !pivot && !dashGeo ? (
         <mesh scale={1.014}>
           {geometryOf(node.geometry)}
           <meshBasicMaterial
@@ -523,7 +540,7 @@ const NodeView: React.FC<{
         选中高亮：同一份几何体罩一层线框（depthTest 关掉，被挡在后面也看得见）。
         用线框而不是发光/变色，是因为高亮不能改变材质判断 —— 用户在挑的是"哪个物体"。
       */}
-      {selected ? (
+      {selected && !pivot ? (
         dashGeo ? (
           <lineSegments>
             <primitive object={dashGeo} attach="geometry" />
@@ -763,6 +780,8 @@ export const dslAutoDistance = (spec: Scene3DDsl): number => {
   if (spec.camera) return 0;
   let r = 1.2;
   for (const n of spec.nodes) {
+    // 纯枢轴本身没有尺寸，不该参与"相机要退多远"的计算（它的子节点会各自算）
+    if (!n.geometry || n.geometry.type === "group") continue;
     const g = n.geometry as { radius?: number; width?: number; height?: number; outerRadius?: number };
     const ext = g.radius ?? g.outerRadius ?? Math.max(g.width ?? 1, g.height ?? 1) / 2;
     const p = n.transform?.position ?? [0, 0, 0];
