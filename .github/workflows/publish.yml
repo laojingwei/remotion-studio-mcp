@@ -1,6 +1,7 @@
 name: publish
 
 # 发版方式：推一个 v* 标签，或者手动 Run workflow。
+# （Releases 页面手动发的 Release 不会触发这里，那只是补一份带说明的发布记录。）
 # 优先用 npm 的 trusted publishing（OIDC）发布，仓库里可以完全不存 token；
 # 如果也配了 NPM_TOKEN secret，会一起带上，两种方式都能发。
 on:
@@ -39,13 +40,21 @@ jobs:
             exit 1
           fi
 
+      # 查 registry 一律用 curl 直连版本端点，**不用 npm view**。
+      # 原因是 1.1.0 发版实测踩到的：npm view 会读本地 packument 缓存，registry 给的
+      # Cache-Control 是 max-age=300 —— 发布前刚查过一次「有没有这个版本」，旧元数据就被
+      # 缓存了 5 分钟，发布后再查一直是旧结果，把成功误报成失败（那次 Actions 红了一个假叉）。
+      # 版本端点 /<包名>/<版本> 不存在时返回 404，直连不受缓存影响。
       - name: 该版本是否已发布
         run: |
+          NAME=$(node -p "require('./package.json').name")
           V=$(node -p "require('./package.json').version")
-          if npm view "remotion-studio-mcp@$V" version > /dev/null 2>&1; then
-            echo "::error::npm 上已经有 $V 了，改完代码记得升版本"
+          CODE=$(curl -s -o /dev/null -w '%{http_code}' "https://registry.npmjs.org/$NAME/$V")
+          if [ "$CODE" = "200" ]; then
+            echo "::error::npm 上已经有 $NAME@$V 了，改完代码记得升版本"
             exit 1
           fi
+          echo "✓ $NAME@$V 尚未发布（HTTP $CODE），继续"
 
       # 发布前先过一遍质量门。
       # 之前这里直接 npm pack + publish：类型错误或测试挂了照样能发出去，
@@ -60,7 +69,7 @@ jobs:
         run: npm run typecheck
 
       # 发版只跑「核心纯函数测试」：ops / store / 安全边界 / 并发语义 / 3D DSL。
-      # 全量 46 个脚本交给 ci.yml（它在同一个 commit 上已经跑过一遍）——
+      # 全量测试交给 ci.yml（它在同一个 commit 上已经跑过一遍）——
       # 把带 ffmpeg / 音频 fixture 的全量链塞进发版流程，一旦平台差异导致某条挂了，
       # 版本就永远发不出去，而失败的又往往和这次改动无关。
       - name: 核心测试
@@ -72,24 +81,39 @@ jobs:
       - name: 确认包内容
         run: npm pack --dry-run 2>&1 | tail -12
 
+      # 顺带抓住「进了暂存区」这个隐蔽状态：npm 在「只允许 staged」的 trust 下
+      # 也会返回 0，包却只进了待批准队列。只有真的出现 staged，才说明没发出去。
       - name: 发布
-        run: npm publish --provenance --access public
+        id: publish
+        run: |
+          set -o pipefail
+          npm publish --provenance --access public 2>&1 | tee /tmp/publish.log
+          if grep -qi "staged" /tmp/publish.log; then
+            echo "staged=true" >> "$GITHUB_OUTPUT"
+          fi
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
-      # npm publish 在「只允许暂存」的 trust 下也会返回 0，包却只进了暂存区。
-      # 所以必须回查一次 registry，查不到就算失败，别让 CI 绿灯骗人。
-      # 实测 registry 生效要几分钟，所以给足 5 分钟。
+      # 回查 registry，但**不轻易判死**：
+      # publish 已经返回 0、输出里也没有 staged，说明发布动作本身成功了，
+      # 这时查不到更可能是 npm 侧传播延迟（换 endpoint、CDN 生效慢）。
+      # 所以只有 staged 才 fail，其余只警告 —— 避免再制造一个假红叉。
       - name: 确认真的发布出去了
         run: |
+          NAME=$(node -p "require('./package.json').name")
           V=$(node -p "require('./package.json').version")
-          for i in $(seq 1 30); do
-            if npm view "remotion-studio-mcp@$V" version > /dev/null 2>&1; then
-              echo "✅ registry 上已有 $V"
+          LAST=""
+          for i in $(seq 1 60); do
+            LAST=$(curl -s -o /dev/null -w '%{http_code}' "https://registry.npmjs.org/$NAME/$V")
+            if [ "$LAST" = "200" ]; then
+              echo "✅ registry 上已有 $NAME@$V"
               exit 0
             fi
-            echo "第 $i 次查询还没出现，10 秒后重试"
+            echo "第 $i 次直查 HTTP $LAST（尚未出现），10 秒后重试"
             sleep 10
           done
-          echo "::error::发布步骤返回成功，但 5 分钟内 registry 上一直查不到 $V。若日志里出现 staged 字样，说明 Trusted Publisher 的 Allowed actions 没允许直接发布，版本停在了暂存区，需要在 npm 网页批准或重建 trust。"
-          exit 1
+          if [ "${{ steps.publish.outputs.staged }}" = "true" ]; then
+            echo "::error::publish 的输出里有 staged：Trusted Publisher 的 Allowed actions 没允许直接发布，版本停在了暂存区。去 npm 网页批准，或重建 trust。"
+            exit 1
+          fi
+          echo "::warning::npm publish 已返回成功且没有 staged，但 10 分钟内 registry 直查仍是 $LAST。多半是 npm 侧传播延迟，先去 https://www.npmjs.com/package/$NAME 确认，别急着重发（重发会撞版本号）。"
