@@ -7,8 +7,8 @@ import type { Theme } from "../../../shared/schema";
 import { useSceneLayout } from "../../layout/useSceneLayout";
 import { Editable } from "../ui";
 import { installBloom } from "./bloom";
-import { studioEnvironment } from "./env";
-import { SkyDome, fogRange, resolveWorld } from "./World";
+import { studioEnvironment, useWorldTexture } from "./env";
+import { WorldLayer, fogRange, resolveWorld } from "./World";
 import { DslScene, applyBloomMultiplier, dslCamera, dslAutoDistance } from "./DslScene";
 import { glowTexture, hash01, luminance, metalBody, shade } from "./color";
 import type { Scene3DDsl } from "../../../shared/scene3dDsl";
@@ -1169,6 +1169,18 @@ export const Scene3DScene: React.FC<Scene3DProps> = ({
   const sceneBg = world ? world.bottom : c.background;
   const darkTheme = luminance(sceneBg) < 0.32;
   const haze = graph?.world?.haze ?? 0.35;
+  /** 全景图当世界：背景交给 scene.background，不再铺纯色底 */
+  const worldImage = graph?.world?.mode === "image" && !!graph.world.image;
+  /**
+   * 全景图在这里加载（**Remotion 自己的组件树**），不放进 Canvas：
+   * `<ThreeCanvas>` 的子节点由 R3F 渲染，`delayRender` 在那里注册时 Remotion
+   * 看不见，静帧会截在贴图到位之前。`finishWorld` 放在下面那个 effect 里调用，
+   * 而 effect 顺序是"子先父后"，所以 WorldLayer 挂完背景才放行截图。
+   */
+  const { tex: worldTex, finish: finishWorld } = useWorldTexture(worldImage ? graph!.world!.image : undefined);
+  React.useEffect(() => {
+    if (worldTex) finishWorld();
+  }, [worldTex, finishWorld]);
   /**
    * 阴影相机半径：按自动取景距离的 2.2 倍。太小会把影子裁掉（左右两侧直接没影），
    * 太大则 2048 的阴影图摊到几十米上，边缘全是锯齿。
@@ -1268,11 +1280,22 @@ export const Scene3DScene: React.FC<Scene3DProps> = ({
         camera={{ position: cam.position, fov: cam.fov, near: 0.06, far: 12000 }}
         style={{ position: "absolute", inset: 0 }}
       >
-        {overlay ? null : <color attach="background" args={[sceneBg]} />}
+        {/* 全景图模式由 WorldLayer 自己挂 scene.background（球体贴图方向会反），这里不画底色 */}
+        {overlay || worldImage ? null : <color attach="background" args={[sceneBg]} />}
         <CameraSync pos={cam.position} fov={cam.fov} />
         {world ? (
-          /* 天空：只换背景，不搬坐标系（地面在 DslScene 的内容组里，跟物体一起搬） */
-          <SkyDome colors={world} />
+          /* 世界：渐变天空或全景图（全景图同时接成 IBL）；地面在 DslScene 的内容组里跟物体一起搬 */
+          <WorldLayer
+            graph={graph!}
+            theme={theme}
+            tex={worldTex}
+            /**
+             * 全景图是**真实环境**，不是拿去补暗部的柔光箱：按 look 的系数压它
+             * 就等于把照片里的太阳调暗（金属立刻发闷）。所以 image 模式给满强度 1.0，
+             * 亮度靠灯和 exposure 调，不靠压环境。
+             */
+            envIntensity={graph!.world?.mode === "image" ? 1 : dslLights ? lookSpec.env * 0.55 : lookSpec.env}
+          />
         ) : null}
         {world && haze > 0 ? (
           /**

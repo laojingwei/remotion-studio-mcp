@@ -1,9 +1,10 @@
 import React from "react";
 import * as THREE from "three";
+import { useThree } from "@react-three/fiber";
 import type { Theme } from "../../../shared/schema";
 import type { Scene3DDsl } from "../../../shared/scene3dDsl";
 import { luminance, resolveColor } from "./color";
-import { skyShader } from "./env";
+import { equirectEnvironment, skyShader } from "./env";
 
 /**
  * 「世界」：渐变天空 + 地面。
@@ -32,6 +33,18 @@ const DAY: WorldColors = { top: "#B9C3D3", bottom: "#EDEFF3", glow: "#FFFFFF" };
 
 export const resolveWorld = (graph: Scene3DDsl | undefined, theme: Theme): WorldColors => {
   const w = graph?.world;
+  if (w?.mode === "image") {
+    /**
+     * 全景图模式下这两个颜色只剩两个用途：**雾色**和**加载中的兜底色**。
+     * 雾色默认给一个中性暖灰（黄昏地面霾），让它贴近多数室外全景的地平线；
+     * 想精确对齐就用 `bottom` 指定 —— 雾色和背景地平线不一致是最扎眼的破绽。
+     */
+    return {
+      top: w.top ? resolveColor(w.top, theme) : "#3A3833",
+      bottom: w.bottom ? resolveColor(w.bottom, theme) : "#6F6A63",
+      glow: "#000000",
+    };
+  }
   if (w?.mode === "color" && w.color) {
     const c = resolveColor(w.color, theme);
     return { top: c, bottom: c, glow: "#000000" };
@@ -121,19 +134,109 @@ export const groundYOf = (graph: Scene3DDsl): number => graph.ground?.y ?? autoG
 export const Ground: React.FC<{ graph: Scene3DDsl; theme: Theme }> = ({ graph, theme }) => {
   const spec = graph.ground;
   if (!spec) return null;
+  const shadowOnly = spec.mode === "shadow";
   return (
     <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0, groundYOf(graph), 0]} receiveShadow={spec.shadow}>
       <planeGeometry args={[spec.size, spec.size]} />
-      <meshStandardMaterial
-        color={resolveColor(spec.color, theme)}
-        roughness={spec.roughness}
-        metalness={spec.metalness}
-        // 地面不发光，但要吃一点环境反射，否则是一块死平的灰
-        envMapIntensity={0.8}
-        dithering
-      />
+      {shadowOnly ? (
+        /**
+         * `shadowMaterial`：除了阴影之外完全透明。
+         * 配全景图时这是唯一正确的做法 —— 照片里已经有地面，实体平面会把照片的地平线
+         * 和草纹全盖掉，看起来像在地上铺了块塑料布。
+         */
+        <shadowMaterial transparent opacity={spec.shadowOpacity} />
+      ) : (
+        <meshStandardMaterial
+          color={resolveColor(spec.color, theme)}
+          roughness={spec.roughness}
+          metalness={spec.metalness}
+          // 地面不发光，但要吃一点环境反射，否则是一块死平的灰
+          envMapIntensity={0.8}
+          dithering
+        />
+      )}
     </mesh>
   );
+};
+
+/**
+ * 世界层：**渐变天空**或**全景图**，二选一，外加把全景图烘成 IBL。
+ *
+ * 为什么两者要放在同一个组件里：全景图加载是异步的，而"环境贴图"和"背景"
+ * 必须来自同一张图 —— 否则会出现"背景是黄昏、光照却是正午"这种一眼假的组合。
+ * 一次加载、两处使用，就不会走岔。
+ */
+export const WorldLayer: React.FC<{
+  graph: Scene3DDsl;
+  theme: Theme;
+  /** look 决定的环境强度（和程序化棚拍那套同一个数字） */
+  envIntensity: number;
+  /**
+   * 全景图纹理：**由外层的 Scene3D 加载后传进来**。
+   * 不能在这个组件里加载 —— 它活在 R3F 的 reconciler 里，`delayRender` 在那里注册
+   * Remotion 看不见，静帧会截在贴图到位之前（详见 env.ts 的 useWorldTexture 注释）。
+   */
+  tex: THREE.Texture | null;
+}> = ({ graph, theme, envIntensity, tex }) => {
+  const w = graph.world;
+  const src = w?.mode === "image" ? w.image : undefined;
+  const colors = React.useMemo(() => resolveWorld(graph, theme), [graph, theme]);
+  const gl = useThree((s) => s.gl);
+  const scene = useThree((s) => s.scene);
+  const advance = useThree((s) => s.advance);
+
+  React.useEffect(() => {
+    if (!tex || !src) return;
+    /**
+     * 背景必须走 `scene.background`，**不能用球体贴图**。
+     *
+     * 用球体（`sphereGeometry` + `map` + BackSide）试过：three 的球面 UV 与
+     * 等距柱状的 V 方向是反的，结果是"草地上半张、天空只剩一条缝"——
+     * 背景图和相机对不上，而且不同几何体版本还会再差一次。
+     * `scene.background` 有专门的 background pass，方向、环绕、mipmap 都由引擎处理。
+     *
+     * `backgroundBlurriness` 给一点点（0.08）：相机拍全景背景天然带景深虚化，
+     * 全清晰反而显得像贴纸；这个值同时掩盖 2k 全景在 1080p 下的分辨率不足。
+     */
+    scene.background = tex;
+    /**
+     * **不要开 backgroundBlurriness**。
+     *
+     * 试过 0.08 想着"模拟景深虚化"，实际效果是把整张全景糊成一片米色 ——
+     * three 的 background 模糊走 PMREM 的粗糙度层级，0.08 就已经跳到很低的 mip 上了，
+     * 云和地平线全部消失、只剩颜色。要虚化只能在后期做（景深 pass），不是这个参数。
+     */
+    scene.backgroundBlurriness = 0;
+    // 按主体曝光、背景另调：暗场景里主体打亮了，天空就会"过曝"，这里主动压一档
+    (scene as unknown as { backgroundIntensity?: number }).backgroundIntensity = w?.imageIntensity ?? 1;
+    // 把太阳/地平线转到想要的方位（弧度），和 DSL 的"度"约定换算一次
+    (scene as unknown as { backgroundRotation?: THREE.Euler }).backgroundRotation = new THREE.Euler(
+      0,
+      ((w?.imageRotation ?? 0) * Math.PI) / 180,
+      0,
+    );
+    // 换环境贴图会换材质编译分支（是否采样 envMap），不主动重画就还是上一版画面
+    advance(performance.now());
+    return () => {
+      scene.background = null;
+    };
+  }, [tex, src, scene, advance, w?.imageRotation, w?.imageIntensity]);
+
+  React.useEffect(() => {
+    if (!tex || !src) return;
+    // 关掉 imageLighting 时保留程序化棚拍光：背景是照片，照明还是可控的
+    if (w?.imageLighting === false) return;
+    try {
+      scene.environment = equirectEnvironment(gl, tex);
+      (scene as unknown as { environmentIntensity?: number }).environmentIntensity = envIntensity;
+      advance(performance.now());
+    } catch {
+      // 软件渲染环境不支持 PMREM 时降级：只有灯，不黑屏
+    }
+  }, [tex, src, gl, scene, envIntensity, advance, w?.imageLighting]);
+
+  if (tex) return null;
+  return <SkyDome colors={colors} />;
 };
 
 /**

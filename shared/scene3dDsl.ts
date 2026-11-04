@@ -514,13 +514,43 @@ export const dslSchema = z.object({
   world: z
     .object({
       mode: z
-        .enum(["auto", "gradient", "color"])
+        .enum(["auto", "gradient", "color", "image"])
         .default("auto")
-        .describe("auto=按主题明暗自动挑中性色；gradient=用 top/bottom 自己给；color=纯色"),
+        .describe(
+          "auto=按主题明暗自动挑中性色；gradient=用 top/bottom 自己给；color=纯色；" +
+            "image=用一张等距柱状全景图（.hdr / .jpg）当世界",
+        ),
       color: colorToken.optional().describe("mode=color 时的纯色"),
       top: colorToken.optional().describe("天顶色（mode=gradient）"),
       bottom: colorToken.optional().describe("地平线色（mode=gradient）"),
       glow: colorToken.optional().describe("地平线漫射光带的颜色（on gradient 才生效）"),
+      image: z
+        .string()
+        .optional()
+        .describe(
+          "等距柱状全景图（比例 2:1）。**优先 .hdr**：普通 JPG 只有 0–1 的亮度，" +
+            "当照明时没有太阳那种高动态，金属会发闷。站内素材写 /assets/…（先 upload_asset）",
+        ),
+      imageLighting: z
+        .boolean()
+        .default(true)
+        .describe(
+          "同一张全景图同时当环境光照（IBL）。**这是「像真的」的最大一步**：" +
+            "照片里有真实的太阳方位、天空梯度、地面反光，物体是被「那个地方」照亮的",
+        ),
+      imageRotation: z
+        .number()
+        .default(0)
+        .describe("背景绕 Y 轴转（度）。用来把太阳/地平线挪到想要的方位"),
+      imageIntensity: z
+        .number()
+        .min(0.2)
+        .max(2)
+        .default(1)
+        .describe(
+          "背景亮度倍数。**主体偏暗时先降这个**（0.7–0.85），不要降曝光：" +
+            "曝光一降，物体上辛苦打的光也一起没了。真实拍摄就是这么做的——按主体曝光，天空过曝或压暗",
+        ),
       haze: z
         .number()
         .min(0)
@@ -533,7 +563,7 @@ export const dslSchema = z.object({
       vignette: z.number().min(0).max(1).default(0.32).describe("四角压暗（屏幕空间），0=关"),
     })
     .optional()
-    .describe("世界背景：独立于主题的渐变天空 + 空气透视，解决「背景乌漆麻黑」"),
+    .describe("世界背景：独立于主题的渐变天空 / 全景图 + 空气透视，解决「背景乌漆麻黑」"),
 
   /**
    * 自动铺一块地面。
@@ -544,7 +574,17 @@ export const dslSchema = z.object({
   ground: z
     .object({
       y: z.number().default(0).describe("地面高度（世界单位）"),
+      /**
+       * `solid` = 实体地面（有自己的颜色，能反射环境）；`shadow` = **只留影子**。
+       *
+       * 用全景图当世界时必须用 `shadow`：照片里本来就有一片真实的地面，
+       * 再铺一块实体平面，等于在地上盖了块棕色塑料布 —— 照片的地平线、草的纹理全没了。
+       * `shadow` 材质是透明的，只在有阴影的地方变暗，看起来就像"影子落在照片的地上"。
+       */
+      mode: z.enum(["solid", "shadow"]).default("solid").describe("solid=实体地面；shadow=只接阴影（配全景图用）"),
       color: colorToken.default("#191C22"),
+      /** shadow 模式下的阴影浓度（0–1），太黑会显脏 */
+      shadowOpacity: z.number().min(0).max(1).default(0.55),
       roughness: z.number().min(0).max(1).default(0.72),
       metalness: z.number().min(0).max(1).default(0.06),
       size: z.number().positive().default(160).describe("边长，给大一点让边缘出画"),
@@ -704,6 +744,14 @@ export function dslWarnings(spec: Scene3DDsl): string[] {
 
   const lights = spec.lights ?? [];
   if (!lights.length) return out;
+  /**
+   * 全景图当照明时，环境反射是**满强度**（`world.mode=image` 且没关 imageLighting）。
+   *
+   * 这时候不能再套下面那套「环境只剩 55% → 抬 ambient」的规则：照片里的太阳
+   * 本身就是主光，再让 agent 把 ambient 抬到 1.2–2.0，画面会整体发灰发平 ——
+   * 等于用一层灰光盖掉 HDRI 的全部方向感。
+   */
+  const imageLit = spec.world?.mode === "image" && spec.world.imageLighting !== false;
   const sum = (type: string) =>
     lights.filter((l) => l.type === type).reduce((s, l) => s + (l.intensity ?? 0), 0);
   const ambient = sum("ambient");
@@ -717,14 +765,14 @@ export function dslWarnings(spec: Scene3DDsl): string[] {
       `自定义灯光里没有 ambient：背光面只剩 0.35 的内置兜底，形体容易糊成一片。` +
         `想看清暗部就加 {type:"ambient", color:"…", intensity:1.2}（天文场景要暗夜面可以不加）`,
     );
-  } else if (metals.length && ambient < 1.0) {
+  } else if (!imageLit && metals.length && ambient < 1.0) {
     out.push(
       `有 ${metals.length} 个金属节点（metalness ≥ 0.6，如「${metals[0].id}」），但 ambient 只有 ${ambient}：` +
         `金属的亮部几乎全来自环境反射，而自定义灯场景的环境反射只保留 55% —— 渲出来容易是剪影。` +
         `把 ambient 抬到 1.2–2.0，或把 metalness 降到 0.4–0.6（想要亮铬感就走前者）`,
     );
   }
-  if (!directional && !hasPointish && ambient < 0.6) {
+  if (!imageLit && !directional && !hasPointish && ambient < 0.6) {
     out.push(
       `这组灯既没有 directional/point/spot，ambient 也只有 ${ambient}：整场只剩一层平光，` +
         `东西会是一块没有明暗的剪影。至少补一盏 directional（intensity 2 上下）做主光`,

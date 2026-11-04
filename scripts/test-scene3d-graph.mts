@@ -203,6 +203,37 @@ test("ops:set_graph_world / set_graph_ground 走 ops 流水线写回 graph", () 
   assert.ok(res2.summary.some((s) => s.includes("回到 auto")));
 });
 
+/* ── ⑤ 全景图世界 / 只接阴影的地面（2026-11-04 晚） ── */
+test("world:image 模式默认 imageLighting=true、imageIntensity=1", () => {
+  const spec = parse({
+    nodes: [{ id: "a" }],
+    world: { mode: "image", image: "/assets/library/world/belfast_sunset_2k.hdr" },
+  });
+  assert.equal(spec.world!.image, "/assets/library/world/belfast_sunset_2k.hdr");
+  assert.equal(spec.world!.imageLighting, true);
+  assert.equal(spec.world!.imageIntensity, 1);
+});
+
+test("ground:mode 默认 solid，可切 shadow（配全景图的正确用法）", () => {
+  const a = parse({ nodes: [{ id: "a" }], ground: {} });
+  assert.equal(a.ground!.mode, "solid");
+  const b = parse({ nodes: [{ id: "a" }], ground: { mode: "shadow", shadowOpacity: 0.7 } });
+  assert.equal(b.ground!.mode, "shadow");
+  assert.equal(b.ground!.shadowOpacity, 0.7);
+});
+
+test("全景图当照明时，不再提示「抬 ambient 到 1.2–2.0」", () => {
+  const graph = {
+    nodes: [{ id: "t", geometry: { type: "box" }, material: { metalness: 0.9 } }],
+    world: { mode: "image", image: "/assets/x.hdr", imageLighting: true },
+    lights: [{ type: "ambient", intensity: 0.4 }],
+  };
+  assert.equal(dslWarnings(parse(graph)).some((w) => w.includes("ambient 抬到")), false);
+  // 关掉 imageLighting 就退回原规则（环境反射只剩 55%）
+  const off = { ...graph, world: { ...graph.world, imageLighting: false } };
+  assert.equal(dslWarnings(parse(off)).some((w) => w.includes("ambient 抬到")), true);
+});
+
 console.log("");
 if (failures.length) {
   console.log(`✗ ${failures.length} 项失败：`);

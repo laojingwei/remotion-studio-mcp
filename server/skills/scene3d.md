@@ -200,13 +200,32 @@
 
 | 字段 | 说明 |
 |---|---|
-| `mode` | `auto`（默认，按主题明暗挑中性色）/ `gradient`（自己给 `top`/`bottom`/`glow`）/ `color`（纯色） |
-| `top` `bottom` `glow` | 天顶色、地平线色、地平线漫射光带的颜色（`mode:gradient` 生效） |
+| `mode` | `auto`（默认，按主题明暗挑中性色）/ `gradient`（自己给 `top`/`bottom`/`glow`）/ `color`（纯色）/ `image`（全景图） |
+| `image` | 等距柱状全景图（2:1），站内 `/assets/…` 或 http。**优先 `.hdr`**：JPG 只有 0–1 的亮度，当照明时没有太阳那种高动态 |
+| `imageLighting` | 同一张图同时当 IBL，默认 true。**这是"像真的"的最大一步**：太阳方位、天光颜色、地面反光全来自照片 |
+| `imageRotation` | 背景绕 Y 轴转（度），把太阳挪到想要的方位 |
+| `imageIntensity` | 背景亮度倍数，默认 1。**主体偏暗先降它（0.7–0.85），别降 exposure** —— 曝光一降，辛苦打的光一起没了 |
+| `top` `bottom` `glow` | 天顶色、地平线色、地平线漫射光带的颜色（`mode:gradient` 生效）；`image` 模式下 `bottom` 兼作**雾色** |
 | `haze` | 空气透视（雾）浓度 0–1，默认 0.35。**真实感的一大半在这**：远处必须淡进背景。星空/天文给 0 |
 | `vignette` | 四角压暗 0–1，默认 0.32，0 = 关 |
 
 `auto` 的暗色版本是「深蓝灰的夜」而不是黑：天顶 `#0A0D14` → 地平线 `#2B3342`。
 想要别的气氛就写 `gradient`，两个端点都建议**低饱和**（彩色天空一眼假）。
+
+**用全景图当世界**（最省事也最真）：
+
+```json
+"world": { "mode": "image", "image": "/assets/library/world/belfast_sunset_2k.hdr", "imageLighting": true, "imageRotation": 0, "haze": 0.15 }
+```
+
+- 素材来自 Poly Haven（CC0，可商用），本项目已有：`/assets/library/world/belfast_sunset_2k.hdr`（2048×1024，黄昏草原天际线）
+- 开了 `imageLighting` 就把 `lights` 调少：照片本身已经是主光。留一盏 ambient（1.2–1.8）补暗部 + 一两盏 directional 补轮廓
+- **地面用 `"ground": { "mode": "shadow" }`**：照片自己有地面，只让影子落上去，别铺实体平面
+- 机位要低（相机 y ≈ 1.2–1.6）：照片是站在地面上拍的，机位一高，地平线就跑到画面顶上去了
+- **金属度别给太高**：真实载具是"漆面"（metalness 0.2–0.35、roughness 0.5 上下），
+  给 0.7+ 就变成"暗铬"，在黄昏的 HDRI 下直接渲成剪影——这是"看不清"最常见的自找原因
+- 雾色和背景地平线不一致最扎眼：用 `bottom` 指定一个贴近日出的暖灰，或者 `haze:0.1` 压低它
+
 
 ### ground（自动地面）
 
@@ -219,7 +238,9 @@
 | 字段 | 说明 |
 |---|---|
 | `y` | 地面高度，**不写就自动取所有实体节点的最低点**（再往下 0.02）。别硬写 0：原点在哪儿取决于你的建模习惯 |
-| `color` `roughness` `metalness` | 默认 `#191C22` / 0.72 / 0.06（哑光水泥） |
+| `mode` | `solid`（默认，实体地面）/ `shadow`（**只接阴影，透明**）。用全景图当世界时必须用 `shadow`：照片里本来就有地面，再铺实体平面等于盖了块塑料布 |
+| `color` `roughness` `metalness` | 默认 `#191C22` / 0.72 / 0.06（哑光水泥），仅 `solid` 生效 |
+| `shadowOpacity` | `shadow` 模式的阴影浓度，默认 0.55，太黑会显脏 |
 | `size` | 边长，默认 160，要让边缘出画 |
 | `shadow` | 是否接收投影，默认 true |
 

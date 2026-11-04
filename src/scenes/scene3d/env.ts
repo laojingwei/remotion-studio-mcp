@@ -1,4 +1,7 @@
 import * as THREE from "three";
+import React from "react";
+import { continueRender, delayRender, staticFile } from "remotion";
+import { RGBELoader } from "three/examples/jsm/loaders/RGBELoader.js";
 
 /**
  * 程序化「棚拍」环境贴图（IBL）。
@@ -153,3 +156,116 @@ export function studioEnvironment(gl: THREE.WebGLRenderer): THREE.Texture {
   cache.set(gl, tex);
   return tex;
 }
+
+/* ─────────────────────── 全景图（照片世界） ─────────────────────── */
+
+/**
+ * 一张等距柱状（2:1）全景图当「世界」：**背景和照明用同一张**。
+ *
+ * 这是成熟软件里"像真的"的核心一步，前面那套程序化棚拍只是个替补：
+ * 程序化环境再讲究，也是"均匀的、无处的"光；而一张真实的全景图里有
+ * **具体的太阳方位、具体的天光颜色、具体的地面反射** —— 金属上那条高光
+ * 会真的来自画面里那个窗户，阴影方向也和背景里的太阳一致。
+ *
+ * 三个实现要点：
+ *
+ * 1. **.hdr 必须走 RGBELoader**：HDR 里太阳的亮度是几十甚至上百，普通 JPG
+ *    只有 0–1，用 JPG 当 IBL 会让金属发闷（没有高动态，反射里就没有"亮到溢出"的点）。
+ *    JPG/PNG 走 TextureLoader 并显式设 sRGB。
+ * 2. **delayRender / continueRender**：素材是异步的，Remotion 不等它就会截到空背景。
+ *    同一份 src 内容不变，逐帧确定性不受影响。
+ * 3. **到位后必须手动 advance**：@remotion/three 只在 frame 变化时推进，
+ *    单帧静帧里 frame 恒定 —— 全景图和它的 PMREM 都到位了，帧缓冲里还是上一版。
+ */
+
+const worldCache = new Map<string, THREE.Texture | null>();
+
+/** 路径约定与 material.map 一致：站内 /assets/ 走 staticFile，http/data 原样 */
+const resolveSrc = (src: string): string =>
+  /^(https?:)?\/\//.test(src) || src.startsWith("data:") ? src : staticFile(src.replace(/^\//, ""));
+
+const isHdr = (src: string): boolean => /\.(hdr|exr)$/i.test(src);
+
+export const useWorldTexture = (src?: string): { tex: THREE.Texture | null; finish: () => void } => {
+  const [tex, setTex] = React.useState<THREE.Texture | null>(() => (src ? worldCache.get(src) ?? null : null));
+
+  /**
+   * ## 这个 hook **必须在 Remotion 组件树里调用，不能放进 `<ThreeCanvas>` 内部**
+   *
+   * 踩过的坑：一开始在 Canvas 里的 `WorldLayer` 中加载全景图，日志显示图片 100% 加载成功、
+   * 状态也更新了、`advance()` 也调了，**静帧里却一直是回退的渐变**
+   * （靠把兜底色改成洋红二分确认过）。
+   *
+   * 原因：`<ThreeCanvas>` 的子节点由 R3F 自己的 reconciler 渲染，**不参与 Remotion
+   * 的那趟渲染**。`delayRender` 在那里注册，Remotion 判定"这帧可截"时压根看不到这个句柄，
+   * 于是它按"没有异步素材"处理，在贴图到位前就截了图。
+   *
+   * 所以：加载放外面（Scene3D），用 prop 把 texture 递给 canvas 内部；
+   * `continueRender` 也放在外层 effect 里 —— 父组件 effect 晚于子组件执行，
+   * 正好保证"先挂背景、后放行截图"。
+   */
+  const [handle] = React.useState<number | null>(() => {
+    if (!src || worldCache.has(src)) return null;
+    return delayRender(`scene3d-world:${src}`);
+  });
+  const finished = React.useRef(false);
+  const finish = React.useCallback(() => {
+    if (handle === null || finished.current) return;
+    finished.current = true;
+    continueRender(handle);
+  }, [handle]);
+
+  React.useEffect(() => {
+    if (!src) {
+      setTex(null);
+      return;
+    }
+    if (worldCache.has(src)) {
+      setTex(worldCache.get(src) ?? null);
+      return;
+    }
+    let alive = true;
+    const url = resolveSrc(src);
+    const onLoad = (t: THREE.Texture) => {
+      if (!alive) return;
+      if (isHdr(src)) {
+        // HDR 是线性数据：不能按 sRGB 解释，否则暗部整体发灰
+        t.colorSpace = THREE.LinearSRGBColorSpace;
+        t.mapping = THREE.EquirectangularReflectionMapping;
+      } else {
+        t.colorSpace = THREE.SRGBColorSpace;
+        t.mapping = THREE.EquirectangularReflectionMapping;
+      }
+      worldCache.set(src, t);
+      setTex(t);
+    };
+    const onErr = () => {
+      if (!alive) return;
+      // 失败也要放行：宁可渲成渐变兜底，也不能让整帧卡死等一个 404
+      worldCache.set(src, null);
+      setTex(null);
+      finish();
+    };
+    if (isHdr(src)) new RGBELoader().load(url, onLoad, undefined, onErr);
+    else new THREE.TextureLoader().load(url, onLoad, undefined, onErr);
+
+    return () => {
+      alive = false;
+    };
+  }, [src, finish]);
+
+  return { tex, finish };
+};
+
+/** 同一张全景图烘成 IBL（每个纹理只烘一次：PMREM 是 GPU 活儿） */
+const pmremCache = new WeakMap<THREE.Texture, THREE.Texture>();
+
+export const equirectEnvironment = (gl: THREE.WebGLRenderer, tex: THREE.Texture): THREE.Texture => {
+  const hit = pmremCache.get(tex);
+  if (hit) return hit;
+  const pmrem = new THREE.PMREMGenerator(gl);
+  const env = pmrem.fromEquirectangular(tex).texture;
+  pmrem.dispose();
+  pmremCache.set(tex, env);
+  return env;
+};

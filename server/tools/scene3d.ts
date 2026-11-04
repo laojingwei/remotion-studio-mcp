@@ -333,8 +333,10 @@ export const SCENE3D_TOOLS: ToolDef[] = [
       "**给自定义灯前先算好环境光**：look 的四盏灯会被撤掉、环境反射只剩 55%，" +
       "金属材质（metalness ≥ 0.6）的亮部几乎全来自环境反射 —— 至少给一盏 ambient intensity 1.2–2.0，否则渲成剪影；" +
       "天文片要压暗夜面才可以只给 0.1–0.3；" +
-      "世界背景：{mode:\"auto|gradient|color\", top,bottom,glow, haze:0.35, vignette:0.32} —— **背景不是主题色**，" +
-      "auto 给「深蓝灰的夜 / 冷白天光」，gradient 自己给两个端点（低饱和）；haze 是空气透视，星空场景给 0；" +
+      "世界背景：{mode:\"auto|gradient|color|image\", top,bottom,glow, image, imageLighting, imageRotation, haze:0.35, vignette:0.32} —— **背景不是主题色**，" +
+      "auto 给「深蓝灰的夜 / 冷白天光」，gradient 自己给两个端点（低饱和）；image 用等距柱状全景图（**优先 .hdr**）当背景，" +
+      "imageLighting:true 时同一张图同时当 IBL（照片里的太阳方位/天光/地面反光全变成真实光照，开了它就把 lights 调少）；" +
+      "haze 是空气透视，星空场景给 0；" +
       "地面：{y, color, roughness, metalness, size, shadow} —— 不写 y 自动落在节点最低点，" +
       "有了地面才有接触阴影（真实感的一半）；" +
       "粒子：{count:800, spread:[6,4,6], size:0.06, drift:0.3}；后期：{bloom:1.2, tonemap:\"aces|none\", exposure:1.25}。",
