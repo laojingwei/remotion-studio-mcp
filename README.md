@@ -3,7 +3,7 @@
 一份 `Project JSON`，三个消费方：**Agent 改它、用户在 Web 上拖它、Remotion 渲染它**。
 因为共用同一个数据源，agent 和用户的编辑天然互通 —— 不是后期加的功能，是架构的结果。
 
-> **版本** 1.1.0（开发线 v1.01）· **MCP 工具** 117 个（4 个常驻 + 113 个按需发现）·
+> **版本** 1.1.0（开发线 v1.01）· **MCP 工具** 119 个（4 个常驻 + 115 个按需发现）·
 > **许可** 本仓库代码 MIT，依赖里有两个非宽松（Remotion License / AGPL），见 [开源协议](#开源协议)
 
 ---
@@ -138,9 +138,9 @@ http://127.0.0.1:4380/mcp
 
 > 注意地址要带 `/mcp`：`/` 是编辑器本身的 HTTP API（REST + SSE），不是 MCP 端点。
 
-### 工具清单（117 个 = 4 常驻 + 113 按需）
+### 工具清单（119 个 = 4 常驻 + 115 按需）
 
-**门面模式**：宿主只看到 4 个常驻工具，其余 113 个用 `tool_search` 按意图现找、用 `tool_call` 执行。
+**门面模式**：宿主只看到 4 个常驻工具，其余 115 个用 `tool_search` 按意图现找、用 `tool_call` 执行。
 这样工具描述不占常驻上下文（否则光工具说明就要几万 token）。
 
 ```
@@ -172,7 +172,7 @@ get_guide(name="manual", section="…")   → 按需读指南（不常驻）
 | 风格 | `list_styles` / `get_style` / `apply_style`（一键套风格） |
 | 需求 / 分镜 | `intake`（9 步问诊）/ `save_brief` / `get_brief` / `confirm_brief` / `save_storyboard` / `get_storyboard` / `build_storyboard` / `check_project`（只读诊断） |
 | 技能 / 记忆 | `list_guides` / `remember` / `recall` |
-| 协作 | `get_user_messages` / `reply_user` |
+| 协作 | `get_user_messages` / `reply_user` / `get_annotations`（逐帧批注）/ `resolve_annotation`（标已修） |
 | 自检 | `tool_stats`（最近 7 天的调用次数 / 失败率 / 高频报错，来自 `data/logs/tool-calls-*.jsonl`） |
 
 几个省 token 的开关：
@@ -556,6 +556,8 @@ screen = stageCenter + pan + zoom * localPoint
 | 看产物 / 预览 | 顶栏「产物」（渲染左边）：点一行就地看图 / 视频 / 音频 / 字幕 |
 | 锁定产物（防自动清理） | 产物浮框里点行尾的 🔓；锁定后自动清理跳过它 |
 | 清理渲染产物 | 工程下拉菜单 → 「清理渲染产物」或产物浮框右上「管理…」（保留最近 5 次成片） |
+| **对某一帧提意见** | 画面右上「批注」→ 停到出问题的那一帧 → 写一句 → 保存（Ctrl/⌘+Enter）。agent 用 `get_annotations` 读到「第几幕 + 幕内第几帧 + 原话」，改完标「已修」 |
+| 看 agent 干了什么 | 顶栏 `⋯` → 「运行日志」：每次工具调用的时间 / 工具名 / 耗时 / 参数 / 报错，2.5 秒自动刷新（可暂停） |
 | 取消渲染 | 渲染进度旁出现的「取消」按钮 |
 
 ### 场景类型
@@ -791,6 +793,27 @@ agent 通过 MCP 工具 `get_user_messages` 读取、`reply_user` 回复，回�
 - 消息存在 `data/agent-chat.json`（本机数据，已 gitignore）
 - 接口：`GET /api/agent/messages`、`POST /api/agent/messages`、`POST /api/agent/reply`、`POST /api/agent/read`
 
+### 时间码批注（把"哪里不对"钉到帧上）
+
+用户看完片说「第 3 幕有点怪」，agent 只能猜是哪一帧——这是返工最大的来源。
+所以编辑器里可以**停到出问题的那一帧**写一句：
+
+- 画面右上「批注」→ 输入框写原话 → 保存（`Ctrl/⌘ + Enter`）
+- 列表里每条带「第 N 幕 · 时间码」，点一下跳回那一帧；改完点「已修」（不删数据，可以「恢复」）
+- agent 侧：`get_annotations` 读全部未解决批注（含 `sceneId` / 幕内帧 / 时间码），
+  逐条 `preview_frames(sceneId, frames=[幕内帧])` 看现场，改完 `resolve_annotation(ids=[...])`
+- 存 `data/projects/<id>/annotations.json`，记**幕内帧**（别的幕改时长不会让它错位）
+- 接口：`GET/POST /api/projects/:id/annotations`、`POST …/annotations/resolve`、`DELETE …/annotations/:aid`
+
+### 运行日志（agent 到底做了什么）
+
+顶栏 `⋯` → 「运行日志」：实时看 agent 每次工具调用——时间、工具名、耗时、参数摘要、报错，
+支持按工具名/参数搜索、只看失败、切近 3/7 天。日志来自 `data/logs/tool-calls-*.jsonl`
+（按天轮转、保留 7 天），和 agent 侧的 `tool_stats` 是同一份数据。
+
+> 注意：日志由**服务进程**写。stdio 代理（`mcp-proxy.ts`）里的工具调用也会经 HTTP 打到服务端，
+> 所以正常都记；只有代理自己在本地就报错的情况不记。
+
 ### 音频
 
 - **背景音乐**：属性面板里设置，支持淡入淡出，从头铺到尾
@@ -955,7 +978,7 @@ server/              唯一写入口 + 渲染队列 + MCP 代理
   bundle.service    工程包导入导出（project.json + assets + manifest）
   zip.ts            最小 zip 读写（写 stored，读兼容 deflate）
   render.service    bundle 缓存 + 素材同步 + 渲染队列
-  mcp-tools.ts      工具聚合与门面（117 个 = 4 常驻 + 113 按需）
+  mcp-tools.ts      工具聚合与门面（119 个 = 4 常驻 + 115 按需）
   mcp-proxy.ts      stdio 代理（工具调用转发给 HTTP 服务）
   skills/           18 篇技能指南（list_guides / get_guide 读）
 web/                 编辑器：预览 / 属性面板 / 时间轴 / 素材面板 / 详情浮窗

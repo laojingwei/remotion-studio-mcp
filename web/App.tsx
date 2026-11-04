@@ -16,6 +16,7 @@ import { cancelRender, fetchHistory, fetchTask, fetchTasks, requestRender, reque
 import { PROJ_SORT_DEFAULT, filterProjects, nextSort, readProjSort, timeOf, type ProjSort, type ProjSortKey } from "./projectFilter";
 import { OutputsDialog } from "./panels/OutputsDialog";
 import { OutputsPopover } from "./panels/OutputsPopover";
+import { LogDrawer } from "./panels/LogDrawer";
 import { RenderDialog, type RenderFormat, type RenderQuality } from "./panels/RenderDialog";
 import { TtsDialog } from "./panels/TtsDialog";
 import { WorkspaceDialog } from "./panels/WorkspaceDialog";
@@ -263,6 +264,8 @@ export default function App() {
   const [stills, setStills] = useState<{ format: string; url: string }[] | null>(null);
   const [history, setHistory] = useState<HistoryEntry[] | null>(null);
   const [projectMenu, setProjectMenu] = useState(false);
+  /** 运行日志抽屉：agent 正在调什么、哪一步失败 */
+  const [logOpen, setLogOpen] = useState(false);
   /**
    * 项目面板的搜索词与排序。
    * 搜索词每次打开面板清空（上次筛掉的项目还在，会让人以为工程丢了）；
@@ -1061,6 +1064,17 @@ export default function App() {
               <button
                 className="menu-item"
                 role="menuitem"
+                onClick={() => {
+                  setMoreOpen(false);
+                  setLogOpen(true);
+                }}
+              >
+                <span>运行日志</span>
+                <span className="menu-meta">agent 调了什么</span>
+              </button>
+              <button
+                className="menu-item"
+                role="menuitem"
                 disabled={!past.length}
                 onClick={() => {
                   setMoreOpen(false);
@@ -1361,6 +1375,7 @@ export default function App() {
       <AgentChat />
       */}
       <OutputsDialog open={outputsDialogOpen} onClose={() => setOutputsDialogOpen(false)} />
+      <LogDrawer open={logOpen} onClose={() => setLogOpen(false)} />
       <WorkspaceDialog open={workspaceOpen} onClose={() => setWorkspaceOpen(false)} />
       <TtsDialog open={ttsOpen} onClose={() => setTtsOpen(false)} />
       <RenderDialog

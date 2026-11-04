@@ -21,6 +21,7 @@ import { recallAll, remember, type MemoryKind } from "./memory.service";
 import { ROOT as PROJECT_ROOT } from "./root";
 import { BACKDROP_TYPES } from "../shared/sceneKinds";
 import { BRIEF_STEPS, CONFIRM_GROUPS, CORE_STEPS, briefCoverage, briefProgress, briefToText, confirmBrief, legacyFieldNotice, readBrief, recomputeDesignLock, saveBrief, sceneCountHint, stepMissingFields, type Brief } from "./brief.service";
+import { listAnnotations, resolveAnnotations } from "./annotation.service";
 import { FORM_SPECS, designLockSummary, lockViolations, normalizeForm } from "../shared/designLock";
 import { auditBriefAgainstProject, auditToText } from "./brief-audit.service";
 import { listNarrationClips, markVoiceHeard, narrationFingerprint, voiceHeardState } from "./narration-voice.service";
@@ -194,6 +195,7 @@ const TOOLS: ToolDef[] = [
         "   ↳ mustInfo 漏项 / 禁词命中会**挡住 render_video**（这是契约唯一的硬保证）；确实要强行出片才传 forceContract=true，**并且必须附 forceUserQuote（用户原话）**。",
         "   ↳ 字幕超 26 字 render_video 会直接拒：先 fix_subtitles(dryRun=true) 看预演 → fix_subtitles 落盘",
         "15. 验收【闸口⑧】 → request_review：**请用户去编辑器把整片播一遍**（节奏 / 转场 / 字幕 / 音画同步只有整片看得出）",
+        "   ↳ 让他把问题**标在帧上**（编辑器画面右上「批注」）：他会拿到精确到幕内帧的定位 → 你读 get_annotations 逐条改、改完 resolve_annotation，比一句\"这里怪怪的\"少返工好几轮",
         "   ↳ 通过 → confirm_review(approved=true)　要改 → confirm_review(approved=false, feedback=[...]) 改完再请他看　他自己导出 → selfRender=true",
         "16. 渲染 → render_video(dryRun) → render_video（没验收过 / 刚改过没抽帧都会被拒；用户明确说「不用看了直接渲」才 force=true + forceUserQuote=他的原话）",
         "   ↳ 长片别用 wait 硬等（上限 240s，超过也等不到）：拿 taskId 用 **get_render_status(taskId, waitSec=25)**，状态一变立刻返回，12 分钟的片子约 30 次就够——别几秒一查，纯浪费轮次。",
@@ -3652,6 +3654,90 @@ const TOOLS: ToolDef[] = [
         `已记 ${a.feedback.length} 条反馈（验收状态已重置）：${nl}` +
         `${(a.feedback as string[]).map((x: string, i: number) => `${i + 1}. ${x}`).join(nl)}${nl}` +
         `改完再 request_review 请他看一次——别改完直接渲染。`
+      );
+    },
+  },
+  {
+    name: "get_annotations",
+    description:
+      "读用户在编辑器里对**某一帧**留的批注。用户看片时暂停在出问题的那一帧写原话，所以每条都带 sceneId + 幕内帧 + 时间码——比「第 3 幕有点怪」精确得多，能直接抽那一帧看。\n" +
+      "用法：先读这个，再逐条 preview_frames(sceneId, frames=[幕内帧]) 看现场；改完一条就 resolve_annotation 标掉，别攒着。",
+    shape: {
+      projectId: z.string().optional().describe("工程 id，不传 = 当前默认工程"),
+      includeResolved: z.boolean().optional().describe("连已标已修的也列出来（默认只看未解决的）"),
+    },
+    run: async (a) => {
+      const p = await resolveProject(a.projectId);
+      const nl = String.fromCharCode(10);
+      const all = listAnnotations(p.id);
+      if (!all.length) {
+        return (
+          `工程「${p.name}」还没有批注。` +
+          `${nl}用户可以在编辑器里暂停到出问题的那一帧，点画面右上「批注」写下意见——` +
+          `这样你会拿到精确到帧的定位，而不是一句"这里怪怪的"。` +
+          `${nl}要请他看片就用 request_review（回执里会带上这条建议）。`
+        );
+      }
+      const list = a.includeResolved ? all : all.filter((x) => !x.resolved);
+      if (!list.length) {
+        return `工程「${p.name}」的 ${all.length} 条批注都已标为已修。要复查全部传 includeResolved=true。`;
+      }
+
+      // ProjectLite 的 scenes 元素类型比 Scene 松（元素字段可选），这里只读 start/dur
+      const spans = sceneSpans(p.scenes as never[]);
+      const order = new Map(spans.map((sp, i) => [sp.id, i]));
+      const sorted = list
+        .slice()
+        .sort(
+          (x, y) =>
+            (order.get(x.sceneId) ?? 999) - (order.get(y.sceneId) ?? 999) ||
+            x.frameInScene - y.frameInScene,
+        );
+      const fps = p.fps || 30;
+      const tc = (frame: number) => {
+        const sec = frame / fps;
+        return `${String(Math.floor(sec / 60)).padStart(2, "0")}:${(sec % 60).toFixed(1).padStart(4, "0")}`;
+      };
+      const lines = sorted.map((x, i) => {
+        const idx = order.get(x.sceneId);
+        const where =
+          idx === undefined
+            ? `幕 ${x.sceneId}（这一幕已不存在，可能被删了）· 幕内第 ${x.frameInScene} 帧`
+            : `第 ${idx + 1} 幕「${p.scenes[idx].name}」 · 全片 ${tc(spans[idx].start + x.frameInScene)}（幕内第 ${x.frameInScene} 帧）`;
+        // sceneId 必须出现在回执里：preview_frames 要的就是它，别再让 agent 回头查一次
+        return `${i + 1}. ${x.resolved ? "[已修] " : ""}${where}${nl}   “${x.text}”${nl}   id=${x.id} · sceneId=${x.sceneId}`;
+      });
+      const openCount = all.filter((x) => !x.resolved).length;
+      return (
+        `工程「${p.name}」有 ${openCount} 条未解决批注（共 ${all.length} 条）：${nl}${nl}` +
+        lines.join(nl + nl) +
+        `${nl}${nl}怎么用这些批注：` +
+        `${nl}  · 每条都是"用户看着画面说的"，别自己重新理解一遍——原话里的措辞就是他要的效果` +
+        `${nl}  · 看现场：preview_frames(sceneId="上面那条的 sceneId", frames=[幕内帧])，一帧就够，别抽整段` +
+        `${nl}  · 改完一条就 resolve_annotation(ids=["id"]) 标掉；攒着不标，下一轮你还得重新判断改没改`
+      );
+    },
+  },
+  {
+    name: "resolve_annotation",
+    description:
+      "把用户批注标记为已修（或恢复未解决）。改完一条就标一条——批注列表是给下一轮看的，留着没标的分不清是真没改还是改了没记账。",
+    shape: {
+      projectId: z.string().optional().describe("工程 id，不传 = 当前默认工程"),
+      ids: z.array(z.string()).describe("批注 id 数组（get_annotations 每条末尾给）"),
+      resolved: z.boolean().optional().describe("默认 true = 标记已修；传 false = 恢复未解决"),
+    },
+    run: async (a) => {
+      const p = await resolveProject(a.projectId);
+      if (!a.ids?.length) throw new Error("缺少 ids（get_annotations 回执里每条末尾那个 id=an_xxx）");
+      const r = resolveAnnotations(p.id, a.ids, a.resolved !== false);
+      const verb = a.resolved === false ? "恢复为未解决" : "标为已修";
+      if (!r.changed) {
+        return `没有改动：这 ${a.ids.length} 条 id 要么不存在，要么本来就是这个状态（剩 ${r.remaining} 条未解决）。`;
+      }
+      return (
+        `已把 ${r.changed} 条批注${verb}，还剩 ${r.remaining} 条未解决。` +
+        (r.remaining ? `${String.fromCharCode(10)}继续处理剩下的，全部标完再 request_review 请用户复查。` : "")
       );
     },
   },

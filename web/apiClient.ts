@@ -774,6 +774,99 @@ export async function setOutputLock(path: string, locked: boolean): Promise<void
   }
 }
 
+/* ───────────── 时间码批注 ───────────── */
+
+export type Annotation = {
+  id: string;
+  sceneId: string;
+  /** 幕内帧：全局帧会随别的幕改时长整体错位，这个不会 */
+  frameInScene: number;
+  frameAtCreate: number;
+  text: string;
+  actor: "user" | "agent";
+  at: string;
+  resolved: boolean;
+  resolvedAt?: string;
+};
+
+export async function fetchAnnotations(projectId: string): Promise<Annotation[]> {
+  const res = await fetch(`/api/projects/${encodeURIComponent(projectId)}/annotations`);
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error((data as { error?: string }).error ?? "读取批注失败");
+  return (data as { annotations?: Annotation[] }).annotations ?? [];
+}
+
+export async function addAnnotation(
+  projectId: string,
+  input: { sceneId: string; frameInScene: number; text: string; frameAtCreate: number },
+): Promise<Annotation> {
+  const res = await fetch(`/api/projects/${encodeURIComponent(projectId)}/annotations`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(input),
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error((data as { error?: string }).error ?? "保存批注失败");
+  return (data as { annotation: Annotation }).annotation;
+}
+
+export async function resolveAnnotations(
+  projectId: string,
+  ids: string[],
+  resolved = true,
+): Promise<{ changed: number; remaining: number }> {
+  const res = await fetch(`/api/projects/${encodeURIComponent(projectId)}/annotations/resolve`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ ids, resolved }),
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error((data as { error?: string }).error ?? "更新批注失败");
+  return data as { changed: number; remaining: number };
+}
+
+export async function deleteAnnotation(projectId: string, id: string): Promise<void> {
+  const res = await fetch(
+    `/api/projects/${encodeURIComponent(projectId)}/annotations/${encodeURIComponent(id)}`,
+    { method: "DELETE" },
+  );
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({}));
+    throw new Error((data as { error?: string }).error ?? "删除批注失败");
+  }
+}
+
+/* ───────────── 运行日志（工具调用） ───────────── */
+
+export type ToolCallEntry = {
+  ts: string;
+  tool: string;
+  args: string;
+  ms: number;
+  ok: boolean;
+  error?: string;
+};
+
+export type ToolCallLog = {
+  calls: ToolCallEntry[];
+  total: number;
+  stats: {
+    days: number;
+    total: number;
+    failed: number;
+    /** 按调用次数降序 */
+    byTool: { tool: string; calls: number; failed: number; avgMs: number; p95Ms: number }[];
+    topErrors: { tool: string; error: string; count: number }[];
+  };
+};
+
+export async function fetchToolLog(limit = 150, days = 1): Promise<ToolCallLog> {
+  const res = await fetch(`/api/tool-log?limit=${limit}&days=${days}`);
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error((data as { error?: string }).error ?? "读取运行日志失败");
+  return data as ToolCallLog;
+}
+
 export async function deleteOutputFiles(
   paths: string[],
 ): Promise<{ deleted: number; freedBytes: number; missing: number }> {

@@ -195,7 +195,13 @@ export function repairKnownDirtyValues(project: Record<string, unknown>): boolea
  * rename 在同一磁盘卷上是原子的：要么看到旧文件，要么看到完整的新文件。
  * Windows 上 `fs.renameSync` 覆盖已存在文件也是允许的（Node 内部走 MoveFileEx）。
  */
-function writeJsonAtomic(file: string, data: unknown): void {
+/**
+ * 原子落盘：tmp → fsync → rename。
+ *
+ * 导出给别的服务用（批注等），保证全项目只有这一种写 JSON 的方式——
+ * 直接 writeFileSync 覆盖，进程一被杀就留下半个 JSON，再也打不开。
+ */
+export function writeJsonAtomic(file: string, data: unknown): void {
   const tmp = `${file}.tmp`;
   const text = JSON.stringify(data, null, 2);
   const fd = fs.openSync(tmp, "w");

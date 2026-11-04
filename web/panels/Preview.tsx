@@ -15,6 +15,7 @@ import {
   type CustomAsset,
 } from "@shared/assetLibrary";
 import { EditOverlay, type Box } from "./EditOverlay";
+import { AnnotationLayer } from "./AnnotationLayer";
 import { SceneBoxOverlay } from "./SceneBoxOverlay";
 import { editRegistry } from "../../src/scenes/ui";
 import { framesForAsset } from "../assetDuration";
@@ -1327,6 +1328,14 @@ export const Preview: React.FC<Props> = ({ playerRef }) => {
         </div>
         )}
       </div>
+
+      {/* 时间码批注：挂在当前幕的当前帧上，agent 用 get_annotations 读 */}
+      <AnnotationLayer
+        projectId={project.id}
+        fps={project.fps}
+        scenes={project.scenes}
+        selectedSceneId={selectedId ?? ""}
+      />
 
       {/* 排列条常驻：没选中时按钮置灰而不是整条消失，免得"找个功能还要先选中" */}
       <div className={`arrange-bar ${selection.length ? "" : "is-idle"} ${view3d && can3d ? "is-hidden-3d" : ""}`}>

@@ -193,6 +193,52 @@ try {
     check("Esc 关闭产物浮框", (await page.locator(".out-pop").count()) === 0);
   }
 
+  /* 4c. 时间码批注：写完要落盘，并且能出现在列表里（agent 靠这份数据改片） */
+  const annoBtn = page.locator(".anno-fab");
+  check("画面有「批注」按钮", (await annoBtn.count()) === 1);
+  if (await annoBtn.count()) {
+    await annoBtn.click();
+    await page.waitForTimeout(400);
+    const text = "E2E：这一帧转场太硬";
+    await page.locator(".anno-input").fill(text);
+    await page.locator(".anno-save").click();
+    await page.waitForTimeout(800);
+    const items = await page.locator(".anno-item").count();
+    const { annotations } = await api(`/api/projects/${proj.id}/annotations`);
+    check(
+      "批注落盘且出现在列表里",
+      items >= 1 && annotations.some((a) => a.text === text && a.resolved === false),
+      `列表 ${items} 条 / 接口 ${annotations.length} 条`,
+    );
+    // 接口里的幕内帧必须是个有效值（存成 NaN 的话 agent 定位会全错）
+    const saved = annotations.find((a) => a.text === text);
+    check(
+      "批注带幕内帧",
+      Boolean(saved) && Number.isInteger(saved.frameInScene) && saved.frameInScene >= 0 && Boolean(saved.sceneId),
+      saved ? `scene=${saved.sceneId} frame=${saved.frameInScene}` : "没存上",
+    );
+    await page.keyboard.press("Escape");
+    await page.waitForTimeout(300);
+    check("Esc 关闭批注浮框", (await page.locator(".anno-pop").count()) === 0);
+  }
+
+  /* 4d. 运行日志抽屉：「⋯」→ 运行日志（agent 干了什么，用户自己也看得到） */
+  await page.locator(".topbar-more > button").click();
+  await page.waitForTimeout(250);
+  const logItem = page.locator(".topbar-more-menu .menu-item").filter({ hasText: "运行日志" });
+  check("「⋯」菜单里有运行日志", (await logItem.count()) === 1);
+  if (await logItem.count()) {
+    await logItem.click();
+    await page.waitForTimeout(700);
+    const drawer = await page.locator(".log-drawer").count();
+    const rows = await page.locator(".log-row").count();
+    const empty = await page.locator(".log-empty").count();
+    check("运行日志抽屉能打开", drawer === 1 && (rows > 0 || empty > 0), `抽屉 ${drawer} / 行 ${rows}`);
+    await page.keyboard.press("Escape");
+    await page.waitForTimeout(250);
+    check("Esc 关闭运行日志", (await page.locator(".log-drawer").count()) === 0);
+  }
+
   /* 5. 刷新后仍读到新名字（写盘 + 读回 + 首屏一致） */
   await page.reload({ waitUntil: "domcontentloaded" });
   await page.waitForSelector(".project-name", { timeout: 20000 });

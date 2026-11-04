@@ -40,7 +40,14 @@ export const EFFECT_DESC = z.object({
   durationInFrames: z.number().int().min(0),
 });
 
-export const BASE = process.env.SERVER_URL ?? "http://127.0.0.1:4380";
+/**
+ * 服务地址。
+ *
+ * 显式 SERVER_URL 最优先；否则跟着 PORT 走——以前这里写死 4380，用户用
+ * `PORT=4400 npm start` 起服务时，工具会去跟 4380 上的（可能是另一个实例/旧进程）
+ * 说话：读到的工程和写入的批注不是同一份数据，症状是"我明明存了它说没这一幕"。
+ */
+export const BASE = process.env.SERVER_URL ?? `http://127.0.0.1:${process.env.PORT ?? 4380}`;
 export const BRK = String.fromCharCode(10);
 
 /**

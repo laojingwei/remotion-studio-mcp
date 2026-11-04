@@ -30,6 +30,13 @@ import {
 } from "./assets.service";
 import { assetNameOf } from "../shared/customTemplate";
 import { addMessage, listMessages, markUserMessagesRead } from "./agentBridge.service";
+import {
+  addAnnotation,
+  deleteAnnotation,
+  listAnnotations,
+  resolveAnnotations,
+} from "./annotation.service";
+import { readToolCalls, toolStats } from "./tool-log.service";
 import { getTtsConfig, saveTtsConfig, synthesize } from "./tts.service";
 import { z } from "zod";
 import { zodToJsonSchema } from "zod-to-json-schema";
@@ -576,6 +583,70 @@ app.post("/api/agent/reply", async (c) => {
 });
 
 app.post("/api/agent/read", (c) => c.json({ ok: true, read: markUserMessagesRead() }));
+
+/* ───────────── 时间码批注（编辑器逐帧留言 → agent 用 get_annotations 读） ───────────── */
+
+app.get("/api/projects/:id/annotations", (c) => {
+  try {
+    return c.json({ annotations: listAnnotations(c.req.param("id")) });
+  } catch (err) {
+    return fail(c, err);
+  }
+});
+
+app.post("/api/projects/:id/annotations", async (c) => {
+  try {
+    const body = (await c.req.json().catch(() => ({}))) as {
+      sceneId?: string;
+      frameInScene?: number;
+      text?: string;
+      frameAtCreate?: number;
+    };
+    const item = addAnnotation(c.req.param("id"), {
+      sceneId: String(body.sceneId ?? ""),
+      frameInScene: Number(body.frameInScene ?? 0),
+      text: String(body.text ?? ""),
+      actor: "user",
+      frameAtCreate: Number(body.frameAtCreate ?? 0),
+    });
+    return c.json({ ok: true, annotation: item });
+  } catch (err) {
+    return fail(c, err);
+  }
+});
+
+app.post("/api/projects/:id/annotations/resolve", async (c) => {
+  try {
+    const body = (await c.req.json().catch(() => ({}))) as { ids?: string[]; resolved?: boolean };
+    const ids = Array.isArray(body.ids) ? body.ids.map(String) : [];
+    if (!ids.length) return c.json({ error: "缺少 ids" }, 400);
+    return c.json({ ok: true, ...resolveAnnotations(c.req.param("id"), ids, body.resolved !== false) });
+  } catch (err) {
+    return fail(c, err);
+  }
+});
+
+app.delete("/api/projects/:id/annotations/:aid", (c) => {
+  try {
+    const ok = deleteAnnotation(c.req.param("id"), c.req.param("aid"));
+    return ok ? c.json({ ok: true }) : c.json({ error: "没有这条批注" }, 404);
+  } catch (err) {
+    return fail(c, err);
+  }
+});
+
+/* ───────────── 运行日志（编辑器抽屉；agent 侧对应 tool_stats） ───────────── */
+
+app.get("/api/tool-log", (c) => {
+  const limit = Math.min(500, Math.max(1, Number(c.req.query("limit") ?? 150) || 150));
+  const days = Math.min(7, Math.max(1, Number(c.req.query("days") ?? 1) || 1));
+  const all = readToolCalls(days);
+  return c.json({
+    calls: all.slice(-limit).reverse(),
+    total: all.length,
+    stats: toolStats(days),
+  });
+});
 
 app.post("/api/projects", async (c) => {
   try {
