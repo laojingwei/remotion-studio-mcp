@@ -239,6 +239,57 @@ try {
     check("Esc 关闭运行日志", (await page.locator(".log-drawer").count()) === 0);
   }
 
+  /*
+   * 4e. 归档：只从列表收起来，一个文件都不删。
+   * 用户最容易被"工程怎么不见了"吓到，所以这条要压两件事：
+   *  · 归档后列表里真的没了（否则归档等于没做）
+   *  · 顶栏还挂着「已归档」标签、点一下就能回来（否则就是"删了"）
+   */
+  const openProjectMenu = async () => {
+    await page.locator(".caret").click();
+    await page.waitForSelector(".menu", { timeout: 8000 });
+    await page.waitForTimeout(200);
+  };
+  await openProjectMenu();
+  const archItem = page.locator(".menu-item").filter({ hasText: "归档这个工程" });
+  check("项目面板里有「归档这个工程」", (await archItem.count()) === 1);
+  if (await archItem.count()) {
+    await archItem.first().click();
+    await page.waitForTimeout(900);
+    check("归档后顶栏出现「已归档」标签", (await page.locator(".proj-archived-pill").count()) === 1);
+    const archivedRow = (await api("/api/projects")).projects.find((p) => p.id === proj.id);
+    check("归档时间写进工程列表", Boolean(archivedRow?.archivedAt), String(archivedRow?.archivedAt));
+
+    await openProjectMenu();
+    const liveRows = await page.locator(".menu-projects .menu-item").allInnerTexts();
+    check(
+      "已归档的工程不在默认列表里",
+      !liveRows.some((t) => t.includes(newName)),
+      liveRows.join(" | ").slice(0, 120),
+    );
+    const archToggle = page.locator(".proj-arch");
+    check("面板出现「归档 N」开关", (await archToggle.count()) === 1);
+    if (await archToggle.count()) {
+      await archToggle.click();
+      await page.waitForTimeout(400);
+      const archRows = await page.locator(".menu-projects .menu-item.is-archived").allInnerTexts();
+      check(
+        "打开归档开关能看见它（还标着已归档）",
+        archRows.some((t) => t.includes(newName)),
+        archRows.join(" | ").slice(0, 120),
+      );
+    }
+    await page.locator(".caret").click();
+    await page.waitForTimeout(300);
+    check("再点一次能收起项目面板", (await page.locator(".menu").count()) === 0);
+
+    await page.locator(".proj-archived-pill").click();
+    await page.waitForTimeout(900);
+    check("点「已归档」标签即恢复", (await page.locator(".proj-archived-pill").count()) === 0);
+    const restored = (await api("/api/projects")).projects.find((p) => p.id === proj.id);
+    check("恢复后归档标记被清掉", !restored?.archivedAt, String(restored?.archivedAt));
+  }
+
   /* 5. 刷新后仍读到新名字（写盘 + 读回 + 首屏一致） */
   await page.reload({ waitUntil: "domcontentloaded" });
   await page.waitForSelector(".project-name", { timeout: 20000 });

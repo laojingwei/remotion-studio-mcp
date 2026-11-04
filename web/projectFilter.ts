@@ -87,7 +87,22 @@ export function filterProjects(
   list: ProjectSummary[],
   rawQuery: string,
   sort: ProjSort,
+  opts: { includeArchived?: boolean } = {},
 ): ProjectSummary[] {
   const tokens = parseQuery(rawQuery);
-  return sortProjects(list.filter((p) => matches(p, tokens)), sort);
+  // 归档的工程默认不露面：它们多半是自检/模板试建留下的，混在真作品里只会让人多翻两屏。
+  // 注意是「不显示」而不是「不在」——用户点开「已归档」就能看见，工程与文件都还在。
+  const pool = opts.includeArchived ? list : list.filter((p) => !p.archivedAt);
+  return sortProjects(pool.filter((p) => matches(p, tokens)), sort);
+}
+
+/**
+ * 归档数量（面板按钮上的角标）。
+ *
+ * 单独一个函数是因为「有没有归档」要在面板按钮上显示，而按钮在列表还没算完时就要画出来：
+ * 让 App 里各写一遍 `filter(p => p.archivedAt).length` 会把归档的判定条件散开——
+ * 以后加「归档过期自动清理」之类规则就得记得改两处。
+ */
+export function countArchived(list: ProjectSummary[]): number {
+  return list.reduce((n, p) => (p.archivedAt ? n + 1 : n), 0);
 }

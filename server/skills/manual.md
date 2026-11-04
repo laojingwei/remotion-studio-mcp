@@ -1,11 +1,11 @@
-# Agent 使用全书（120 个工具 = 4 常驻 + 115 按需 + 能力地图 + 铁律）
+# Agent 使用全书（121 个工具 = 4 常驻 + 117 按需 + 能力地图 + 铁律）
 
 给 agent 的完整说明书。**你不需要读源码、不需要试探参数**：这台机器能做什么、怎么组合、
 为什么没生效，全部在这页和另外 17 篇指南里（全 18 篇的索引见本文最后一节）。
 
 **工具分两层（先搞懂这个）**：
 - **常驻核心 4 个**：`start_guide`（开工入口）、`get_guide`（读指南/本书）、`tool_search`（找工具）、`tool_call`（执行工具）
-- **其余 116 个**：不在常驻列表里。用法：`tool_search("画中画")` 找到工具（返回名字/说明/参数表）→ `tool_call(name="move_scene", args={...})` 执行。
+- **其余 117 个**：不在常驻列表里。用法：`tool_search("画中画")` 找到工具（返回名字/说明/参数表）→ `tool_call(name="move_scene", args={...})` 执行。
   全量目录：`tool_search(all=true)`；某几个工具的完整文档：`tool_search(names=["add_element"])`
 - 本书的工具全表（§3）按域列出全部工具（含 4 个核心）——先查表再搜索，比盲搜快
 
@@ -89,7 +89,7 @@
 
 **入口与指南**：`start_guide`（开工入口，必先调）· `list_guides` · `get_guide(name, section?)`
 
-**工程**：`list_projects`（★ = 当前）· `switch_project` · `create_project` · `get_project` · `delete_project` · `list_templates` · `save_template` · `delete_template` · `export_project` · `import_project` · `get_history` · `restore_rev`
+**工程**：`list_projects`（★ = 当前，**已归档默认不列**）· `switch_project` · `create_project` · `get_project` · `archive_project`（从列表收起来，不删文件）· `delete_project` · `list_templates` · `save_template` · `delete_template` · `export_project` · `import_project` · `get_history` · `restore_rev`
 
 > **当前工程怎么变**：只有 `create_project` / `import_project` / `switch_project` /「删掉的正好是当前工程」这四种情况会改。**其余工具即使显式传了 `projectId`，也只影响这一次调用，不会改当前工程**——所以「先 `get_project(别的工程)` 看一眼，再回来干活」是安全的。
 

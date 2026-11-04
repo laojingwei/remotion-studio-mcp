@@ -766,6 +766,26 @@ app.put("/api/ui-prefs", async (c) => {
   return c.json({ ok: true, count: Object.keys(clean).length });
 });
 
+/**
+ * 归档 / 取消归档工程。
+ *
+ * 归档 = 从默认列表里收起来，**不删任何文件**：仍能打开、渲染、导出，
+ * 只是不再挤占 list_projects 和切换面板（测试工程最容易堆成这种噪音）。
+ * 挂在独立文件 data/archive.json 上，不写 project.json —— 归档不该改 rev、进历史。
+ */
+app.post("/api/projects/:id/archive", async (c) => {
+  const id = c.req.param("id");
+  const body = (await c.req.json().catch(() => ({}))) as { archived?: unknown; note?: unknown };
+  const on = body.archived === undefined ? true : Boolean(body.archived);
+  const note = typeof body.note === "string" ? body.note : undefined;
+  try {
+    const { archivedAt } = projects.archive(id, on, note);
+    return c.json({ ok: true, id, archived: Boolean(archivedAt), archivedAt });
+  } catch (err) {
+    return fail(c, err);
+  }
+});
+
 /** 删除工程 */
 app.delete("/api/projects/:id", (c) => {
   const id = c.req.param("id");

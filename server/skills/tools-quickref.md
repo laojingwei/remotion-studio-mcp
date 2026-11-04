@@ -1,13 +1,14 @@
 # 工具速查（入口页）
 
-完整说明书在 **`get_guide("manual")`**：《Agent 使用全书》——120 个工具全表（4 常驻 + 116 按需）、能力地图、
+完整说明书在 **`get_guide("manual")`**：《Agent 使用全书》——121 个工具全表（4 常驻 + 117 按需）、能力地图、
 「我想…」意图速查、落地铁律（为什么没生效）。本页只留最快的域索引：
 
 **两层调用**：常驻核心 4 个（start_guide / get_guide / tool_search / tool_call）；
-其余 116 个工具 `tool_search("意图")` 找 → `tool_call(name, args)` 执行（`all=true` 看全量目录，`names=[...]` 取完整参数表）。
+其余 117 个工具 `tool_search("意图")` 找 → `tool_call(name, args)` 执行（`all=true` 看全量目录，`names=[...]` 取完整参数表）。
 
-- 工程：list / switch / create / get / delete / 模板（含删除）/ 历史 / 导入导出
+- 工程：list / switch / create / get / **archive（收进抽屉，不删文件）** / delete / 模板（含删除）/ 历史 / 导入导出
   （当前工程只在 create / import / switch / 删除当前工程时变；显式 projectId 只影响本次调用）
+  测试工程太多用 `archive_project`（可逆），别用 `delete_project`（不可逆）；`list_projects` 默认不列已归档的
 - 需求与分镜：intake → save_brief → confirm_brief → save_storyboard → build_storyboard
 - 场景与元素：add/update_scene、76 个 2D 版式（scene-recipes）、freeform、元素/特效/转场
 - **3D 场景**：`add_scene(type="scene3d")`——抽象氛围用 preset（6 个母题），具体物体写 `graph` 场景图；

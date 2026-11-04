@@ -3,7 +3,7 @@
 一份 `Project JSON`，三个消费方：**Agent 改它、用户在 Web 上拖它、Remotion 渲染它**。
 因为共用同一个数据源，agent 和用户的编辑天然互通 —— 不是后期加的功能，是架构的结果。
 
-> **版本** 1.1.0（开发线 v1.01）· **MCP 工具** 120 个（4 个常驻 + 116 个按需发现）·
+> **版本** 1.1.0（开发线 v1.01）· **MCP 工具** 121 个（4 个常驻 + 117 个按需发现）·
 > **许可** 本仓库代码 MIT，依赖里有两个非宽松（Remotion License / AGPL），见 [开源协议](#开源协议)
 
 ---
@@ -138,9 +138,9 @@ http://127.0.0.1:4380/mcp
 
 > 注意地址要带 `/mcp`：`/` 是编辑器本身的 HTTP API（REST + SSE），不是 MCP 端点。
 
-### 工具清单（120 个 = 4 常驻 + 116 按需）
+### 工具清单（121 个 = 4 常驻 + 117 按需）
 
-**门面模式**：宿主只看到 4 个常驻工具，其余 116 个用 `tool_search` 按意图现找、用 `tool_call` 执行。
+**门面模式**：宿主只看到 4 个常驻工具，其余 117 个用 `tool_search` 按意图现找、用 `tool_call` 执行。
 这样工具描述不占常驻上下文（否则光工具说明就要几万 token）。
 
 ```
@@ -156,7 +156,7 @@ get_guide(name="manual", section="…")   → 按需读指南（不常驻）
 | 分组 | 工具 |
 |---|---|
 | 门面（常驻） | `start_guide` / `get_guide` / `tool_search` / `tool_call` |
-| 工程 | `create_project` / `list_projects` / `switch_project` / `get_project` / `delete_project` / `export_project` / `import_project` / `restore_rev` / `get_history` / `list_templates` / `save_template` / `delete_template` |
+| 工程 | `create_project` / `list_projects` / `switch_project` / `get_project` / `archive_project` / `delete_project` / `export_project` / `import_project` / `restore_rev` / `get_history` / `list_templates` / `save_template` / `delete_template` |
 | 场景 | `list_scene_types` / `add_scene` / `update_scene` / `get_scene` / `set_scene_type` / `set_scene_timing` / `remove_scene` / `duplicate_scene` / `reorder_scenes` / `move_scene`（多轨定位）/ `set_scene_box`（画中画） |
 | 批量 | `apply_ops`（整批原子，回传新增的 scene/element id） |
 | 元素 | `list_element_library` / `add_element` / `update_element` / `remove_element` / `set_transform` / `layout_grid` / `align_elements` |
@@ -978,7 +978,7 @@ server/              唯一写入口 + 渲染队列 + MCP 代理
   bundle.service    工程包导入导出（project.json + assets + manifest）
   zip.ts            最小 zip 读写（写 stored，读兼容 deflate）
   render.service    bundle 缓存 + 素材同步 + 渲染队列
-  mcp-tools.ts      工具聚合与门面（120 个 = 4 常驻 + 116 按需）
+  mcp-tools.ts      工具聚合与门面（121 个 = 4 常驻 + 117 按需）
   mcp-proxy.ts      stdio 代理（工具调用转发给 HTTP 服务）
   skills/           18 篇技能指南（list_guides / get_guide 读）
 web/                 编辑器：预览 / 属性面板 / 时间轴 / 素材面板 / 详情浮窗

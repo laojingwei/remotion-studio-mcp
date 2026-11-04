@@ -2,6 +2,7 @@ import type { Project } from "../shared/schema";
 import { applyOps, type Op, type OpResult } from "../shared/ops";
 import { deleteProjectDir, listProjectIds, listSnapshots, projectFileTimes, readProject, readSnapshot, writeLastProjectId, writeProject } from "./store";
 import { assertTextureAssets } from "./texture-asset-check";
+import { forgetArchived, pruneArchived, readArchive, setArchived } from "./archive.service";
 
 type Listener = (event: BroadcastEvent) => void;
 
@@ -49,22 +50,44 @@ class ProjectService {
   private listeners = new Map<string, Set<Listener>>();
   private logs = new Map<string, HistoryEntry[]>();
 
-  list(): { id: string; name: string; rev: number; scenes: number; createdAt: string; updatedAt: string; broken?: string }[] {
+  list(): { id: string; name: string; rev: number; scenes: number; createdAt: string; updatedAt: string; broken?: string; archivedAt?: string }[] {
+    // 归档标记放在独立的 data/archive.json 里（见 archive.service）：不动工程文件，
+    // 坏工程读不出来时也照样能归档。这里一次性读，避免每行都读一遍文件。
+    const archive = readArchive();
     // 单个工程读坏了不能连累整个列表（否则健康检查与所有工程一起 500）
     return listProjectIds().map((id) => {
       try {
         const p = this.get(id);
-        return { id: p.id, name: p.name, rev: p.rev, scenes: p.scenes.length, ...projectFileTimes(id) };
+        const row = { id: p.id, name: p.name, rev: p.rev, scenes: p.scenes.length, ...projectFileTimes(id) };
+        const at = archive[id]?.at;
+        return at ? { ...row, archivedAt: at } : row;
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
         console.error(`[projects] 读取失败 ${id}：${msg}`);
-        return {
+        const row = {
           id, name: `⚠️ ${id}（数据损坏）`, rev: -1, scenes: 0,
           createdAt: "", updatedAt: "", broken: msg,
         };
+        const at = archive[id]?.at;
+        return at ? { ...row, archivedAt: at } : row;
       }
     });
   }
+
+  /** 归档 / 取消归档。只写 data/archive.json，不碰工程的任何文件 */
+  archive(id: string, on: boolean, note?: string): { archivedAt: string | null } {
+    if (!listProjectIds().includes(id)) {
+      throw Object.assign(new Error(`工程不存在：${id}（list_projects 查 id）`), { status: 404 });
+    }
+    const entry = setArchived(id, on, note);
+    return { archivedAt: entry?.at ?? null };
+  }
+
+  /** 清掉指向已不存在工程的归档项（手动删目录 / 导入失败留下的孤儿） */
+  pruneArchive(): number {
+    return pruneArchived(listProjectIds());
+  }
+
 
   /**
    * 记住"最近在用的工程"。
@@ -95,6 +118,7 @@ class ProjectService {
       throw Object.assign(new Error("工程不存在"), { status: 404 });
     }
     deleteProjectDir(id);
+    forgetArchived(id);
     this.cache.delete(id);
     this.logs.delete(id);
     const set = this.listeners.get(id);

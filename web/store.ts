@@ -2,7 +2,7 @@ import { create } from "zustand";
 import type { Project } from "@shared/schema";
 import { applyOps, type Op } from "@shared/ops";
 import type { CustomAsset } from "@shared/assetLibrary";
-import type { TemplateInfo } from "./apiClient";
+import type { ProjectSummary, TemplateInfo } from "./apiClient";
 import {
   CLIENT_ID,
   cleanupAssets as apiCleanupAssets,
@@ -12,6 +12,7 @@ import {
   deleteLibraryAsset,
   deleteLibraryAssets,
   deleteProject,
+  archiveProject,
   deleteProjectAssets,
   deleteTemplate as apiDeleteTemplate,
   downloadProjectBundle,
@@ -39,17 +40,6 @@ type Snapshot = Pick<
   Project,
   "scenes" | "theme" | "name" | "audio" | "audioTracks" | "effects"
 >;
-
-type ProjectSummary = {
-  id: string;
-  name: string;
-  rev: number;
-  scenes: number;
-  /** 工程文件的创建时间（ISO），列表里用来按时间找 */
-  createdAt?: string;
-  /** 最后一次修改时间（ISO） */
-  updatedAt?: string;
-};
 
 type State = {
   project: Project | null;
@@ -85,6 +75,13 @@ type State = {
   renameTemplate: (id: string, name: string) => Promise<void>;
   loadTemplates: () => Promise<void>;
   deleteCurrentProject: () => Promise<void>;
+  /**
+   * 归档 / 取消归档当前工程（默认归档）。
+   *
+   * 和删除的区别：归档**不删任何文件**，只是让它从切换面板的主列表里消失，
+   * 工程还留在画面上继续用——所以这里不切工程、不断订阅，只刷新列表。
+   */
+  archiveCurrentProject: (archived?: boolean) => Promise<void>;
   duplicateCurrentProject: () => Promise<void>;
   /** 导出当前工程为 .zip 并下载 */
   exportCurrentProject: () => Promise<void>;
@@ -332,6 +329,23 @@ export const useDoc = create<State>((set, get) => ({
       }
     } catch (err) {
       set({ error: err instanceof Error ? err.message : "删除失败" });
+    }
+  },
+
+  archiveCurrentProject: async (archived = true) => {
+    const project = get().project;
+    if (!project) return;
+    try {
+      await archiveProject(project.id, archived);
+      await get().refreshProjects();
+      // 不切工程：归档只影响"列表里露面"，正在编辑的画面不该被收起动作打断
+      get().notify(
+        archived
+          ? `已归档「${project.name}」——没删任何文件，工程名旁的「已归档」标签点一下就能恢复`
+          : `已取消归档「${project.name}」，重新出现在项目列表里`,
+      );
+    } catch (err) {
+      set({ error: err instanceof Error ? err.message : archived ? "归档失败" : "取消归档失败" });
     }
   },
 

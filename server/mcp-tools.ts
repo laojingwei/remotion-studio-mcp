@@ -816,20 +816,38 @@ const TOOLS: ToolDef[] = [
   {
     name: "list_projects",
     description:
-      "列出所有工程（id / 名称 / 场景数 / 版本号），并标出当前默认工程。用户说「继续做上次的片子」或不确定在哪个工程上干活时先调它，再用 switch_project 切换。",
-    shape: {},
-    run: async () => {
+      "列出工程（id / 名称 / 场景数 / 版本号），标出当前默认工程。用户说「继续做上次的片子」或不确定在哪个工程上干活时先调它，再用 switch_project 切换。\n" +
+      "**已归档的工程默认不列**（archive_project 收起来的，多为自检/模板试建的测试工程）；末尾会说明归档了几个、怎么拿回来。要连它们一起看传 includeArchived:true。",
+    shape: {
+      includeArchived: z
+        .boolean()
+        .optional()
+        .describe("true = 连已归档的工程一起列（默认只列在用的；归档只是收起来，不是删除）"),
+    },
+    run: async (a) => {
       refreshPointer(); // 另一个通道可能刚切过工程
-      const { projects } = await api<{ projects: { id: string; name: string; rev: number; scenes: number }[] }>(
-        "/api/projects",
-      );
+      const { projects } = await api<{
+        projects: { id: string; name: string; rev: number; scenes: number; archivedAt?: string }[];
+      }>("/api/projects");
       if (!projects.length) return "还没有任何工程。用 create_project 新建。";
-      // 指针为空 **或指向已删工程** 都要自愈并写回，否则这里永远标不出 ★、
-      // get_project 每次读都静默换一个工程（N-04 残留：旧写法只判断了「指针为空」）
-      if (!projects.some((p) => p.id === lastProjectId)) {
-        setCurrentProject(projects[0].id);
-      }
       const nl = String.fromCharCode(10);
+      const live = projects.filter((p) => !p.archivedAt);
+      const archived = projects.filter((p) => p.archivedAt);
+      const shown = a.includeArchived ? projects : live;
+      if (!shown.length) {
+        // 全归档了：不能说「没有工程」——文件都在，只是都收进抽屉了
+        return (
+          `在用的工程是 0 个，${archived.length} 个都已归档（文件都还在）：${nl}` +
+          archived.map((p) => `  ${p.name}（id=${p.id}，${p.scenes} 场景）`).join(nl) +
+          `${nl}恢复某个：archive_project({projectId:"…", archived:false})；要直接干活也可以显式传它的 projectId。`
+        );
+      }
+      // 指针为空 **或指向已删工程** 都要自愈并写回，否则这里永远标不出 ★、
+      // get_project 每次读都静默换一个工程（N-04 残留：旧写法只判断了「指针为空」）。
+      // 自愈只在「在用」的里面挑：归档的工程不该被自动选中。
+      if (!projects.some((p) => p.id === lastProjectId) && live[0]) {
+        setCurrentProject(live[0].id);
+      }
       // 对账：out/ 里有、data/ 里没有的工程 = 多半是另一个实例/另一份数据目录。
       // 不说的话，agent 会以为工程被删了，或者对着错误的工程继续改
       let orphanNote = "";
@@ -848,15 +866,29 @@ const TOOLS: ToolDef[] = [
       } catch {
         /* 对账拿不到不影响列表本身 */
       }
+      const archivedNote = archived.length
+        ? `${nl}${nl}已归档 ${archived.length} 个（不在上面，文件都还在）：${archived
+            .slice(0, 6)
+            .map((p) => p.name)
+            .join("、")}${archived.length > 6 ? "…" : ""}` +
+          `${nl}  它们只是从默认列表收起来了：显式传 projectId 照样能改；想放回列表 → archive_project({projectId, archived:false})；` +
+          `要看全 → list_projects(includeArchived:true)`
+        : "";
+      const currentHidden = live.every((p) => p.id !== lastProjectId) && lastProjectId
+        ? `${nl}⚠ 当前默认工程 ${lastProjectId} 已归档：不在上面的在用列表里，但照样是默认工程`
+        : "";
       return (
-        `共 ${projects.length} 个工程（★ = 当前默认工程）：` +
+        `共 ${live.length} 个在用工程（★ = 当前默认工程）：` +
         nl +
-        projects
+        shown
           .map(
             (p) =>
-              `${p.id === lastProjectId ? "★" : " "} ${p.name}（id=${p.id}，${p.scenes} 场景，rev=${p.rev}）`,
+              `${p.id === lastProjectId ? "★" : " "} ${p.name}（id=${p.id}，${p.scenes} 场景，rev=${p.rev}）` +
+              (p.archivedAt ? ` · 已归档 ${p.archivedAt.slice(0, 10)}` : ""),
           )
           .join(nl) +
+        currentHidden +
+        archivedNote +
         dataNote +
         orphanNote
       );

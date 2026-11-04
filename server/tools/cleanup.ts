@@ -18,6 +18,72 @@ import { toAssetId } from "../../shared/assetLibrary";
 
 export const CLEANUP_TOOLS: ToolDef[] = [
   {
+    name: "archive_project",
+    description:
+      "归档 / 取消归档工程：**只从默认列表里收起来，一个文件都不删**。\n" +
+      "用途：`data/projects/` 攒了一堆自检、模板试建、随手建的工程，真作品被淹没。归档后 list_projects 与编辑器切换面板默认不再列它，" +
+      "但工程照样能打开、渲染、导出、被显式 id 修改。\n" +
+      "和 delete_project 的区别（别混）：删是不可逆的（工程、素材、成片一起没）；归档随时 `archived:false` 拿回来。" +
+      "用户说「这些测试的别老列出来」→ 用它；用户说「删掉」→ 才用 delete_project。\n" +
+      "**不会默认作用在当前工程上**：必须给 projectId 或 batch，避免顺手把正在做的片子收起来。",
+    shape: {
+      projectId: z.string().optional().describe("要归档的工程 id（list_projects 查）。与 batch 二选一"),
+      batch: z
+        .array(z.string())
+        .optional()
+        .describe("一次处理多个：工程 id 数组（清理测试工程用）。与 projectId 二选一"),
+      archived: z
+        .boolean()
+        .optional()
+        .describe("true（默认）= 归档收进抽屉；false = 取消归档，重新出现在列表里"),
+      note: z.string().optional().describe("归档原因，如「自检产生」「模板试建」——以后看列表能想起为什么收起来"),
+    },
+    run: async (a) => {
+      const nl = String.fromCharCode(10);
+      const ids = (a.batch?.length ? a.batch : a.projectId ? [a.projectId] : []).filter(Boolean);
+      if (!ids.length) {
+        throw new Error(
+          "要归档哪个工程？传 projectId（list_projects 查 id），或用 batch 一次归档多个。" +
+            "这个工具不默认作用于「当前工程」——把正在做的片子静默收起来代价太大。",
+        );
+      }
+      const on = a.archived !== false;
+      const ok: string[] = [];
+      const bad: string[] = [];
+      for (const id of ids) {
+        try {
+          const res = await api<{ ok: boolean; archivedAt: string | null }>(`/api/projects/${id}/archive`, {
+            method: "POST",
+            body: JSON.stringify({ archived: on, note: a.note }),
+          });
+          ok.push(`${id}${res.archivedAt ? `（${res.archivedAt.slice(0, 10)}）` : ""}`);
+        } catch (err) {
+          bad.push(`${id}：${err instanceof Error ? err.message : String(err)}`);
+        }
+      }
+      let tail = "";
+      try {
+        const { projects } = await api<{ projects: { id: string; archivedAt?: string }[] }>("/api/projects");
+        const live = projects.filter((p) => !p.archivedAt).length;
+        const arch = projects.length - live;
+        tail =
+          `${nl}现在：在用 ${live} 个` +
+          (arch ? `，已归档 ${arch} 个（list_projects 默认不列；要连归档一起看：includeArchived:true）` : "") +
+          (lastProjectId && projects.find((p) => p.id === lastProjectId)?.archivedAt
+            ? `${nl}⚠️ 当前默认工程 ${lastProjectId} 就是已归档的那个——继续改它没问题，只是列表里不再默认显示`
+            : "");
+      } catch {
+        /* 统计只是锦上添花 */
+      }
+      const body = ok.length
+        ? `${on ? "已归档" : "已取消归档"} ${ok.length} 个工程：${ok.join("、")}` +
+          (on ? `${nl}（没删任何东西：工程、素材、成片都还在。要拿回来就 archived:false）` : "")
+        : "";
+      const failNote = bad.length ? `${nl}失败 ${bad.length} 个：${nl}- ${bad.join(`${nl}- `)}` : "";
+      return [body, failNote.trim(), tail.trim()].filter(Boolean).join(nl);
+    },
+  },
+  {
     name: "delete_template",
     description:
       "删除「我的模板」（不可撤销，内置模板删不掉）。id 见 list_templates。文件会向用户确认，agent 调用即代表用户已要求删除。",
@@ -58,7 +124,8 @@ export const CLEANUP_TOOLS: ToolDef[] = [
     name: "delete_project",
     description:
       "删除整个工程（含它的历史快照），不可撤销。demo 示例工程删不掉，只能用「重置 demo」恢复。\n" +
-      "会一并清掉它的素材（assets/projects/<id>/）与渲染产物（out/projects/<id>/）；被别的工程或素材库还引用的素材文件会保留。",
+      "会一并清掉它的素材（assets/projects/<id>/）与渲染产物（out/projects/<id>/）；被别的工程或素材库还引用的素材文件会保留。\n" +
+      "**只是想让它别出现在列表里**（测试工程太多）用 archive_project——归档可逆且不删文件；这个删了找不回来。",
     shape: {
       projectId: z.string().describe("要删除的工程 id"),
       confirm: z.boolean().describe("必须显式传 true —— 这是不可撤销的操作"),

@@ -3241,6 +3241,61 @@ button.mini.add {
   border-color: rgba(198, 242, 78, 0.28);
 }
 
+/*
+ * 已归档开关：和排序按钮同一行，但它是"看/不看"而不是"怎么排"，
+ * 所以用文字按钮（带数量）而不是图标——数量本身就是用户点它的理由。
+ */
+.proj-arch {
+  height: 24px;
+  padding: 0 8px;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--muted);
+  font-size: 11px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.proj-arch:hover {
+  color: var(--text);
+  background: rgba(255, 255, 255, 0.07);
+}
+
+.proj-arch.is-on {
+  color: var(--accent);
+  background: var(--accent-dim);
+  border-color: rgba(198, 242, 78, 0.28);
+}
+
+/* 已归档的工程：整行压暗，不跟"在用的"抢注意力；悬停恢复亮度免得看成禁用 */
+.menu-item.is-archived {
+  opacity: 0.6;
+}
+
+.menu-item.is-archived:hover {
+  opacity: 1;
+}
+
+/* 顶栏「已归档」标签：只在当前工程被归档时出现，点一下就是取消归档 */
+.proj-archived-pill {
+  margin-left: 6px;
+  padding: 2px 8px;
+  border: 1px solid var(--line-strong);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.5;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.proj-archived-pill:hover {
+  color: var(--text);
+  border-color: var(--muted);
+}
+
 .proj-empty {
   display: flex;
   flex-direction: column;

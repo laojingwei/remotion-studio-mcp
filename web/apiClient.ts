@@ -47,6 +47,11 @@ export type ProjectSummary = {
   createdAt?: string;
   /** 最后一次被改的时间（ISO） */
   updatedAt?: string;
+  /**
+   * 归档时间（ISO）：有值 = 已归档，默认不出现在切换面板的主列表里。
+   * 归档只写 data/archive.json，**不动工程文件**，所以 rev / 内容都不变。
+   */
+  archivedAt?: string;
 };
 
 export async function fetchProjects(): Promise<ProjectSummary[]> {
@@ -217,6 +222,20 @@ export async function deleteProject(id: string): Promise<void> {
   const res = await fetch(`/api/projects/${id}`, { method: "DELETE" });
   const data = await res.json();
   if (!res.ok) throw new Error(data.error ?? "删除失败");
+}
+
+/**
+ * 归档 / 取消归档：**不删任何文件**，只是让它从切换面板的主列表里消失。
+ * 和删除的区别要跟用户说清楚——归档可逆，删除不可逆。
+ */
+export async function archiveProject(id: string, archived = true, note?: string): Promise<void> {
+  const res = await fetch(`/api/projects/${id}/archive`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ archived, note }),
+  });
+  const data = await res.json();
+  if (!res.ok) throw new Error(data.error ?? (archived ? "归档失败" : "取消归档失败"));
 }
 
 export async function duplicateProject(id: string, name?: string): Promise<Project> {
