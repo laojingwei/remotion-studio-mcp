@@ -33,6 +33,7 @@
     "vite.config.ts",
     "tsconfig.json",
     "README.md",
+    "CHANGELOG.md",
     "LICENSE",
     "THIRD-PARTY-NOTICES.md",
     "启动编辑器.bat"
