@@ -15,6 +15,7 @@ import { setLocalPref } from "./uiPrefs";
 import { cancelRender, fetchHistory, fetchTask, fetchTasks, requestRender, requestStills, resetDemoProject, type HistoryEntry, type ProjectSummary, type RenderTaskLite } from "./apiClient";
 import { PROJ_SORT_DEFAULT, filterProjects, nextSort, readProjSort, timeOf, type ProjSort, type ProjSortKey } from "./projectFilter";
 import { OutputsDialog } from "./panels/OutputsDialog";
+import { OutputsPopover } from "./panels/OutputsPopover";
 import { RenderDialog, type RenderFormat, type RenderQuality } from "./panels/RenderDialog";
 import { TtsDialog } from "./panels/TtsDialog";
 import { WorkspaceDialog } from "./panels/WorkspaceDialog";
@@ -287,7 +288,12 @@ export default function App() {
       // 无痕模式写不了 localStorage：只用不存，不影响功能
     }
   }, [projSort]);
+  /** 清理产物弹窗（勾选批量删）——和顶栏「产物」浮框（看片）是两个东西 */
+  const [outputsDialogOpen, setOutputsDialogOpen] = useState(false);
+  /** 顶栏产物浮框 */
   const [outputsOpen, setOutputsOpen] = useState(false);
+  /** 浮框的重拉信号：抽完帧、渲染完就 +1 */
+  const [outputsRefresh, setOutputsRefresh] = useState(0);
   const [workspaceOpen, setWorkspaceOpen] = useState(false);
   const [ttsOpen, setTtsOpen] = useState(false);
   const [showTpls, setShowTpls] = useState(false);
@@ -472,10 +478,20 @@ export default function App() {
     useDoc.getState().notify("正在渲染关键帧…");
     try {
       setStills(await requestStills(project.id, frame));
+      // 抽完帧立刻让「产物」浮框重拉：刚出的那张图应该马上能点开看
+      setOutputsRefresh((v) => v + 1);
     } catch (err) {
       useDoc.getState().notify(err instanceof Error ? err.message : "截图失败");
     }
   };
+
+  /**
+   * 渲染完成时让产物浮框重拉。
+   * 不这么做的话：渲完弹出结果卡、点开产物却看不到那一条，得关掉重开。
+   */
+  useEffect(() => {
+    if (render?.status === "done") setOutputsRefresh((v) => v + 1);
+  }, [render?.status]);
 
   const openHistory = async () => {
     if (!project) return;
@@ -846,7 +862,7 @@ export default function App() {
                 className="menu-item"
                 onClick={() => {
                   setProjectMenu(false);
-                  setOutputsOpen(true);
+                  setOutputsDialogOpen(true);
                 }}
               >
                 <span>渲染产物…</span>
@@ -1091,6 +1107,28 @@ export default function App() {
             </div>
           ) : null}
         </div>
+        <div className="topbar-outputs">
+          <button
+            className={`ghost outputs-toggle ${outputsOpen ? "is-on" : ""}`}
+            onClick={() => setOutputsOpen((v) => !v)}
+            title="这个工程的产物：成片 / 预览片段 / 关键帧 / 封面 / 字幕"
+            aria-haspopup="dialog"
+            aria-expanded={outputsOpen}
+          >
+            产物
+          </button>
+          <OutputsPopover
+            open={outputsOpen}
+            projectId={project?.id ?? ""}
+            projectName={project?.name ?? ""}
+            refreshKey={outputsRefresh}
+            onClose={() => setOutputsOpen(false)}
+            onManage={() => {
+              setOutputsOpen(false);
+              setOutputsDialogOpen(true);
+            }}
+          />
+        </div>
         <button className="primary" onClick={() => setRenderOpen(true)} disabled={busy}>
           {busy ? `渲染中 ${render?.progress ?? 0}%` : "渲染"}
         </button>
@@ -1322,7 +1360,7 @@ export default function App() {
       {/* 暂时隐藏右下角「给 agent 留言」浮窗；恢复时把顶部 import 也一起打开
       <AgentChat />
       */}
-      <OutputsDialog open={outputsOpen} onClose={() => setOutputsOpen(false)} />
+      <OutputsDialog open={outputsDialogOpen} onClose={() => setOutputsDialogOpen(false)} />
       <WorkspaceDialog open={workspaceOpen} onClose={() => setWorkspaceOpen(false)} />
       <TtsDialog open={ttsOpen} onClose={() => setTtsOpen(false)} />
       <RenderDialog

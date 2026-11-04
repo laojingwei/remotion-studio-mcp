@@ -742,19 +742,36 @@ export type OutputEntry = {
   path: string;
   name: string;
   url: string;
-  kind: "video" | "still" | "subtitle";
+  kind: "video" | "still" | "subtitle" | "preview" | "cover";
   size: number;
   mtimeMs: number;
   projectId: string;
   /** 工程还在 → 名字；工程已删 → null（孤儿产物） */
   projectName: string | null;
+  /** 已锁定：自动清理跳过它（手动删仍然可以） */
+  locked?: boolean;
 };
 
-export async function fetchOutputs(): Promise<OutputEntry[]> {
-  const res = await fetch("/api/outputs");
+/** 产物列表。传 projectId 只取那个工程的（顶栏浮框用）；不传是全库（清理弹窗用） */
+export async function fetchOutputs(projectId?: string): Promise<OutputEntry[]> {
+  const qs = projectId ? `?projectId=${encodeURIComponent(projectId)}` : "";
+  const res = await fetch(`/api/outputs${qs}`);
   const data = await res.json();
   if (!res.ok) throw new Error(data.error ?? "读取产物失败");
   return data.files ?? [];
+}
+
+/** 锁定/解锁一条产物：锁定后自动清理会跳过它 */
+export async function setOutputLock(path: string, locked: boolean): Promise<void> {
+  const res = await fetch("/api/outputs/lock", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ path, locked }),
+  });
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({}));
+    throw new Error((data as { error?: string }).error ?? "锁定失败");
+  }
 }
 
 export async function deleteOutputFiles(

@@ -168,6 +168,31 @@ try {
     check("选中场景后右侧属性面板出现", panel > 0, `panel 数量 ${panel}`);
   }
 
+  /* 4b. 顶栏「产物」按钮：点开要出浮框（有产物列产物，没产物给空态，不能白屏） */
+  const outputsBtn = page.locator(".outputs-toggle");
+  check("顶栏有产物按钮", (await outputsBtn.count()) === 1);
+  if (await outputsBtn.count()) {
+    await outputsBtn.click();
+    await page.waitForTimeout(700);
+    const pop = await page.locator(".out-pop").count();
+    const rows = await page.locator(".out-row").count();
+    const empty = await page.locator(".out-empty").count();
+    check("产物浮框能打开且有内容", pop === 1 && (rows > 0 || empty > 0), `浮框 ${pop} / 条目 ${rows} / 空态 ${empty}`);
+    // 点一条产物 → 预览区要出现对应元素（图/视频/音频/文本之一）
+    if (rows > 0) {
+      await page.locator(".out-row").first().click();
+      await page.waitForTimeout(900);
+      const prev = await page.locator(".out-preview").count();
+      const media = await page
+        .locator(".out-preview img, .out-preview video, .out-preview audio, .out-preview-text")
+        .count();
+      check("点开产物能预览", prev === 1 && media > 0, `预览区 ${prev} / 媒体 ${media}`);
+    }
+    await page.keyboard.press("Escape");
+    await page.waitForTimeout(300);
+    check("Esc 关闭产物浮框", (await page.locator(".out-pop").count()) === 0);
+  }
+
   /* 5. 刷新后仍读到新名字（写盘 + 读回 + 首屏一致） */
   await page.reload({ waitUntil: "domcontentloaded" });
   await page.waitForSelector(".project-name", { timeout: 20000 });

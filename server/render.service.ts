@@ -318,8 +318,11 @@ export async function renderStills(
   /** 文件名后缀（只留字母数字与 -_）：同一帧要多张不同内容的图时必须给，
    *  否则文件名一样会互相覆盖——probe_style 的三个风格样张就踩过这个坑 */
   tag?: string,
+  /** "cover" = 封面候选，落到 covers/ 目录。
+   *  以前封面和关键帧同目录同命名，产物列表里根本分不出哪张是封面。 */
+  purpose?: "cover",
 ): Promise<StillResult[]> {
-  return withActiveRender(async () => stillsInner(project, frame, formats, tag));
+  return withActiveRender(async () => stillsInner(project, frame, formats, tag, purpose));
 }
 
 async function stillsInner(
@@ -327,8 +330,9 @@ async function stillsInner(
   frame?: number,
   formats?: string[],
   tag?: string,
+  purpose?: "cover",
 ): Promise<StillResult[]> {
-  const stillDir = ensureStillDir(project.id);
+  const stillDir = purpose === "cover" ? ensureOutDir(project.id, "cover") : ensureStillDir(project.id);
   const serveUrl = await getServeUrl();
   const targets = project.formats.filter((f) => !formats?.length || formats.includes(f.key));
   const total = Math.max(1, totalDuration(project));
@@ -359,7 +363,9 @@ async function stillsInner(
       imageFormat: "png",
       scale: 0.5,
     });
-    results.push({ format: fmt.key, url: `/out/projects/${project.id}/stills/${file}?t=${project.rev}`, frame: f });
+    // 目录名必须跟着 purpose 走：封面写 covers/，URL 还写 stills/ 就是 404
+    const dirName = purpose === "cover" ? "covers" : "stills";
+    results.push({ format: fmt.key, url: `/out/projects/${project.id}/${dirName}/${file}?t=${project.rev}`, frame: f });
   }
   return results;
 }

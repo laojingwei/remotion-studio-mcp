@@ -4195,7 +4195,8 @@ const TOOLS: ToolDef[] = [
       const brief = readBrief(p.id);
       const res = await api<{ stills: { format: string; url: string }[] }>(
         `/api/projects/${p.id}/stills`,
-        { method: "POST", body: JSON.stringify({ frame, formats: a.formats }) },
+        // purpose=cover：落到 covers/，产物面板里能认出来这是封面而不是关键帧
+        { method: "POST", body: JSON.stringify({ frame, formats: a.formats, purpose: "cover" }) },
       );
       const nl = String.fromCharCode(10);
       const files = res.stills.map(
@@ -4323,6 +4324,8 @@ const TOOLS: ToolDef[] = [
         removedVideos: number;
         removedStills: number;
         removedSubtitles: number;
+        removedCovers: number;
+        skippedLocked: number;
         removedOrphanDirs: number;
         removedLegacy: number;
         freedBytes: number;
@@ -4334,11 +4337,14 @@ const TOOLS: ToolDef[] = [
       const parts = [
         `${r.removedVideos} 个成片`,
         `${r.removedStills} 张关键帧`,
+        ...(r.removedCovers ? [`${r.removedCovers} 张封面`] : []),
         ...(r.removedSubtitles ? [`${r.removedSubtitles} 个字幕`] : []),
       ].join(" + ");
       const notes = [
         r.removedOrphanDirs ? `工程已删的产物目录 ${r.removedOrphanDirs} 个（整块收掉）` : "",
         r.removedLegacy ? `旧版扁平目录残留 ${r.removedLegacy} 个文件` : "",
+        // 锁定的不删是有意的：用户标了"这条别删"，就该一直留着
+        r.skippedLocked ? `${r.skippedLocked} 个已锁定的产物跳过没删` : "",
       ].filter(Boolean);
       return (
         (r.dryRun

@@ -7063,3 +7063,344 @@ select.tts-input {
 .el-preview-mediafail a {
   text-decoration: none;
 }
+
+/* ─────────────────── 产物浮框（顶栏「产物」，渲染左边） ─────────────────── */
+
+.topbar-outputs {
+  position: relative;
+  display: inline-flex;
+}
+
+.outputs-toggle.is-on {
+  border-color: var(--accent-dim);
+  color: var(--text);
+}
+
+.out-pop {
+  position: absolute;
+  top: calc(100% + 8px);
+  right: 0;
+  width: 480px;
+  /* 展开预览时整框会长高，留到 70vh 才封顶：再小列表就被压成两条了 */
+  max-height: 70vh;
+  display: flex;
+  flex-direction: column;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  box-shadow: 0 18px 44px rgba(0, 0, 0, 0.55);
+  z-index: 80;
+  overflow: hidden;
+}
+
+.out-pop-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 10px 12px 8px;
+  border-bottom: 1px solid var(--line);
+}
+
+.out-pop-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text);
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  min-width: 0;
+}
+
+.out-pop-sub {
+  font-size: 11px;
+  font-weight: 400;
+  color: var(--muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 260px;
+}
+
+.out-pop-manage {
+  font-size: 11px;
+  padding: 3px 8px;
+  flex: none;
+}
+
+/* tab 行横向滚动：类型多的时候不换行挤压按钮 */
+.out-pop-tabs {
+  display: flex;
+  gap: 4px;
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--line);
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+
+.out-pop-tabs::-webkit-scrollbar {
+  display: none;
+}
+
+.out-tab {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 4px 9px;
+  font-size: 11px;
+  color: var(--muted);
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 999px;
+  cursor: pointer;
+}
+
+.out-tab:hover:not(:disabled) {
+  color: var(--text);
+}
+
+.out-tab.is-on {
+  color: var(--text);
+  border-color: var(--line-strong);
+  background: var(--panel-2);
+}
+
+.out-tab:disabled {
+  opacity: 0.3;
+  cursor: default;
+}
+
+.out-tab-n {
+  font-size: 10px;
+  color: var(--muted);
+}
+
+.out-pop-body {
+  flex: 1;
+  min-height: 120px;
+  overflow-y: auto;
+  padding: 6px 6px 8px;
+}
+
+.out-group + .out-group {
+  margin-top: 6px;
+}
+
+.out-group-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 8px 4px;
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.out-group-n {
+  font-size: 10px;
+  color: var(--muted);
+  opacity: 0.7;
+}
+
+.out-group-note {
+  margin-left: auto;
+  font-size: 10px;
+  color: var(--muted);
+  opacity: 0.7;
+}
+
+.out-row {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 7px 8px;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  cursor: pointer;
+  text-align: left;
+  color: var(--text);
+}
+
+.out-row:hover {
+  background: var(--panel-2);
+}
+
+.out-row.is-on {
+  border-color: var(--accent-dim);
+  background: var(--panel-2);
+}
+
+.out-row-icon {
+  flex: none;
+  width: 24px;
+  height: 24px;
+  display: grid;
+  place-items: center;
+  border-radius: 6px;
+  font-size: 11px;
+  background: rgba(255, 255, 255, 0.06);
+  color: var(--muted);
+}
+
+.out-row-icon.kind-video,
+.out-row-icon.kind-preview {
+  color: var(--accent);
+}
+
+.out-row-main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.out-row-name {
+  font-size: 12px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.out-row-meta {
+  font-size: 10.5px;
+  color: var(--muted);
+}
+
+.out-row-lock {
+  flex: none;
+  width: 26px;
+  height: 26px;
+  display: grid;
+  place-items: center;
+  border-radius: 6px;
+  font-size: 13px;
+  line-height: 1;
+  opacity: 0.35;
+  cursor: pointer;
+}
+
+.out-row:hover .out-row-lock,
+.out-row-lock.is-on {
+  opacity: 1;
+}
+
+.out-row-lock:hover {
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.out-more {
+  margin: 2px 0 4px 33px;
+  padding: 3px 8px;
+  font-size: 11px;
+  color: var(--muted);
+  background: transparent;
+  border: none;
+  cursor: pointer;
+}
+
+.out-more:hover {
+  color: var(--text);
+}
+
+.out-empty {
+  padding: 28px 16px;
+  text-align: center;
+  font-size: 12px;
+  color: var(--muted);
+  line-height: 1.7;
+}
+
+.out-empty-actions {
+  margin-top: 6px;
+  font-size: 11px;
+  opacity: 0.8;
+}
+
+.out-preview {
+  border-top: 1px solid var(--line);
+  background: var(--panel-2);
+  padding: 8px 10px 10px;
+}
+
+.out-preview-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.out-preview-name {
+  font-size: 11.5px;
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.out-preview-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: none;
+  font-size: 11px;
+}
+
+.out-preview-actions a {
+  color: var(--muted);
+  text-decoration: none;
+}
+
+.out-preview-actions a:hover {
+  color: var(--accent);
+}
+
+.out-preview-actions button {
+  font-size: 11px;
+  padding: 2px 7px;
+}
+
+.out-preview-media {
+  display: block;
+  width: 100%;
+  /* 26vh 是量出来的：再高就会把列表挤到只剩 min-height，点中的那行反而看不见了 */
+  max-height: 26vh;
+  object-fit: contain;
+  background: #000;
+  border-radius: 8px;
+}
+
+.out-preview-audio {
+  width: 100%;
+}
+
+.out-preview-text {
+  margin: 0;
+  max-height: 30vh;
+  overflow: auto;
+  padding: 8px 10px;
+  font-size: 11px;
+  line-height: 1.6;
+  color: var(--text);
+  background: var(--bg);
+  border-radius: 8px;
+  white-space: pre-wrap;
+}
+
+.out-pop-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 7px 12px;
+  border-top: 1px solid var(--line);
+  font-size: 10.5px;
+  color: var(--muted);
+}
+
+.out-pop-foot-hint {
+  opacity: 0.7;
+}

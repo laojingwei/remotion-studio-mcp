@@ -553,7 +553,9 @@ screen = stageCenter + pan + zoom * localPoint
 | 增删画幅 / 自定义尺寸 | 顶部画幅条末尾的 `＋`：切预设，或输入任意宽高（16–7680）加一个自定义画幅 |
 | **从模板新建** | 工程下拉菜单 → `＋ 新建项目` → 选模板 |
 | 复制 / 删除工程 | 工程下拉菜单底部（删除会二次确认） |
-| 清理渲染产物 | 工程下拉菜单 → 「清理渲染产物」（保留最近 5 次成片） |
+| 看产物 / 预览 | 顶栏「产物」（渲染左边）：点一行就地看图 / 视频 / 音频 / 字幕 |
+| 锁定产物（防自动清理） | 产物浮框里点行尾的 🔓；锁定后自动清理跳过它 |
+| 清理渲染产物 | 工程下拉菜单 → 「清理渲染产物」或产物浮框右上「管理…」（保留最近 5 次成片） |
 | 取消渲染 | 渲染进度旁出现的「取消」按钮 |
 
 ### 场景类型
@@ -822,12 +824,22 @@ agent 通过 MCP 工具 `get_user_messages` 读取、`reply_user` 回复，回�
 ```
 out/projects/<工程id>/
 ├── videos/      <工程名>_<时间>_<画幅>__<工程id>.mp4
-├── stills/      <画幅>-<帧>.png
+├── covers/      <画幅>-<帧>-r<rev>.png        ← 封面候选（render_cover）
+├── stills/      <画幅>-<帧>-r<rev>.png        ← 关键帧（preview_frames）
+├── previews/    clip_<画幅>_<起>-<止>_r<rev>_<时间>-preview.mp4
 └── subtitles/   <工程名>_<时间>.srt
 ```
 
+`covers/` 是 2026-11 才独立出来的：在这之前封面和关键帧同目录同命名，
+产物列表里根本分不清哪张是封面（老工程的封面仍留在 `stills/` 里，不迁移）。
+`previews/` 是临时产物，**只保留最近 10 个**（`cleanup_renders` 会收）。
+
 `out/videos`、`out/stills`、`out/subtitles` 三个老目录已退役（如果还有，清理时会一并收掉）。
-产物面板按工程分组，**工程已删的产物单独一组显示为孤儿**，可以一次清掉。
+
+**顶栏「产物」按钮**（渲染左边）：点开是当前工程的产物浮框，按成片 / 封面 / 预览片段 /
+关键帧 / 字幕分 tab，点一行就地预览（图片直接显示、视频音频带进度条、字幕出文本）。
+行尾的锁图标可以**锁定**一条产物：锁定的文件不会被自动清理删掉（手动勾选删除仍然可以）。
+浮框右上「管理…」进到清理弹窗。
 
 工程菜单里的「清理渲染产物」/ MCP 的 `cleanup_renders`：
 
@@ -934,7 +946,7 @@ server/              唯一写入口 + 渲染队列 + MCP 代理
   store             project.json 读写 + 脏数据自愈（坏字段不让整个列表挂掉）
   assets.service    素材布局：library/ 共用库、projects/<id>/ 工程私有、_preview/ 临时
   library.service   「我的素材」索引（data/library.json）
-  outputs.service   渲染产物（out/projects/<工程 id>/{videos,stills,subtitles}）
+  outputs.service   渲染产物（out/projects/<工程 id>/{videos,covers,stills,previews,subtitles}）
   workspace.service 工作空间：data/public/out 迁到别的盘（留 junction）、目录浏览
   audio-analysis.service  BPM / 拍点（essentia 懒加载，喂之前重采样到 22050）
   loudness.service  LUFS / 峰值 / 增益曲线
@@ -955,7 +967,7 @@ public/assets/
   library/           「我的素材」共用池（跨工程复用，删工程不动它）
   projects/<id>/     工程私有素材（含 TTS 配音，删工程连带清）
   _preview/          试听 / 预检的临时产物（按需创建，可被「清理未引用」收掉）
-out/projects/<id>/   渲染产物（videos / stills / subtitles）
+out/projects/<id>/   渲染产物（videos / covers / stills / previews / subtitles）
 out/project-bundles/ 导出的工程包 zip（**不按工程删**，它是交付/备份）
 ```
 

@@ -15,7 +15,7 @@ import { projects } from "./project.service";
 import type { OpResult } from "../shared/ops";
 import { templates } from "./template.service";
 import { bundleService } from "./bundle.service";
-import { cleanupOutputs, deleteOutputs, listOutputs, removeProjectOutputs } from "./outputs.service";
+import { cleanupOutputs, deleteOutputs, listOutputs, removeProjectOutputs, setOutputLock } from "./outputs.service";
 import {
   absAssetPath,
   cleanupUnusedAssets,
@@ -784,8 +784,25 @@ app.post("/api/workspace/reset", async (c) => {
   }
 });
 
-/** 渲染产物：列表 / 按选择删除 */
-app.get("/api/outputs", (c) => c.json({ files: listOutputs() }));
+/**
+ * 渲染产物：列表 / 锁定 / 按选择删除。
+ * `projectId` 只返回那个工程的产物（编辑器顶栏浮框用）——不传是全库（清理弹窗用）。
+ */
+app.get("/api/outputs", (c) => {
+  const projectId = c.req.query("projectId") || undefined;
+  return c.json({ files: listOutputs({ projectId }) });
+});
+
+/** 锁定/解锁一条产物：锁定的文件不会被自动清理删掉（手动删仍然可以） */
+app.post("/api/outputs/lock", async (c) => {
+  try {
+    const body = (await c.req.json().catch(() => ({}))) as { path?: string; locked?: boolean };
+    if (!body.path) return c.json({ error: "缺少 path" }, 400);
+    return c.json(setOutputLock(String(body.path), body.locked !== false));
+  } catch (err) {
+    return fail(c, err);
+  }
+});
 
 app.post("/api/outputs/delete", async (c) => {
   try {
@@ -1452,9 +1469,11 @@ app.post("/api/projects/:id/stills", async (c) => {
       frame?: number;
       formats?: string[];
       tag?: string;
+      /** "cover" = 封面候选，落 covers/；不传是关键帧，落 stills/ */
+      purpose?: "cover";
     };
     const project = projects.get(c.req.param("id"));
-    const stills = await renderStills(project, body.frame, body.formats, body.tag);
+    const stills = await renderStills(project, body.frame, body.formats, body.tag, body.purpose);
     return c.json({ stills });
   } catch (err) {
     return fail(c, err);
