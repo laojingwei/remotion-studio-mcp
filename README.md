@@ -46,6 +46,10 @@ npm run dev          # API(4380) + 编辑器(5173)
   npm run build && npm run verify    # 端到端冒烟：临时工程 + 无头浏览器真实拖动，跑完自动清理
   ```
 
+> 推到 `main` 或开 PR 时，GitHub Actions 会跑同一套命令（typecheck → 全量测试 → build → 真浏览器 E2E），
+> 见 `.github/workflows/ci.yml`。CI 是全新 Ubuntu，`data/ out/ public/` 都不在仓库里，
+> 所以 `npm test` 开头会先跑 `scripts/ensure-dirs.mjs` 建目录。
+
 > **两种端口别混用**：`npm start` / bat 启动后编辑器在 **4380**；
 > `npm run dev` 启动后编辑器在 **5173**（4380 是后端）。打开错了会看到 JSON。
 

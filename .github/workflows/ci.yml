@@ -1,12 +1,16 @@
 name: ci
 
-# 合码前的质量门：类型检查 → 全量测试 → 构建。
+# 合码前的质量门：类型检查 → 全量测试 → 构建 →（独立 job）真浏览器 E2E。
 #
-# 之前仓库只有 publish.yml，等于"发版时才第一次跑代码"。
-# 46 个测试脚本写完却没人自动跑，等于没有网。
+# 只在这些时机跑：
+#   - 推 main（日常主干）
+#   - 任意 PR（这是主要用途）
+#   - 手动触发
+# 之前是 `push: branches: ['**']`，意味着推每个特性分支都会跑两遍（push + PR），
+# 私人仓库会白烧 Actions 额度，公开仓库也会把队列排满。
 on:
   push:
-    branches: ['**']
+    branches: [main, master]
   pull_request:
   workflow_dispatch:
 
@@ -26,7 +30,7 @@ jobs:
           node-version: '22'
           cache: npm
 
-      # test-media 用 ffprobe 读时长；runner 镜像通常自带，显式装一次免得随镜像变化
+      # test-media 用 ffprobe 读时长。runner 镜像通常自带，显式装一次免得随镜像变化。
       - name: 安装 ffmpeg
         run: |
           if ! command -v ffprobe >/dev/null 2>&1; then
@@ -40,21 +44,22 @@ jobs:
       - name: 类型检查
         run: npm run typecheck
 
-      # 测试里有渲染/打包相关用例，Chromium 缺失会静默跳过或失败；先装好
-      - name: 准备 Chromium（Remotion 渲染用）
-        run: npx remotion browser ensure || echo "（跳过：非渲染用例不依赖浏览器）"
+      # 全新 clone 没有 data/ out/ public/（都在 .gitignore 里），
+      # 有测试会往里写临时 wav，缺目录直接 ENOENT。ensure-dirs 是幂等的。
+      - name: 准备运行期目录
+        run: node scripts/ensure-dirs.mjs
 
-      - name: 测试
+      - name: 测试（全量）
         run: npm test
 
       - name: 构建编辑器
         run: npm run build
 
-      - name: 版本一致性（tag / package.json / 代码内）
+      - name: 版本一致性
         run: node scripts/check-version.mjs
 
   # 真浏览器回归：起服务 + 临时数据目录 + 5 条核心路径。
-  # 单独一个 job：它要装 Chromium、要 build，跟单测的失败原因完全不同。
+  # 单独一个 job：它要装 Chromium、要 build，失败原因和单测完全不同。
   e2e:
     runs-on: ubuntu-latest
     timeout-minutes: 25
