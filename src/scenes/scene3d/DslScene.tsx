@@ -5,7 +5,8 @@ import type { DslNode, Scene3DDsl } from "../../../shared/scene3dDsl";
 import { ease, evalNode } from "../../../shared/scene3dAnim";
 import { indexNodes, worldPointOf } from "../../../shared/scene3dTransform";
 import { hasCurve, pathAt, type Vec3 } from "../../../shared/scene3dPath";
-import { glowTexture, hash01, metalBody, resolveColor, shade } from "./color";
+import { explicitBody, glowTexture, hash01, metalBody, resolveColor, shade } from "./color";
+import { Ground } from "./World";
 import { useDslTexture } from "./texture";
 
 /**
@@ -331,7 +332,20 @@ const materialOf = (
   const m = node.material;
   const hasMap = Boolean(map);
   const raw = hasMap ? "#ffffff" : resolveColor(m?.color ?? "accent", theme);
-  const color = hasMap ? "#ffffff" : m?.body === false ? raw : metalBody(raw, 0.3, 0.18);
+  /**
+   * 主题 token 和显式色值走**两套**处理：
+   * - token（primary/accent…）不可控，必须归一到统一亮度，否则高饱和主色一定变糖果；
+   * - 显式 `#hex` 是美术写的明暗设计，只降饱和 + 压过曝，**不再拉平**。
+   *   以前两者都过 `metalBody`，结果 33 个零件亮度全一样，结构完全读不出来。
+   */
+  const isHex = raw.startsWith("#");
+  const color = hasMap
+    ? "#ffffff"
+    : m?.body === false
+      ? raw
+      : isHex
+        ? explicitBody(raw)
+        : metalBody(raw, 0.3, 0.18);
   const emissive = m?.emissive ? resolveColor(m.emissive, theme) : undefined;
   const op = (m?.opacity ?? 1) * opacity;
   /**
@@ -373,6 +387,7 @@ const materialOf = (
         map={map ?? undefined}
         metalness={m.metalness}
         roughness={m.roughness}
+        envMapIntensity={m.envMapIntensity ?? 1}
         transmission={m.transmission}
         thickness={m.thickness}
         ior={m.ior}
@@ -394,6 +409,7 @@ const materialOf = (
       map={map ?? undefined}
       metalness={m?.metalness ?? 0.4}
       roughness={m?.roughness ?? 0.35}
+      envMapIntensity={m?.envMapIntensity ?? 1}
       emissive={emissive}
       emissiveMap={hasMap && emissive ? (map ?? undefined) : undefined}
       emissiveIntensity={m?.emissiveIntensity ?? 1}
@@ -513,7 +529,13 @@ const NodeView: React.FC<{
           />
         </lineSegments>
       ) : (
-        <mesh>
+        /**
+         * 投影与接收阴影：DSL 场景里每个实体节点都参与。
+         *
+         * 只对**有地面**的场景有肉眼可见的效果（Shadow 必须落在东西上才存在）；
+         * 没有地面时它就是自阴影 —— 零件之间的遮挡关系也靠它，所以默认开着。
+         */
+        <mesh castShadow receiveShadow>
           {geometryOf(node.geometry)}
           {materialOf(node, theme, tr.opacity, map)}
         </mesh>
@@ -655,55 +677,84 @@ const bindTarget = (t: [number, number, number]) => (l: THREE.DirectionalLight |
   if (l.parent) l.parent.add(l.target);
 };
 
-const DslLights: React.FC<{ lights: NonNullable<Scene3DDsl["lights"]>; theme: Theme }> = ({
-  lights,
-  theme,
-}) => (
-  <>
-    {lights.map((l, i) => {
-      const color = resolveColor(l.color, theme);
-      if (l.type === "ambient") {
-        return <ambientLight key={i} color={color} intensity={l.intensity} />;
-      }
-      if (l.type === "directional") {
+const DslLights: React.FC<{
+  lights: NonNullable<Scene3DDsl["lights"]>;
+  theme: Theme;
+  /** 阴影相机半径，0 = 不投影（见 Scene3D 的 shadowRange 说明） */
+  shadowRange?: number;
+}> = ({ lights, theme, shadowRange = 0 }) => {
+  /**
+   * 只让**第一盏** directional/spot 投影。
+   *
+   * 每盏投影都是一次额外的全场景渲染（2048² 的深度图）。三盏一起投，
+   * 单帧成本几乎翻三倍，而视觉上第二盏的影子会被第一盏盖住 —— 白花时间。
+   * 需要"软影 + 硬影分层"时再谈，现在不值得。
+   */
+  const shadowIdx = shadowRange
+    ? lights.findIndex((l) => l.type === "directional" || l.type === "spot")
+    : -1;
+  const shadowProps = {
+    castShadow: true,
+    "shadow-mapSize": [2048, 2048] as [number, number],
+    "shadow-bias": -0.0005,
+    "shadow-normalBias": Math.max(0.005, shadowRange * 0.004),
+    "shadow-camera-left": -shadowRange,
+    "shadow-camera-right": shadowRange,
+    "shadow-camera-top": shadowRange,
+    "shadow-camera-bottom": -shadowRange,
+    "shadow-camera-near": 0.5,
+    "shadow-camera-far": shadowRange * 4,
+  };
+  return (
+    <>
+      {lights.map((l, i) => {
+        const color = resolveColor(l.color, theme);
+        const casts = i === shadowIdx;
+        if (l.type === "ambient") {
+          return <ambientLight key={i} color={color} intensity={l.intensity} />;
+        }
+        if (l.type === "directional") {
+          return (
+            <directionalLight
+              key={i}
+              position={l.position}
+              color={color}
+              intensity={l.intensity}
+              ref={bindTarget(l.target)}
+              {...(casts ? shadowProps : {})}
+            />
+          );
+        }
+        if (l.type === "spot") {
+          return (
+            <spotLight
+              key={i}
+              position={l.position}
+              color={color}
+              intensity={l.intensity}
+              angle={(l.angle * Math.PI) / 180}
+              penumbra={l.penumbra}
+              distance={l.distance}
+              decay={l.decay}
+              ref={bindTarget(l.target)}
+              {...(casts ? shadowProps : {})}
+            />
+          );
+        }
         return (
-          <directionalLight
+          <pointLight
             key={i}
             position={l.position}
             color={color}
             intensity={l.intensity}
-            ref={bindTarget(l.target)}
-          />
-        );
-      }
-      if (l.type === "spot") {
-        return (
-          <spotLight
-            key={i}
-            position={l.position}
-            color={color}
-            intensity={l.intensity}
-            angle={(l.angle * Math.PI) / 180}
-            penumbra={l.penumbra}
             distance={l.distance}
             decay={l.decay}
-            ref={bindTarget(l.target)}
           />
         );
-      }
-      return (
-        <pointLight
-          key={i}
-          position={l.position}
-          color={color}
-          intensity={l.intensity}
-          distance={l.distance}
-          decay={l.decay}
-        />
-      );
-    })}
-  </>
-);
+      })}
+    </>
+  );
+};
 
 /* ─────────────────────────── 场景本体 ─────────────────────────── */
 
@@ -721,7 +772,21 @@ export const DslScene: React.FC<{
   /** 相机当前锁定的节点（编辑器画锁框用，成片不传） */
   lockedId?: string | null;
   onNodeObject?: (id: string, obj: THREE.Object3D | null) => void;
-}> = ({ spec, frame, t, theme, camera, onPick, selectedId, lockedId, onNodeObject, onNodeDoubleClick }) => {
+  /** 阴影相机半径（世界单位）；0/不给 = 这幕不投影 */
+  shadowRange?: number;
+}> = ({
+  spec,
+  frame,
+  t,
+  theme,
+  camera,
+  onPick,
+  selectedId,
+  lockedId,
+  onNodeObject,
+  onNodeDoubleClick,
+  shadowRange = 0,
+}) => {
   const { childrenOf, roots } = React.useMemo(() => {
     const map = new Map<string, DslNode[]>();
     for (const n of spec.nodes) {
@@ -741,7 +806,11 @@ export const DslScene: React.FC<{
        * 光和物体的相对方位就会随相机漂移——成片里太阳会跑到地球球心去。
        */}
       <group quaternion={camera.quat} position={camera.groupPos}>
-        {spec.lights?.length ? <DslLights lights={spec.lights} theme={theme} /> : null}
+        {/* 地面和物体同一个组：相机的刚体变换要一起搬，否则地面会斜插进模型里 */}
+        <Ground graph={spec} theme={theme} />
+        {spec.lights?.length ? (
+          <DslLights lights={spec.lights} theme={theme} shadowRange={shadowRange} />
+        ) : null}
         {spec.particles ? <Particles spec={spec.particles} theme={theme} t={t} /> : null}
         {roots.map((n) => (
           <NodeView

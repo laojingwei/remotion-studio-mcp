@@ -209,6 +209,15 @@ export const materialSchema = z.object({
   color: colorToken.default("accent"),
   metalness: z.number().min(0).max(1).default(0.4).describe("standard 有效：1=纯金属"),
   roughness: z.number().min(0).max(1).default(0.35).describe("standard/physical 有效：越小高光越锐"),
+  envMapIntensity: z
+    .number()
+    .min(0)
+    .max(4)
+    .default(1)
+    .describe(
+      "环境反射强度。金属的亮度**几乎全来自它**，比 metalness 更能直接影响观感：" +
+        "金属发黑先抬这个（1.4~2.0），想要哑光压到 0.4",
+    ),
   emissive: colorToken.optional().describe("自发光颜色，给了才发光（辉光只吃够亮的部分）"),
   emissiveIntensity: z.number().min(0).max(4).default(1),
   transmission: z.number().min(0).max(1).default(0.9).describe("physical 有效：0=实心 1=全透明"),
@@ -491,10 +500,75 @@ export const dslSchema = z.object({
     })
     .optional()
     .describe("一层粒子（一次 draw call）。想要「星云感」就只给粒子、不给节点"),
+  /**
+   * 世界（背景）。**不是主题色**。
+   *
+   * 原来的做法是直接把主题的 `background` 当 3D 世界底色 —— 暗色主题下就是一张纯黑纸，
+   * 物体像贴在黑布上：没有空气感、地平线不存在、远景和主体糊成一片。
+   * 成熟软件里"世界"是一个独立的东西（Blender 的 world、C4D 的背景对象），
+   * 它有自己的一套亮度：天顶偏暗、地平线偏亮，中间带一道漫射光带。
+   *
+   * `auto` 按主题的**明暗**挑一套中性色（色相固定，不跟主题色走）：
+   * 暗主题给深蓝灰的夜，浅主题给冷白的天光。
+   */
+  world: z
+    .object({
+      mode: z
+        .enum(["auto", "gradient", "color"])
+        .default("auto")
+        .describe("auto=按主题明暗自动挑中性色；gradient=用 top/bottom 自己给；color=纯色"),
+      color: colorToken.optional().describe("mode=color 时的纯色"),
+      top: colorToken.optional().describe("天顶色（mode=gradient）"),
+      bottom: colorToken.optional().describe("地平线色（mode=gradient）"),
+      glow: colorToken.optional().describe("地平线漫射光带的颜色（on gradient 才生效）"),
+      haze: z
+        .number()
+        .min(0)
+        .max(1)
+        .default(0.35)
+        .describe(
+          "空气透视（雾）浓度，0=关。真实感的一大半来自它：远处的东西必须淡进背景，" +
+            "否则再好的光照也像「把模型摆在黑房间里」。天文/星空场景给 0",
+        ),
+      vignette: z.number().min(0).max(1).default(0.32).describe("四角压暗（屏幕空间），0=关"),
+    })
+    .optional()
+    .describe("世界背景：独立于主题的渐变天空 + 空气透视，解决「背景乌漆麻黑」"),
+
+  /**
+   * 自动铺一块地面。
+   *
+   * 接触阴影是「真实」最便宜的那一半：物体有没有落地、零件之间有没有分界，
+   * 全靠投影和遮挡。没有地面时，一切都在虚空里飘着。
+   */
+  ground: z
+    .object({
+      y: z.number().default(0).describe("地面高度（世界单位）"),
+      color: colorToken.default("#191C22"),
+      roughness: z.number().min(0).max(1).default(0.72),
+      metalness: z.number().min(0).max(1).default(0.06),
+      size: z.number().positive().default(160).describe("边长，给大一点让边缘出画"),
+      shadow: z.boolean().default(true).describe("接收投影（关掉就只剩一块底色）"),
+    })
+    .optional()
+    .describe("自动地面：接投影、给反射底色，让物体「落地」"),
+
   post: z
     .object({
       bloom: z.number().min(0).max(2).default(1).describe("辉光强度倍数：1=当前 look 的默认值，0=关"),
       threshold: z.number().min(0).max(1).optional().describe("覆盖辉光阈值，不写就用 look 的"),
+      /**
+       * 色调映射。默认开 ACES：真实世界的动态范围远大于屏幕，
+       * 不做滚降就只能"高光切白、暗部糊死"（这正是不开时的观感）。
+       *
+       * 曝光 1.25 是配 ACES 的补偿系数：ACES 在中灰附近约压 20%，
+       * 乘 1.25 之后中间调回到原位，只有高光被压平 —— 白拿的层次。
+       */
+      tonemap: z
+        .enum(["aces", "none"])
+        .default("aces")
+        .describe("aces=电影感滚降（默认）；none=逐像素还原色值（要和 2D 精确对色时才用）"),
+      exposure: z.number().min(0.4).max(3).default(1.25).describe("曝光（仅 tonemap=aces 时生效）"),
     })
     .optional(),
 });
@@ -607,7 +681,7 @@ export function dslIssues(spec: Scene3DDsl): string[] {
  *    它就是空的，写不进去等于不让它搭骨架 —— 但要提示它"这么渲出来什么都没有"。
  * 2. **枢轴上的材质**：group 没有表面，material 无处施加。不报的话 agent 会反复调色。
  * 3. **自定义灯把场景压黑**：给了 `lights` 就撤掉 look 的四盏方向光，同时环境反射
- *    只剩 45%。金属材质的亮部**几乎全来自环境反射**，所以「metalness 0.9 + ambient 0.55」
+ *    只剩 55%。金属材质的亮部**几乎全来自环境反射**，所以「metalness 0.9 + ambient 0.55」
  *    这种看着挺亮的配置，渲出来是近剪影（蒸汽机车首版实测，只能靠抬 ambient 到 1.6 救）。
  *    这条只给数值建议，不替 agent 改值 —— 天文场景就是要压暗夜面，硬提亮会毁掉昼夜对比。
  */
@@ -646,7 +720,7 @@ export function dslWarnings(spec: Scene3DDsl): string[] {
   } else if (metals.length && ambient < 1.0) {
     out.push(
       `有 ${metals.length} 个金属节点（metalness ≥ 0.6，如「${metals[0].id}」），但 ambient 只有 ${ambient}：` +
-        `金属的亮部几乎全来自环境反射，而自定义灯场景的环境反射只保留 45% —— 渲出来容易是剪影。` +
+        `金属的亮部几乎全来自环境反射，而自定义灯场景的环境反射只保留 55% —— 渲出来容易是剪影。` +
         `把 ambient 抬到 1.2–2.0，或把 metalness 降到 0.4–0.6（想要亮铬感就走前者）`,
     );
   }

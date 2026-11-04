@@ -247,6 +247,10 @@ export type Op =
   | { op: "set_graph_particles"; sceneId: string; particles: Record<string, unknown> | null }
   /** 后期（辉光）。null = 回到 look 的默认值 */
   | { op: "set_graph_post"; sceneId: string; post: Record<string, unknown> | null }
+  /** 世界背景（渐变天空 + 空气透视）。null = 回到 auto */
+  | { op: "set_graph_world"; sceneId: string; world: Record<string, unknown> | null }
+  /** 自动地面（接投影）。null = 撤掉地面 */
+  | { op: "set_graph_ground"; sceneId: string; ground: Record<string, unknown> | null }
   | {
       op: "reorder_scenes";
       sceneIds: string[];
@@ -513,6 +517,8 @@ export const OP_FIELDS: Record<string, readonly string[]> = {
   set_graph_lights: ["op", "sceneId", "lights"],
   set_graph_particles: ["op", "sceneId", "particles"],
   set_graph_post: ["op", "sceneId", "post"],
+  set_graph_world: ["op", "sceneId", "world"],
+  set_graph_ground: ["op", "sceneId", "ground"],
   reorder_scenes: ["op", "sceneIds", "reflow"],
   compact_main_track: ["op"],
   remove_scene: ["op", "sceneId"],
@@ -2049,6 +2055,53 @@ export function applyOps(project: Project, ops: Op[]): OpResult {
         graph.post = post;
         const savedPost = saveGraph(scene, graph, "set_graph_post", summary).post!;
         summary.push(`「${scene.name}」辉光强度 ×${savedPost.bloom}`);
+        break;
+      }
+
+      case "set_graph_world": {
+        const scene = mustFind(next, op.sceneId);
+        const graph = graphOf(scene, "set_graph_world");
+        if (op.world === null) {
+          delete graph.world;
+          saveGraph(scene, graph, "set_graph_world", summary);
+          summary.push(`「${scene.name}」世界背景回到 auto（按主题明暗挑中性色）`);
+          break;
+        }
+        if (!isPlainObject(op.world)) throw new Error("set_graph_world：world 必须是对象或 null");
+        const world = deepMerge((graph.world ?? {}) as Record<string, unknown>, op.world) as unknown as NonNullable<
+          Scene3DDsl["world"]
+        >;
+        graph.world = world;
+        const savedWorld = saveGraph(scene, graph, "set_graph_world", summary).world!;
+        summary.push(
+          `「${scene.name}」世界：${savedWorld.mode}` +
+            (savedWorld.mode === "gradient"
+              ? `（${savedWorld.top ?? "auto"} → ${savedWorld.bottom ?? "auto"}）`
+              : "") +
+            `，雾 ${savedWorld.haze}，暗角 ${savedWorld.vignette}`,
+        );
+        break;
+      }
+
+      case "set_graph_ground": {
+        const scene = mustFind(next, op.sceneId);
+        const graph = graphOf(scene, "set_graph_ground");
+        if (op.ground === null) {
+          delete graph.ground;
+          saveGraph(scene, graph, "set_graph_ground", summary);
+          summary.push(`「${scene.name}」撤掉地面（物体不再有落地阴影）`);
+          break;
+        }
+        if (!isPlainObject(op.ground)) throw new Error("set_graph_ground：ground 必须是对象或 null");
+        const ground = deepMerge((graph.ground ?? {}) as Record<string, unknown>, op.ground) as unknown as NonNullable<
+          Scene3DDsl["ground"]
+        >;
+        graph.ground = ground;
+        const savedGround = saveGraph(scene, graph, "set_graph_ground", summary).ground!;
+        summary.push(
+          `「${scene.name}」地面：y=${savedGround.y ?? "自动（取节点最低点）"}，` +
+            `${savedGround.size}×${savedGround.size}，${savedGround.shadow ? "接投影" : "不接投影"}`,
+        );
         break;
       }
 

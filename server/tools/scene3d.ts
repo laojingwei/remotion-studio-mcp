@@ -61,7 +61,14 @@ export const SCENE3D_TOOLS: ToolDef[] = [
           };
           lights?: { type: string; position: number[]; intensity: number; color: string }[];
           particles?: { count: number; size: number };
-          post?: { bloom?: number; threshold?: number };
+          post?: { bloom?: number; threshold?: number; tonemap?: string; exposure?: number };
+          world?: { mode?: string; top?: string; bottom?: string; haze?: number; vignette?: number };
+          ground?: {
+            y?: number;
+            color?: string;
+            size?: number;
+            shadow?: boolean;
+          };
         };
       };
       const g = props.graph;
@@ -160,10 +167,29 @@ export const SCENE3D_TOOLS: ToolDef[] = [
         out.push(`光源 ${g.lights.length} 盏：${g.lights.map((l) => `${l.type}@[${l.position.join(",")}] i=${l.intensity}`).join("；")}`);
       }
       if (g.particles) out.push(`粒子：${g.particles.count} 个，size ${g.particles.size}`);
-      if (g.post) out.push(`辉光：×${g.post.bloom ?? 1}${g.post.threshold != null ? ` 阈值 ${g.post.threshold}` : ""}`);
+      if (g.post)
+        out.push(
+          `后期：bloom ×${g.post.bloom ?? 1}${g.post.threshold != null ? ` 阈值 ${g.post.threshold}` : ""}` +
+            `，tonemap ${g.post.tonemap ?? "aces"}${g.post.tonemap !== "none" ? ` 曝光 ${g.post.exposure ?? 1.25}` : ""}`,
+        );
+      if (g.world)
+        out.push(
+          `世界：${g.world.mode}` +
+            (g.world.mode === "gradient"
+              ? ` ${g.world.top ?? "auto"} → ${g.world.bottom ?? "auto"}`
+              : "") +
+            `，雾 ${g.world.haze}，暗角 ${g.world.vignette}`,
+        );
+      else out.push("世界：auto（按主题明暗挑中性色，不再是主题底色）");
+      if (g.ground)
+        out.push(
+          `地面：y=${g.ground.y ?? "自动"}，${g.ground.size}×${g.ground.size}，${g.ground.color}，` +
+            `${g.ground.shadow ? "接投影" : "不接投影"}`,
+        );
+      else out.push("地面：无（物体没有接触阴影，悬浮在虚空里——要落地感就 set_graph_scene 的 ground）");
       out.push(
         "改单个节点：update_graph_node(sceneId, nodeId, patch:{…})（不要整份覆盖 graph）；" +
-          "节点增删：add_graph_node / remove_graph_node；相机·灯光·粒子·辉光：set_graph_scene。",
+          "节点增删：add_graph_node / remove_graph_node；相机·灯光·世界·地面·后期：set_graph_scene。",
       );
       /**
        * 软提示随大纲一起给：这些是"写得进去但渲出来不对劲"的问题（空枢轴、枢轴上的材质、
@@ -297,17 +323,21 @@ export const SCENE3D_TOOLS: ToolDef[] = [
   {
     name: "set_graph_scene",
     description:
-      "改 scene3d 的**场景级**设置（不是某个节点）：相机、光源、粒子、辉光。只传要改的那几项，其余保持原样；传 null 表示清掉（恢复默认）。\n" +
+      "改 scene3d 的**场景级**设置（不是某个节点）：相机、光源、世界/地面、粒子、后期。只传要改的那几项，其余保持原样；传 null 表示清掉（恢复默认）。\n" +
       "相机：{position:[0,2,8], target:[0,0,0], fov:42, orbit:{degPerSec:6}}；" +
       "运镜段里想**锁定看向某个会动的节点**（行星、飘的物体）用 anim[].lookAt:\"节点id\"" +
       "（target 每帧重算，targetX/Y/Z 在该段失效；退出锁定=下一段不给 lookAt 且不写 from.target，镜头会自动接上）；" +
       "想让镜头走弧线用 anim[].curve:{out,in}（相对直线的偏移，绕拍/甩镜）；" +
       "光源（给了就顶掉预设打光，最多 8 盏）：[{type:\"point\", position:[0,0,0], intensity:20, color:\"#FFE9B0\"}]" +
       "（point/spot 按 1/距离² 衰减，距离 2 时要 20 上下才亮；directional 1~3 就够）。" +
-      "**给自定义灯前先算好环境光**：look 的四盏灯会被撤掉、环境反射只剩 45%，" +
+      "**给自定义灯前先算好环境光**：look 的四盏灯会被撤掉、环境反射只剩 55%，" +
       "金属材质（metalness ≥ 0.6）的亮部几乎全来自环境反射 —— 至少给一盏 ambient intensity 1.2–2.0，否则渲成剪影；" +
       "天文片要压暗夜面才可以只给 0.1–0.3；" +
-      "粒子：{count:800, spread:[6,4,6], size:0.06, drift:0.3}；辉光：{bloom:1.2}。",
+      "世界背景：{mode:\"auto|gradient|color\", top,bottom,glow, haze:0.35, vignette:0.32} —— **背景不是主题色**，" +
+      "auto 给「深蓝灰的夜 / 冷白天光」，gradient 自己给两个端点（低饱和）；haze 是空气透视，星空场景给 0；" +
+      "地面：{y, color, roughness, metalness, size, shadow} —— 不写 y 自动落在节点最低点，" +
+      "有了地面才有接触阴影（真实感的一半）；" +
+      "粒子：{count:800, spread:[6,4,6], size:0.06, drift:0.3}；后期：{bloom:1.2, tonemap:\"aces|none\", exposure:1.25}。",
     shape: {
       projectId: z.string().optional().describe("要操作的工程 id，不传 = 当前默认工程（list_projects 查）"),
       sceneId: z.string(),
@@ -319,17 +349,33 @@ export const SCENE3D_TOOLS: ToolDef[] = [
           "相机；null = 交还自动取景。anim[] 里可用 lookAt:\"节点id\" 锁定看向（段内 target 每帧重算）",
         ),
       lights: z.array(z.any()).nullable().optional().describe("整组光源；null 或 [] = 撤掉自定义光"),
+      world: z
+        .record(z.any())
+        .nullable()
+        .optional()
+        .describe("世界背景（渐变天空 + 雾 + 暗角）；null = 回到 auto"),
+      ground: z
+        .record(z.any())
+        .nullable()
+        .optional()
+        .describe("自动地面；null = 撤掉。不给 y 时自动取节点最低点"),
       particles: z.record(z.any()).nullable().optional().describe("粒子层；null = 关掉"),
-      post: z.record(z.any()).nullable().optional().describe("后期（bloom/threshold）；null = 回到默认"),
+      post: z
+        .record(z.any())
+        .nullable()
+        .optional()
+        .describe("后期（bloom/tonemap/exposure）；null = 回到默认"),
     },
     run: async (a) => {
       const ops: Record<string, unknown>[] = [];
       if (a.camera !== undefined) ops.push({ op: "set_graph_camera", sceneId: a.sceneId, camera: a.camera });
       if (a.lights !== undefined) ops.push({ op: "set_graph_lights", sceneId: a.sceneId, lights: a.lights });
+      if (a.world !== undefined) ops.push({ op: "set_graph_world", sceneId: a.sceneId, world: a.world });
+      if (a.ground !== undefined) ops.push({ op: "set_graph_ground", sceneId: a.sceneId, ground: a.ground });
       if (a.particles !== undefined) ops.push({ op: "set_graph_particles", sceneId: a.sceneId, particles: a.particles });
       if (a.post !== undefined) ops.push({ op: "set_graph_post", sceneId: a.sceneId, post: a.post });
       if (!ops.length) {
-        throw new Error("set_graph_scene 没有要改的东西：给 camera / lights / particles / post 之一");
+        throw new Error("set_graph_scene 没有要改的东西：给 camera / lights / world / ground / particles / post 之一");
       }
       const p = await resolveProject(a.projectId);
       const res = await api<{ summary: string[] }>(`/api/projects/${p.id}/ops`, {

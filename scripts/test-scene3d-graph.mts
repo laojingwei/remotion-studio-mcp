@@ -10,6 +10,7 @@
 import assert from "node:assert/strict";
 import { dslSchema, dslWarnings, dslIssues } from "../shared/scene3dDsl";
 import { seamBlendWindows, seamOverlaps } from "../shared/transitions";
+import { applyOps, createSeedProject, type Op } from "../shared/ops";
 
 let passed = 0;
 const failures: string[] = [];
@@ -142,6 +143,64 @@ test("交叠帧数被幕长夹住时，窗口跟着变短（不报出画面里�
   const wins = seamBlendWindows(scenes, spans);
   assert.equal(wins[0].frames, 9, "前一幕要留 1 帧给自己");
   assert.equal(wins[0].end, 19);
+});
+/* ── ④ 世界 / 地面 / 后期（2026-11-04 晚，真实感改造） ── */
+test("world:省略时各字段有默认值（haze/vignette 不为 0）", () => {
+  const spec = parse({ nodes: [{ id: "a", geometry: { type: "box" } }], world: { mode: "auto" } });
+  assert.equal(spec.world!.mode, "auto");
+  assert.equal(spec.world!.haze, 0.35);
+  assert.equal(spec.world!.vignette, 0.32);
+});
+
+test("world:mode=gradient 缺 top/bottom 不报错（渲染端有 auto 兜底）", () => {
+  const spec = parse({ nodes: [{ id: "a" }], world: { mode: "gradient", bottom: "#2B3342" } });
+  assert.equal(spec.world!.bottom, "#2B3342");
+});
+
+test("ground:不写 y 也能过校验（渲染端自动取节点最低点）", () => {
+  const spec = parse({ nodes: [{ id: "a" }], ground: { color: "#20242B" } });
+  assert.equal(spec.ground!.shadow, true);
+  assert.equal(spec.ground!.size, 160);
+});
+
+test("post:tonemap 默认 aces、exposure 默认 1.25", () => {
+  const spec = parse({ nodes: [{ id: "a" }], post: { bloom: 0.5 } });
+  assert.equal(spec.post!.tonemap, "aces");
+  assert.equal(spec.post!.exposure, 1.25);
+});
+
+test("material:envMapIntensity 槽位（金属亮度的直接旋钮）", () => {
+  const spec = parse({
+    nodes: [{ id: "a", geometry: { type: "box" }, material: { metalness: 0.9, envMapIntensity: 1.6 } }],
+  });
+  assert.equal(spec.nodes[0].material!.envMapIntensity, 1.6);
+});
+
+test("ops:set_graph_world / set_graph_ground 走 ops 流水线写回 graph", () => {
+  const proj0 = applyOps(createSeedProject("t-world"), [
+    { op: "add_scene", type: "scene3d", props: { graph: { nodes: [{ id: "a", geometry: { type: "box" } }] } } },
+  ]);
+  const sceneId = proj0.createdSceneIds[0];
+  const res = applyOps(proj0.project, [
+    { op: "set_graph_world", sceneId, world: { mode: "auto", haze: 0.5 } },
+    { op: "set_graph_ground", sceneId, ground: { y: -0.62 } },
+    { op: "set_graph_post", sceneId, post: { tonemap: "none" } },
+  ]);
+  assert.ok(res.summary.some((s) => s.includes("世界")));
+  assert.ok(res.summary.some((s) => s.includes("地面")));
+  const g = res.project.scenes.find((s) => s.id === sceneId)!.props.graph as Record<string, any>;
+  assert.equal(g.world.haze, 0.5);
+  assert.equal(g.ground.y, -0.62);
+  assert.equal(g.post.tonemap, "none");
+  // null 清掉
+  const res2 = applyOps(res.project, [
+    { op: "set_graph_world", sceneId, world: null },
+    { op: "set_graph_ground", sceneId, ground: null },
+  ]);
+  const g2 = res2.project.scenes.find((s) => s.id === sceneId)!.props.graph as Record<string, any>;
+  assert.equal(g2.world, undefined);
+  assert.equal(g2.ground, undefined);
+  assert.ok(res2.summary.some((s) => s.includes("回到 auto")));
 });
 
 console.log("");

@@ -1,6 +1,5 @@
 import React from "react";
 import * as THREE from "three";
-import { RoomEnvironment } from "three/examples/jsm/environments/RoomEnvironment.js";
 import { ThreeCanvas } from "@remotion/three";
 import { useThree } from "@react-three/fiber";
 import { AbsoluteFill, useCurrentFrame, useVideoConfig } from "remotion";
@@ -8,6 +7,8 @@ import type { Theme } from "../../../shared/schema";
 import { useSceneLayout } from "../../layout/useSceneLayout";
 import { Editable } from "../ui";
 import { installBloom } from "./bloom";
+import { studioEnvironment } from "./env";
+import { SkyDome, fogRange, resolveWorld } from "./World";
 import { DslScene, applyBloomMultiplier, dslCamera, dslAutoDistance } from "./DslScene";
 import { glowTexture, hash01, luminance, metalBody, shade } from "./color";
 import type { Scene3DDsl } from "../../../shared/scene3dDsl";
@@ -238,11 +239,34 @@ export const LookLights: React.FC<{
    * 才有可读的暗部层次，最终救场值是 1.6）。
    */
   customHasAmbient?: boolean;
-}> = ({ spec, core, dot, custom, customHasAmbient }) => {
+  /**
+   * 阴影相机半径（世界单位），0 = 这盏灯不投影。
+   *
+   * 平行光用的是**正交阴影相机**：范围给小了，出界的东西会整块没有影子（不是变淡，
+   * 是"影子被裁掉"，看起来像没开阴影）；给太大则一个 2048 的图摊在几十米上，
+   * 边缘全是锯齿。所以按场景尺度传进来（见 shadowRange()）。
+   */
+  shadowRange?: number;
+}> = ({ spec, core, dot, custom, customHasAmbient, shadowRange = 0 }) => {
   if (custom) {
     // 数值都很小是有意的：作用只是让背光面留一点形，不参与照明
     return <ambientLight intensity={customHasAmbient ? 0.12 : 0.35} color="#ffffff" />;
   }
+  const shadow = shadowRange
+    ? {
+        castShadow: true,
+        "shadow-mapSize": [2048, 2048] as [number, number],
+        // bias 压自阴影条纹（shadow acne），normalBias 处理曲面上的漏光
+        "shadow-bias": -0.0005,
+        "shadow-normalBias": Math.max(0.005, shadowRange * 0.004),
+        "shadow-camera-left": -shadowRange,
+        "shadow-camera-right": shadowRange,
+        "shadow-camera-top": shadowRange,
+        "shadow-camera-bottom": -shadowRange,
+        "shadow-camera-near": 0.5,
+        "shadow-camera-far": shadowRange * 4,
+      }
+    : {};
   return (
     <>
       {spec.hemisphere ? (
@@ -250,7 +274,12 @@ export const LookLights: React.FC<{
       ) : (
         <ambientLight intensity={spec.ambient} color="#ffffff" />
       )}
-      <directionalLight position={spec.key.pos} intensity={spec.key.intensity} color={lightColor(spec.key.color, core, dot)} />
+      <directionalLight
+        position={spec.key.pos}
+        intensity={spec.key.intensity}
+        color={lightColor(spec.key.color, core, dot)}
+        {...shadow}
+      />
       <directionalLight position={spec.rimA.pos} intensity={spec.rimA.intensity} color={lightColor(spec.rimA.color, core, dot)} />
       {spec.rimB ? (
         <directionalLight position={spec.rimB.pos} intensity={spec.rimB.intensity} color={lightColor(spec.rimB.color, core, dot)} />
@@ -309,11 +338,8 @@ export const setupEnvironment = (
   environmentIntensity: number,
 ) => {
   try {
-    const pmrem = new THREE.PMREMGenerator(gl);
-    const tex = pmrem.fromScene(new RoomEnvironment(), 0.04).texture;
-    scene.environment = tex;
-    // 环境强度由 look 决定：studio 0.6（亮铬）/ dramatic 0.14（暗铁），
-    // RoomEnvironment 是均匀柔光，全强度会让金属变成"奶糖塑料"
+    scene.environment = studioEnvironment(gl);
+    // 环境强度由 look 决定：studio 0.6（亮铬）/ dramatic 0.14（暗铁）
     (scene as unknown as { environmentIntensity?: number }).environmentIntensity = environmentIntensity;
   } catch {
     // 软件渲染环境不支持时降级：只有直射光，材质会偏平，但不能因此渲染失败
@@ -1134,14 +1160,27 @@ export const Scene3DScene: React.FC<Scene3DProps> = ({
    *   整个背景都会被当成"高光"叠一遍，画面直接蒙一层灰雾 ——
    *   浅色主题做 bloom 翻车从来不是强度太大，是阈值不够高。
    */
-  const darkTheme = luminance(c.background) < 0.32;
+  /**
+   * 世界（背景）。**DSL 场景不再吃主题底色**：主题底色是"排版的纸"，
+   * 暗色主题下必然是近黑，当世界用就是一张黑纸（详见 World.tsx 顶部）。
+   * 预设场景保持原样：它们的构图本身依赖主题底色，改了会破掉既有片子的观感。
+   */
+  const world = graph ? resolveWorld(graph, theme) : null;
+  const sceneBg = world ? world.bottom : c.background;
+  const darkTheme = luminance(sceneBg) < 0.32;
+  const haze = graph?.world?.haze ?? 0.35;
+  /**
+   * 阴影相机半径：按自动取景距离的 2.2 倍。太小会把影子裁掉（左右两侧直接没影），
+   * 太大则 2048 的阴影图摊到几十米上，边缘全是锯齿。
+   */
+  const shadowRange = graph ? Math.min(160, Math.max(8, autoDist * 2.2)) : 0;
   /**
    * 辉光参数从 look 里取，再按底色亮度修一次。
    * 浅色底不能只靠"强度减半"：白底的线性亮度本来就接近 1，阈值不提上去，
    * 整片背景都会被当成高光叠一遍（这才是浅色主题做 bloom 翻车的真正原因）。
    */
   // 辉光的"浅底提阈值 + graph 的倍数"都在 bloomFor 里，视口和成片共用同一套算法
-  const bloomOpts = bloomFor({ spec: lookSpec, background: c.background, graph });
+  const bloomOpts = bloomFor({ spec: lookSpec, background: sceneBg, graph });
 
   /**
    * 场景自带光源时，把 look 的四盏方向光全撤掉。
@@ -1175,7 +1214,7 @@ export const Scene3DScene: React.FC<Scene3DProps> = ({
     <AbsoluteFill
       style={{
         // 盖在内容之上时不画底色（透明），垫在下面时画自己的底色（辉光要有底才成立）
-        background: overlay ? "transparent" : c.background,
+        background: overlay ? "transparent" : sceneBg,
         overflow: "hidden",
       }}
     >
@@ -1183,6 +1222,12 @@ export const Scene3DScene: React.FC<Scene3DProps> = ({
         width={width}
         height={height}
         dpr={1}
+        /**
+         * 阴影：DSL 场景的真实感有一大半在这里。
+         * 没有投影时零件之间没有遮挡分界、物体也不落地，看起来就是"一堆色块摆在一起"。
+         * `soft` = PCFSoftShadowMap，边缘两三个像素的软化，够用且比 VSM 稳。
+         */
+        shadows={graph ? "soft" : false}
         // preserveDrawingBuffer 是硬要求：Remotion 是画完之后去"截屏"的，
         // 缓冲区没保留时截到的是空白（headless 下尤其明显）
         gl={{
@@ -1192,21 +1237,23 @@ export const Scene3DScene: React.FC<Scene3DProps> = ({
           preserveDrawingBuffer: true,
           powerPreference: "high-performance",
           /**
-           * **必须关掉色调映射（ACES）**，否则 3D 场景的底色和 2D 场景对不上。
+           * 色调映射：**默认 ACES**。
            *
-           * three 只在"直接渲到画布"时套 tone mapping，渲进渲染目标时是关的；
-           * 而接上后处理之后，OutputPass 会拿整帧（包括背景色）套一次 ACES。
-           * 实测浅色主题 `#F3F1EA` 被压成 `#DFDEDC`——两幕相接时会明显跳一下色。
+           * 以前的顾虑是"3D 底色必须和 2D 逐像素一致"，所以关掉了（ACES 会把
+           * `#F3F1EA` 压成 `#DFDEDC`，两幕相接跳色）。现在世界背景是独立的一层渐变，
+           * 本来就不再承诺和主题色相等，这条约束自然解除。
            *
-           * 关掉之后：背景色 = 主题色（逐像素一致），高光直接截顶。
-           * 对这个项目反而是对的：写多少看到多少，和 `shade()` 那条结论是同一个原则。
+           * 开的收益是真实感的核心：亮部滚降而不是一刀切白、暗部压实。
+           * 曝光 1.25 补偿 ACES 对中灰的约 20% 压缩 —— 中间调回到原位，白拿层次。
            */
-          toneMapping: THREE.NoToneMapping,
+          toneMapping:
+            (graph?.post?.tonemap ?? "aces") === "aces" ? THREE.ACESFilmicToneMapping : THREE.NoToneMapping,
+          toneMappingExposure: graph?.post?.exposure ?? 1.25,
         }}
         // 环境贴图和辉光都必须在这里装：onCreated 同步执行、早于首帧，
         // 放 useEffect 里会晚于 Remotion 截走的那一帧（踩过两次，症状都是"改了代码、md5 不变"）
         onCreated={(state) => {
-          setupEnvironment(state, dslLights ? lookSpec.env * 0.45 : lookSpec.env);
+          setupEnvironment(state, dslLights ? lookSpec.env * 0.55 : lookSpec.env);
           try {
             installBloom(state, bloomOpts);
           } catch {
@@ -1221,9 +1268,19 @@ export const Scene3DScene: React.FC<Scene3DProps> = ({
         camera={{ position: cam.position, fov: cam.fov, near: 0.06, far: 12000 }}
         style={{ position: "absolute", inset: 0 }}
       >
-        {overlay ? null : <color attach="background" args={[c.background]} />}
+        {overlay ? null : <color attach="background" args={[sceneBg]} />}
         <CameraSync pos={cam.position} fov={cam.fov} />
-        {preset === "grid-horizon" || preset === "waveform" ? (
+        {world ? (
+          /* 天空：只换背景，不搬坐标系（地面在 DslScene 的内容组里，跟物体一起搬） */
+          <SkyDome colors={world} />
+        ) : null}
+        {world && haze > 0 ? (
+          /**
+           * 空气透视：远处淡进背景色。真实拍摄里没有"无限清晰"的背景，
+           * 少了它，60 单位宽的地面会在画面边缘硬切一条线。
+           */
+          <fog attach="fog" args={[sceneBg, ...fogRange(Math.max(1, autoDist), haze)]} />
+        ) : preset === "grid-horizon" || preset === "waveform" ? (
           // 雾是最有效的"远处消隐"：没有它，网格/底板会在画面边缘硬切一条边
           <fog attach="fog" args={[c.background, 7, isPortrait ? 34 : 46]} />
         ) : null}
@@ -1234,14 +1291,28 @@ export const Scene3DScene: React.FC<Scene3DProps> = ({
           正面必须是中性光——彩色正面光会把整颗物体涂满颜色，那是"彩色塑料"不是"科技感"。
           四套 look 差在环境强度、主光色温、边光强度、以及有没有补光。
         */}
-        <LookLights spec={lookSpec} core={core} dot={dot} custom={dslLights} customHasAmbient={dslHasAmbient} />
+        <LookLights
+          spec={lookSpec}
+          core={core}
+          dot={dot}
+          custom={dslLights}
+          customHasAmbient={dslHasAmbient}
+          shadowRange={shadowRange}
+        />
 
         {graph ? (
           /*
             不套"有文字时上移"的那个 group：DSL 的相机是用户/agent 自己给的，
             再叠一层位移就等于偷偷改了它的构图。
           */
-          <DslScene spec={graph} frame={frame} t={t} theme={theme} camera={dslCam!} />
+          <DslScene
+            spec={graph}
+            frame={frame}
+            t={t}
+            theme={theme}
+            camera={dslCam!}
+            shadowRange={shadowRange}
+          />
         ) : (
         <group position={[0, title || sub ? 0.5 : 0, 0]}>
         {preset === "particle-field" ? (
@@ -1290,6 +1361,18 @@ export const Scene3DScene: React.FC<Scene3DProps> = ({
         />
       ) : null}
 
+      {/* 暗角：屏幕空间压四角。它不是"滤镜"，是让人眼把注意力收到主体上的光学事实 */}
+      {world && !overlay && (graph!.world?.vignette ?? 0.32) > 0 ? (
+        <AbsoluteFill
+          style={{
+            pointerEvents: "none",
+            background: `radial-gradient(ellipse at 50% 46%, rgba(0,0,0,0) 40%, rgba(0,0,0,${
+              0.46 * (graph!.world?.vignette ?? 0.32)
+            }) 100%)`,
+          }}
+        />
+      ) : null}
+
       {/* 文字走 2D 叠层：3D 里做中文字体的成本太高（见 docs/threejs-plan.md） */}
       {(title || sub) && !isBackdrop && (
         <AbsoluteFill
@@ -1303,7 +1386,7 @@ export const Scene3DScene: React.FC<Scene3DProps> = ({
             background:
               subtitleReservePct > 0
                 ? "transparent"
-                : `linear-gradient(to top, ${c.background}8C 0%, ${c.background}00 18%)`,
+                : `linear-gradient(to top, ${sceneBg}8C 0%, ${sceneBg}00 18%)`,
           }}
         >
           {title ? (
