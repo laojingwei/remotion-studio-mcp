@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import { ROOT as PROJECT_ROOT } from "./root";
+import { DATA_ROOT } from "./paths";
 import path from "node:path";
 
 /**
@@ -17,7 +18,7 @@ export type AgentMessage = {
   read: boolean;
 };
 
-const DATA_DIR = path.join(PROJECT_ROOT, "data");
+const DATA_DIR = DATA_ROOT;
 const FILE = path.join(DATA_DIR, "agent-chat.json");
 const MAX_MESSAGES = 200;
 

@@ -1,12 +1,13 @@
 import fs from "node:fs";
 import { ROOT as PROJECT_ROOT } from "./root";
+import { DATA_ROOT, PROJECTS_ROOT } from "./paths";
 import path from "node:path";
 import type { Project } from "../shared/schema";
 import { createSeedProject } from "../shared/ops";
 import { migrateOverlaysToScenes, projectSchema } from "../shared/schema";
 import { TRANSITION_TYPES } from "../shared/transitions";
 
-export const DATA_DIR = path.join(PROJECT_ROOT, "data", "projects");
+export const DATA_DIR = PROJECTS_ROOT;
 export const OUT_DIR = path.join(PROJECT_ROOT, "out");
 export const PUBLIC_DIR = path.join(PROJECT_ROOT, "public");
 
@@ -381,7 +382,7 @@ export function projectFileTimes(id: string): { createdAt: string; updatedAt: st
  * 存在 data/last-project.json，跟工程数据放一起——它描述的是"这台机器上最近在用哪个工程"，
  * 属于本地状态，不该进工程文档（否则每次切换工程都会 push 一个新 rev）。
  */
-const LAST_PROJECT_FILE = path.join(PROJECT_ROOT, "data", "last-project.json");
+const LAST_PROJECT_FILE = path.join(DATA_ROOT, "last-project.json");
 
 export function readLastProjectId(): string | null {
   try {
@@ -411,7 +412,7 @@ export function writeLastProjectId(id: string): void {
  * 直接存 localStorage 的镜像（字符串 map），前端读回时原样写回 localStorage，
  * 所以像 `rms:outlines` 那种用 "1"/"0" 字符串判断的地方完全不用改。
  */
-const UI_PREFS_FILE = path.join(PROJECT_ROOT, "data", "ui-prefs.json");
+const UI_PREFS_FILE = path.join(DATA_ROOT, "ui-prefs.json");
 
 export function readUiPrefs(): Record<string, string> {
   try {

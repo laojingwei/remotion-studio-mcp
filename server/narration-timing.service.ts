@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { ROOT as PROJECT_ROOT } from "./root";
+import { PROJECTS_ROOT } from "./paths";
 
 /**
  * 旁白时长骨架（TTS 实测，不是估算）。
@@ -46,7 +47,7 @@ export type NarrationTiming = {
 
 const fileOf = (projectId: string): string => {
   if (!/^[\w-]+$/.test(projectId)) throw new Error("非法的工程 id");
-  return path.join(PROJECT_ROOT, "data", "projects", projectId, "narration-timing.json");
+  return path.join(PROJECTS_ROOT, projectId, "narration-timing.json");
 };
 
 export function readTiming(projectId: string): NarrationTiming | null {

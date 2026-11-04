@@ -14,13 +14,14 @@
 import fs from "node:fs";
 import path from "node:path";
 import { ROOT } from "./root";
+import { DATA_ROOT } from "./paths";
 
 /**
  * 日志目录：默认 data/logs；`STUDIO_LOG_DIR` 可覆盖（测试用临时目录，避免探针条目
  * 混进真实统计里；也方便把日志放到别的盘）。
  */
 const logDir = () =>
-  process.env.STUDIO_LOG_DIR ? path.resolve(process.env.STUDIO_LOG_DIR) : path.join(ROOT, "data", "logs");
+  process.env.STUDIO_LOG_DIR ? path.resolve(process.env.STUDIO_LOG_DIR) : path.join(DATA_ROOT, "logs");
 const KEEP_DAYS = 7;
 const MAX_ARG_CHARS = 400;
 

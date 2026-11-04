@@ -52,3 +52,36 @@ jobs:
 
       - name: 版本一致性（tag / package.json / 代码内）
         run: node scripts/check-version.mjs
+
+  # 真浏览器回归：起服务 + 临时数据目录 + 5 条核心路径。
+  # 单独一个 job：它要装 Chromium、要 build，跟单测的失败原因完全不同。
+  e2e:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+
+      - name: 安装依赖
+        run: npm ci --no-audit --no-fund
+
+      - name: 安装 Chromium
+        run: npx playwright install --with-deps chromium
+
+      - name: 构建编辑器
+        run: npm run build
+
+      - name: 编辑器 E2E
+        run: npm run test:e2e
+
+      - name: 失败时保留截图
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-failure
+          path: out/e2e/
+          if-no-files-found: ignore

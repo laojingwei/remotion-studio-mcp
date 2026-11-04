@@ -6,6 +6,8 @@ export type OpResponse = {
   project: Project;
   createdSceneIds: string[];
   summary: string[];
+  /** 软冲突：这笔是基于旧 rev 算的，服务端已按语义合并（见 store.apply 的提示） */
+  revMismatch?: { expected: number; actual: number };
 };
 
 /**
@@ -85,6 +87,13 @@ export async function postOps(
   projectId: string,
   ops: Op[],
   actor: "user" | "agent" = "user",
+  /**
+   * 客户端算这批 ops 时看到的 rev。
+   *
+   * 带上它 + softRev，服务端就能发现"agent 在这期间改过"，并在回执里说明，
+   * 而不是让后写的一方静默覆盖。注意只是**告知**：ops 是语义化的，照常合并。
+   */
+  expectedRev?: number,
 ): Promise<OpResponse> {
   /**
    * 幂等键：一次逻辑写入 = 一个 opId，重试时不变。
@@ -94,7 +103,13 @@ export async function postOps(
    * 服务端按 opId 去重之后，重发是安全的。
    */
   const opId = `${CLIENT_ID}:${++opSeq}`;
-  const body = JSON.stringify({ ops, actor, clientId: CLIENT_ID, opId });
+  const body = JSON.stringify({
+    ops,
+    actor,
+    clientId: CLIENT_ID,
+    opId,
+    ...(expectedRev === undefined ? {} : { expectedRev, softRev: true }),
+  });
   /**
    * 超时 8 秒、最多试 3 次。本地写盘通常 <100ms，8 秒还没响应基本是连接被占满
    * （同 host 6 条连接被 SSE/预览占着）或服务端在跑重活。重试能自愈掉绝大多数瞬时拥塞，

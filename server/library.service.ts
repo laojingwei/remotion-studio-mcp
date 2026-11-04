@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import { ROOT as PROJECT_ROOT } from "./root";
+import { DATA_ROOT } from "./paths";
 import path from "node:path";
 import { type CustomAsset } from "../shared/assetLibrary";
 import { PUBLIC_DIR } from "./store";
@@ -13,7 +14,7 @@ import { PUBLIC_DIR } from "./store";
  * 文件本体仍在 `public/assets/`（Remotion 的 `staticFile()` 只认 public），
  * 索引只记 url + 尺寸 + 名字。
  */
-const LIB_FILE = path.join(PROJECT_ROOT, "data", "library.json");
+const LIB_FILE = path.join(DATA_ROOT, "library.json");
 const ASSET_DIR = path.join(PUBLIC_DIR, "assets");
 /** 库文件单独一个目录：跨工程复用，删工程不动它（v0.98 起） */
 const LIB_DIR = path.join(ASSET_DIR, "library");

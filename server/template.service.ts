@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import { ROOT as PROJECT_ROOT } from "./root";
+import { DATA_ROOT } from "./paths";
 import path from "node:path";
 import type { Project } from "../shared/schema";
 import {
@@ -23,7 +24,7 @@ import { PUBLIC_DIR, removeTree } from "./store";
  *  - 删工程不会删模板（素材已经复制进模板目录）
  *  - 删模板不会影响已经套用出来的工程（套用时素材复制回 public/assets）
  */
-export const TEMPLATES_DIR = path.join(PROJECT_ROOT, "data", "templates");
+export const TEMPLATES_DIR = path.join(DATA_ROOT, "templates");
 
 const ensureDir = () => fs.mkdirSync(TEMPLATES_DIR, { recursive: true });
 

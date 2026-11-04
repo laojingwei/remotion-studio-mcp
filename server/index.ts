@@ -933,6 +933,8 @@ app.post("/api/projects/:id/ops", async (c) => {
     const body = (await c.req.json()) as {
       ops: Op[];
       expectedRev?: number;
+      /** 前端用：rev 对不上时按语义合并并回执说明，不整批拒绝（见 project.service 注释） */
+      softRev?: boolean;
       actor?: string;
       clientId?: string;
       opId?: string;
@@ -942,6 +944,7 @@ app.post("/api/projects/:id/ops", async (c) => {
     }
     const result = projects.apply(c.req.param("id"), body.ops, {
       expectedRev: body.expectedRev,
+      softRevCheck: !!body.softRev,
       actor: body.actor ?? "user",
       clientId: body.clientId,
       opId: body.opId,
@@ -953,6 +956,8 @@ app.post("/api/projects/:id/ops", async (c) => {
       createdSceneIds: result.createdSceneIds,
       createdIds: result.createdIds,
       summary: result.summary,
+      /** 只有软冲突时才有：前端据此提示"已合并 agent 的并发修改" */
+      revMismatch: result.revMismatch,
     });
   } catch (err) {
     return fail(c, err);

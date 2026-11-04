@@ -631,7 +631,8 @@ export const useDoc = create<State>((set, get) => ({
       // 排队期间可能已经切换工程：这批 ops 是按老工程算的，绝不能写到新工程上
       if (!project || project.id !== projectIdAtCall) return;
       try {
-        const res = await postOps(project.id, ops, "user");
+        // 带上"这笔 ops 是基于哪个 rev 算的"：agent 期间改过时服务端会在回执里说明
+        const res = await postOps(project.id, ops, "user", before?.rev);
         /**
          * 只有"这是最后一笔"时才用服务端结果覆盖。
          * 中途返回的响应属于更早的状态，覆盖上去会把后面已经乐观落地的编辑冲掉
@@ -642,6 +643,17 @@ export const useDoc = create<State>((set, get) => ({
             project: res.project,
             selectedId: res.createdSceneIds[0] ?? get().selectedId,
           });
+        }
+        /**
+         * 软冲突提示：agent 在这笔 ops 算出来之后改过这个工程。
+         * 照常合并（ops 是语义化的），但必须说出来——否则用户会以为"我改的怎么被吃了"。
+         * 只在最后一笔提示，避免连续拖动时弹一串。
+         */
+        if (res.revMismatch && seq === applySeq) {
+          get().notify(
+            `已合并 agent 的并发修改（你基于 rev ${res.revMismatch.expected}，服务端已到 ${res.revMismatch.actual}）。` +
+              `若发现刚改的地方被覆盖，撤销一步再改。`,
+          );
         }
       } catch (err) {
         // 乐观更新失败了：退回这一笔之前的状态，别让界面停在一个服务端没有的版本上

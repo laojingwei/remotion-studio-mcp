@@ -25,6 +25,9 @@ export type BroadcastEvent =
       projectId: string;
     };
 
+/** 应用结果；`revMismatch` 只在软冲突时出现（说明这笔是基于旧 rev 改的） */
+export type AppliedResult = OpResult & { revMismatch?: { expected: number; actual: number } };
+
 export type HistoryEntry = {
   rev: number;
   at: string;
@@ -136,8 +139,22 @@ class ProjectService {
   apply(
     id: string,
     ops: Op[],
-    opts: { expectedRev?: number; actor?: string; clientId?: string; opId?: string } = {},
-  ): OpResult {
+    opts: {
+      expectedRev?: number;
+      actor?: string;
+      clientId?: string;
+      opId?: string;
+      /**
+       * 软冲突：rev 对不上时不拒绝，照常合并，只在回执里说明"你基于旧版本改的"。
+       *
+       * 为什么需要两种语义：ops 是**语义化**的（update_scene 的 patch 应用到当前文档上
+       * 通常仍然正确），硬拒会让人和 agent 交替编辑时频繁弹冲突；但完全不吭声又会
+       * 静默覆盖——尤其 update_scene.props.elements 这类整数组替换的 op。
+       * 前端要的是"合并且告知"，MCP 侧要的是"严格校验后重读"，所以由调用方选。
+       */
+      softRevCheck?: boolean;
+    } = {},
+  ): AppliedResult {
     const idemKey = opts.opId ? `${id}:${opts.opId}` : null;
     if (idemKey) {
       const hit = this.opResults.get(idemKey);
@@ -145,17 +162,29 @@ class ProjectService {
       if (hit) return hit;
     }
     const current = this.get(id);
+    let revMismatch: { expected: number; actual: number } | undefined;
     if (opts.expectedRev !== undefined && opts.expectedRev !== current.rev) {
-      const err = new Error(
-        `版本冲突：期望 rev=${opts.expectedRev}，当前 rev=${current.rev}。请重新读取文档后再修改。`,
-      );
-      (err as Error & { status?: number }).status = 409;
-      throw err;
+      if (!opts.softRevCheck) {
+        const err = new Error(
+          `版本冲突：期望 rev=${opts.expectedRev}，当前 rev=${current.rev}。请重新读取文档后再修改。`,
+        );
+        (err as Error & { status?: number }).status = 409;
+        throw err;
+      }
+      revMismatch = { expected: opts.expectedRev, actual: current.rev };
     }
 
     // 贴图素材校验（存在性/格式/体积/尺寸）在写库前挡——渲染端加载失败只会静默回退，agent 看不到
     assertTextureAssets(ops);
-    const result = applyOps(current, ops);
+    const result: AppliedResult = applyOps(current, ops);
+    if (revMismatch) {
+      // 合并且告知：不打断用户，但要让回执里能看见"这笔是基于旧版本算的"
+      result.summary.unshift(
+        `⚠️ 并发修改：这笔操作基于 rev ${revMismatch.expected}，服务端已是 rev ${revMismatch.actual}，已按语义合并。` +
+          `整数组替换类的修改（自由画布元素、场景图节点）可能覆盖 agent 刚做的调整，建议刷新后核对。`,
+      );
+      result.revMismatch = revMismatch;
+    }
     this.cache.set(id, result.project);
     writeProject(result.project);
 

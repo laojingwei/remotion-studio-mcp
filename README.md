@@ -41,8 +41,9 @@ npm run dev          # API(4380) + 编辑器(5173)
   ```
 - 改完代码自检：
   ```bash
-  npm test                  # op reducer 单测（纯函数，不需要服务）
-  npm run build && npm run verify   # 端到端冒烟：临时工程 + 无头浏览器真实拖动，跑完自动清理
+  npm test                  # 单测：op reducer / 场景 / 音频 / 3D DSL / 安全边界（不需要服务）
+  npm run build && npm run test:e2e  # 编辑器 E2E：真浏览器跑 5 条核心路径（临时数据目录，不碰你的工程）
+  npm run build && npm run verify    # 端到端冒烟：临时工程 + 无头浏览器真实拖动，跑完自动清理
   ```
 
 > **两种端口别混用**：`npm start` / bat 启动后编辑器在 **4380**；
@@ -60,6 +61,8 @@ npm run dev          # API(4380) + 编辑器(5173)
   注意 CORS 缺省**不等于**防 CSRF —— `text/plain` 的简单请求不触发预检，照样会被执行。
 - 真要给同事看，显式开放：`HOST=0.0.0.0 npm start`（启动日志会打一行 ⚠️ 提醒）。
 - 排障时 `/api/health` 会回 `version / host / lan`，先确认这三项再怀疑别处。
+- 想把运行期数据放到别处（多实例并行、CI、换盘）：`STUDIO_DATA_ROOT=/path/to/data npm start`。
+  设了它之后「工作空间」页签的迁移会被明确拒绝——两套路径机制同时开只会互相打架。
 
 ---
 

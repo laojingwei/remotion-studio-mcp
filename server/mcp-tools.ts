@@ -11,6 +11,7 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { listSkills, readSkill } from "./skills.service";
 import { recallAll, remember, type MemoryKind } from "./memory.service";
 import { ROOT as PROJECT_ROOT } from "./root";
+import { DATA_ROOT } from "./paths";
 import { BACKDROP_TYPES } from "../shared/sceneKinds";
 import { BRIEF_STEPS, CONFIRM_GROUPS, CORE_STEPS, briefCoverage, briefProgress, briefToText, confirmBrief, legacyFieldNotice, readBrief, recomputeDesignLock, saveBrief, sceneCountHint, stepMissingFields, type Brief } from "./brief.service";
 import { FORM_SPECS, designLockSummary, lockViolations, normalizeForm } from "../shared/designLock";
@@ -425,7 +426,7 @@ type ProjectLite = {
  * 落盘到 data/agent-state.json：服务重启后还能接上上次的工程（黑盒验证 N-04）。 */
 let lastProjectId: string | null = null;
 
-const AGENT_STATE_FILE = path.join(ROOT, "data", "agent-state.json");
+const AGENT_STATE_FILE = path.join(DATA_ROOT, "agent-state.json");
 
 /** 从盘上读指针。stdio 代理与 HTTP 服务是两个进程，各有一份内存缓存，
  *  指针必须同源，否则「A 通道切换了、B 通道还在旧工程」 */

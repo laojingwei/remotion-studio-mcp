@@ -18,6 +18,7 @@ import fs from "node:fs";
 import path from "node:path";
 
 import { ROOT } from "./root";
+import { DATA_ROOT } from "./paths";
 import { resolvePublicFile } from "./media.service";
 
 export type BeatAnalysis = {
@@ -38,7 +39,7 @@ export type BeatAnalysis = {
   cached: boolean;
 };
 
-const CACHE_FILE = path.join(ROOT, "data", "audio-analysis.json");
+const CACHE_FILE = path.join(DATA_ROOT, "audio-analysis.json");
 /** 长音频只分析前 90 秒：3 分钟整曲要 11 秒，90 秒约 5 秒，且 BPM 极少中途变化 */
 const DEFAULT_MAX_SECONDS = 90;
 /**
