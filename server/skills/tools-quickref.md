@@ -1,10 +1,10 @@
 # 工具速查（入口页）
 
-完整说明书在 **`get_guide("manual")`**：《Agent 使用全书》——112 个工具全表（4 常驻 + 108 按需）、能力地图、
+完整说明书在 **`get_guide("manual")`**：《Agent 使用全书》——117 个工具全表（4 常驻 + 113 按需）、能力地图、
 「我想…」意图速查、落地铁律（为什么没生效）。本页只留最快的域索引：
 
 **两层调用**：常驻核心 4 个（start_guide / get_guide / tool_search / tool_call）；
-其余 108 个工具 `tool_search("意图")` 找 → `tool_call(name, args)` 执行（`all=true` 看全量目录，`names=[...]` 取完整参数表）。
+其余 113 个工具 `tool_search("意图")` 找 → `tool_call(name, args)` 执行（`all=true` 看全量目录，`names=[...]` 取完整参数表）。
 
 - 工程：list / switch / create / get / delete / 模板（含删除）/ 历史 / 导入导出
   （当前工程只在 create / import / switch / 删除当前工程时变；显式 projectId 只影响本次调用）

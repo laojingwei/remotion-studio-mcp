@@ -36,6 +36,7 @@ import {
   assetIdOf,
   assetToElement,
   isAssetLibraryId,
+  toAssetId,
   type CustomAsset,
 } from "../shared/assetLibrary";
 import { TRANSITION_TYPES } from "../shared/transitions";
@@ -2022,7 +2023,9 @@ const TOOLS: ToolDef[] = [
       let src = a.src;
       if (!src && a.assetId) {
         const { items } = await api<{ items: { id: string; url: string; name: string }[] }>("/api/library");
-        const hit = items.find((x) => x.id === a.assetId);
+        // 带不带 asset: 前缀都认（upload_asset 回执写的是带前缀的形式）
+        const want = toAssetId(a.assetId);
+        const hit = items.find((x) => toAssetId(x.id) === want);
         if (!hit) throw new Error(`素材库里没有 ${a.assetId}（用 list_assets 查）`);
         src = hit.url;
       }
@@ -4012,18 +4015,36 @@ const TOOLS: ToolDef[] = [
         );
 
       const dur = ((c.endFrame - c.startFrame + 1) / fps).toFixed(1);
+      /**
+       * 头部这行必须和下面「这段里有」一致。
+       * c.withAudio 是**请求**（用户没关音轨），不是事实：工程里一个音频都没有时，
+       * 渲出来是条空轨，还写「带音轨」会让人以为有声，等听到才发现白等一轮。
+       */
+      const audioHead = c.withAudio
+        ? hasAudio
+          ? "带音轨"
+          : "静音（工程里还没有音频）"
+        : "静音";
+      /** 问哪几条要看这段里真有什么：没字幕还问「字幕来得及读吗」是空问题 */
+      const askList = [
+        "① 转场刺不刺眼 / 有没有两幕文字叠在一起",
+        subLines > 0
+          ? "② 字幕来得及读完吗（尤其念得快的那几句）"
+          : "② 该有字的地方有没有空着（这版一幕字幕都没写）",
+        hasAudio ? "③ BGM 压过人声没有" : null,
+      ]
+        .filter(Boolean)
+        .join(`${nl}  `);
       return (
-        `预览片段：${dur}s · ${Math.round((c.scale * 100))}% 分辨率 · ${c.withAudio ? "带音轨" : "静音"} · ${c.sections} 帧` +
+        `预览片段：${dur}s · ${Math.round((c.scale * 100))}% 分辨率 · ${audioHead} · ${c.sections} 帧` +
         `${nl}地址：${BASE}${c.url}` +
         `${nl}本地：${c.localPath}` +
         `${nl}渲染 ${(c.renderMs / 1000).toFixed(1)}s（预估 ${estSec}s）${c.bundleMs > 800 ? `（含打包 ${(c.bundleMs / 1000).toFixed(1)}s）` : ""}` +
         `${nl}选取理由：${reason}` +
         `${nl}这段里有：${seams} 个转场、${subLines} 句字幕${hasAudio ? "、有音轨" : "、没有音轨"}` +
-        `${nl}${nl}**把链接发给用户，只问三件事**（问多了他答不清）：` +
-        `${nl}  ① 转场刺不刺眼 / 有没有两幕文字叠在一起` +
-        `${nl}  ② 字幕来得及读完吗（尤其念得快的那几句）` +
-        `${nl}  ③ BGM 压过人声没有` +
-        `${nl}这三件事在这一段里全能判断，别等到整片。`
+        `${nl}${nl}**把链接发给用户，按这几条问**（问多了他答不清）：` +
+        `${nl}  ${askList}` +
+        `${nl}这些在这一段里全能判断，别等到整片。`
       );
     },
   },
@@ -4563,13 +4584,15 @@ const TOOLS: ToolDef[] = [
     name: "rename_asset",
     description: "给「我的素材」改名（只改显示名，不影响文件与已引用它的工程）。",
     shape: {
-      id: z.string().optional().describe("素材 id（list_assets 里能看到）"),
+      id: z.string().optional().describe("素材 id（list_assets 里能看到；带不带 asset: 前缀都认）"),
       assetId: z.string().optional().describe("同 id（别名，delete_asset 用的是这个名字）"),
       name: z.string().describe("新名字"),
     },
     run: async (a) => {
-      const id = a.id ?? a.assetId;
-      if (!id) throw new Error("缺少 id（素材 id，list_assets 里查；也认 assetId）");
+      const raw = a.id ?? a.assetId;
+      if (!raw) throw new Error("缺少 id（素材 id，list_assets 里查；也认 assetId）");
+      // 带不带 asset: 前缀都认（upload_asset 回执给的是带前缀的）
+      const id = toAssetId(raw);
       const { item } = await api<{ item: any }>(`/api/library/${id}`, {
         method: "PATCH",
         headers: { "content-type": "application/json" },

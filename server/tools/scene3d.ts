@@ -35,6 +35,7 @@ import {
   text,
 } from "./_shared";
 import type { ToolDef } from "./_shared";
+import { toAssetId } from "../../shared/assetLibrary";
 import fs from "node:fs";
 import path from "node:path";
 import { BRIEF_STEPS, CONFIRM_GROUPS, CORE_STEPS, briefCoverage, briefProgress, briefToText, confirmBrief, legacyFieldNotice, readBrief, recomputeDesignLock, saveBrief, sceneCountHint, stepMissingFields, type Brief } from "../brief.service";
@@ -112,16 +113,43 @@ export const SCENE3D_TOOLS: ToolDef[] = [
           .slice(0, 4)
           .join(" ");
       const byId = new Map(g.nodes.map((n) => [n.id, n]));
-      const depthOf = (id: string) => {
-        let d = 0;
-        let cur = byId.get(id);
-        while (cur?.parent && d < 32) {
-          d++;
-          cur = byId.get(cur.parent);
+      /**
+       * 按父子关系做一趟 DFS 展开，不能拿数组顺序 + 缩进硬套。
+       *
+       * 原来就是直接 `g.nodes.map(...)` 配 `depthOf()` 缩进，等于假设数组是「父节点后面紧跟着它的子树」。
+       * 实际数据不保证：太阳系的 saturn_ring / piv_moon 排在数组末尾，缩进对了、
+       * 视觉上却落在最后一个同级节点（海王星）下面——agent 读到的层级是错的，
+       * 照着改就会把土星环当成海王星的子节点。
+       *
+       * 这里只改**展示顺序**，节点本身与父引用原样不动。
+       */
+      const childMap = new Map<string, typeof g.nodes>();
+      const roots: typeof g.nodes = [];
+      for (const n of g.nodes) {
+        const pid = n.parent && byId.has(n.parent) ? n.parent : null;
+        if (!pid) roots.push(n);
+        else {
+          const arr = childMap.get(pid);
+          if (arr) arr.push(n);
+          else childMap.set(pid, [n]);
         }
-        return d;
+      }
+      const walked = new Set<string>();
+      const ordered: Array<{ n: (typeof g.nodes)[number]; depth: number; note?: string }> = [];
+      const walk = (n: (typeof g.nodes)[number], depth: number) => {
+        // 父子互相指/自己指自己时会成环，直接断开，别让输出无限递归
+        if (walked.has(n.id)) return;
+        walked.add(n.id);
+        const dangling = n.parent && !byId.has(n.parent) ? `父节点 ${n.parent} 不存在` : undefined;
+        ordered.push({ n, depth, note: dangling });
+        for (const c of childMap.get(n.id) ?? []) walk(c, depth + 1);
       };
-      const lines = g.nodes.map((n) => {
+      for (const r of roots) walk(r, 0);
+      // 环里的节点从根走不到，补在末尾并标明，否则它们会凭空从输出里消失
+      for (const n of g.nodes) {
+        if (!walked.has(n.id)) ordered.push({ n, depth: 0, note: "父子成环，已断开显示" });
+      }
+      const lines = ordered.map(({ n, depth, note }) => {
         const bits = [geoOf(n.geometry)];
         const m = n.material;
         if (m?.color) bits.push(m.color);
@@ -133,7 +161,8 @@ export const SCENE3D_TOOLS: ToolDef[] = [
         if ((n.anim ?? []).length) bits.push(`anim×${n.anim!.length}`);
         if (n.hidden) bits.push("[隐藏]");
         if (n.locked) bits.push("[锁定]");
-        const pad = "  ".repeat(depthOf(n.id));
+        if (note) bits.push(`⚠ ${note}`);
+        const pad = "  ".repeat(depth);
         return `${pad}- ${n.id}${n.label ? `（${n.label}）` : ""} | ${bits.join(" | ")}`;
       });
       const out = [`「${s.name}」sceneId=${s.id} · ${g.nodes.length} 个节点`, ...lines];
@@ -2305,12 +2334,18 @@ export const SCENE3D_TOOLS: ToolDef[] = [
     description:
       "从素材库删除一个素材条目并回收文件（不可撤销）。仍在被工程引用的文件会自动保留，只删条目。删除前建议先和用户确认。",
     shape: {
-      assetId: z.string().optional().describe("素材条目 id（list_assets 里查）"),
+      assetId: z.string().optional().describe("素材条目 id（list_assets 里查；带不带 asset: 前缀都认）"),
       id: z.string().optional().describe("同 assetId（别名）"),
     },
     run: async (a) => {
-      const id = a.assetId ?? a.id;
-      if (!id) throw new Error("缺少 assetId（素材条目 id，list_assets 里查；也认 id）");
+      const raw = a.assetId ?? a.id;
+      if (!raw) throw new Error("缺少 assetId（素材条目 id，list_assets 里查；也认 id）");
+      /**
+       * 两种写法都认：`asset:as_xxx`（upload_asset / list_assets 回执给的）与 `as_xxx`（接口用的）。
+       * 以前只认裸 id，agent 照抄上传回执里的 id 会得到「素材库里没有 asset:as_xxx」——
+       * 明明刚上传成功，很难不怀疑到别处去。
+       */
+      const id = toAssetId(raw);
       const res = await api<{ removed: any; reclaimed: number }>(`/api/library/${id}`, {
         method: "DELETE",
       });

@@ -10,7 +10,6 @@
 import { spawn } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
 import { z } from "zod";
 import { recallAll, remember, type MemoryKind } from "../memory.service";
 import { DATA_ROOT } from "../paths";
@@ -217,8 +216,19 @@ export async function probedDurationFrames(src: string, fps = 30): Promise<numbe
   }
   return null;
 }
-/** 用脚本自身位置推工程根目录，不依赖 MCP 宿主的 cwd */
-export const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+/**
+ * 工程根目录：从 server/root.ts 取，**不能按本文件位置算**。
+ *
+ * 本文件在 `server/tools/` 下，`path.dirname(import.meta.url) + ".."` 只到 `server/`，
+ * 于是 out/、public/、node_modules/ 全指向 server/ 里不存在的目录。
+ * 2026-11 拆分 mcp-tools 时就这样踩了三条：
+ *   · check_project 把每个 /assets/* 都报成「素材缺失」（实际文件都在）
+ *   · export_project 把 zip 写进 server/out/project-bundles/
+ *   · ensureServer 拉起服务时 spawn 不到 tsx 与 server/index.ts，白等 20 秒后报「无法启动」
+ * 根目录只允许有一处按文件位置计算，就是 server/root.ts。
+ */
+import { ROOT } from "../root";
+export { ROOT };
 
 export const log = (...args: unknown[]) => console.error("[mcp]", ...args);
 
