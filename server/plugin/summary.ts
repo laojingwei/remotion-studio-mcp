@@ -17,6 +17,8 @@ import {
 } from "./discovery";
 import { describePermissions } from "./permissions";
 import { HOOK_LABEL, hookKindsOf, hookStatus } from "./hooks";
+import { WIRED_PERMISSIONS, pluginToolStatus } from "./plugin-tools";
+import { pluginToolNamesOf } from "./tool-registry";
 
 const NL = String.fromCharCode(10);
 
@@ -51,7 +53,21 @@ function pluginBlock(p: DiscoveredPlugin): string[] {
   }
 
   // 只有代码插件才会声明权限；L0 插件这里会显示"不需要任何权限"
-  out.push(`   权限：${describePermissions(p.manifest?.permissions ?? [])}`);
+  const perms = p.manifest?.permissions ?? [];
+  out.push(`   权限：${describePermissions(perms)}`);
+  /*
+   * 声明了但这一版没有对应 API 的权限要标出来。
+   * 不标的话，作者会以为写了 "render" 就能渲染，然后花半天查"为什么没效果"。
+   */
+  const unwired = perms.filter((x) => !WIRED_PERMISSIONS.includes(x));
+  if (unwired.length) {
+    out.push(`   ⚠ ${unwired.join("、")} 本版本没有对应 API：声明了也用不上（目前只接了 ${WIRED_PERMISSIONS.join(" / ")}）`);
+  }
+
+  const toolNames = pluginToolNamesOf(p.id);
+  if (toolNames.length) {
+    out.push(`   工具：${toolNames.join("、")}（${toolNames.length} 个，tool_search 能搜到）`);
+  }
 
   /*
    * 钩子插件单独说一句它挂了哪几个钩子。
@@ -84,7 +100,7 @@ const HOW_TO = [
   "  styles/presets.json  风格预设      → apply_style 一键落色板/字体/转场",
   "  brief/steps.json     问诊步骤      → intake / save_brief 按你的步骤走（可替换或追加）",
   "  scenes/<type>.json + <type>.tsx  场景组件 → 选择器里多一种画面（**必须放项目内**，要重新打包）",
-  "  plugin.ts            流程钩子      → 自检时补检查项 / 写入后复盘 / 设计锁补规则（见下）",
+  "  plugin.ts            钩子/工具     → 自检·写入·设计锁里说话，或加一个 MCP 工具",
   "放好就生效，不用重启。技能/风格/问诊/钩子改完立刻生效；场景组件要等一次自动重新打包（几十秒）。",
   "需要更细的控制（版本、作者、权限）时再加 manifest.json；规则与示例见 plugins/README.md。",
   "元素库、整片模板、3D 配方、转场、特效属于后续批次，现在放进去会被识别但不生效（上面会标「本版本未接入」）。",
@@ -106,9 +122,11 @@ export function pluginsToText(): string {
   const bad = all.filter((p) => p.errors.length);
 
   const hs = hookStatus();
+  const ts = pluginToolStatus();
   const head = [
     `插件（启用 ${ok.length} / 停用 ${off.length}${bad.length ? ` / 失败 ${bad.length}` : ""}）· 插件 API v${PLUGIN_API_VERSION}`,
     ...(hs.active ? [`钩子：${hs.count} 条已挂上（${hs.plugins.join("、")}）`] : []),
+    ...(ts.active ? [`插件工具：${ts.count} 个（${ts.plugins.join("、")}）`] : []),
     "扫描目录：",
     ...rootLines(),
   ].join(NL);

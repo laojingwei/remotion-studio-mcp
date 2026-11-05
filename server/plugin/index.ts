@@ -58,4 +58,18 @@ export {
   type HookError,
 } from "./hooks";
 
+export {
+  WIRED_PERMISSIONS,
+  ensurePluginTools,
+  pluginToolStatus,
+  resetPluginToolCache,
+  type PluginToolCtx,
+  type PluginToolStatus,
+  type PluginToolError,
+} from "./plugin-tools";
+
+export { pluginTools, pluginToolEntries, pluginToolNamesOf, type PluginToolEntry } from "./tool-registry";
+
+export { buildParamShape, PARAM_TYPES, type ParamSpec, type ParamType } from "./tool-params";
+
 export { pluginsToText } from "./summary";

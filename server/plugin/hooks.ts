@@ -137,7 +137,8 @@ const ENTRY_FILES = ["plugin.ts", "plugin.mts", "plugin.mjs", "plugin.js", "inde
 /** 打包产物落在这里。放系统临时目录：不该混进用户的 plugins/ 或 data/ */
 const CACHE_DIR = path.join(os.tmpdir(), "remotion-studio-plugin-cache");
 
-function hookFileOf(dir: string): string | null {
+/** 插件入口文件（`plugin.ts` / `index.mjs` …）。工具插件复用同一个入口，所以导出 */
+export function pluginEntryFile(dir: string): string | null {
   for (const name of ENTRY_FILES) {
     const f = path.join(dir, name);
     try {
@@ -194,7 +195,8 @@ function esbuildErrText(err: unknown): string {
  * 优先走 esbuild 打包（见文件头注释：query 缓存在项目外不生效）。
  * 打包失败必须报出来——静默退回直接 import 会让语法错误看起来像"插件没装"。
  */
-async function importEntry(file: string, id: string): Promise<{ mod: Record<string, unknown>; artifact: string }> {
+/** 加载插件入口模块（带 esbuild 缓存）。工具插件复用，导出 */
+export async function loadPluginModule(file: string, id: string): Promise<{ mod: Record<string, unknown>; artifact: string }> {
   const st = fs.statSync(file);
   const tag = `${Math.round(st.mtimeMs)}-${st.size}`;
   const eb = await esbuildOf();
@@ -260,11 +262,12 @@ function pruneCache(keep: Set<string>): void {
  * size 必须进指纹：编辑器同一个时间片里连存两次，mtime 可能一样，
  * 只看 mtime 会漏掉后一次修改。
  */
-function computeFingerprint(list: DiscoveredPlugin[]): string {
+/** 入口指纹：工具插件与钩子共用同一套判定，改了任一处两边一起重载 */
+export function entryFingerprint(list: DiscoveredPlugin[]): string {
   const parts: string[] = [];
   for (const p of list) {
     if (!p.provides.includes("hooks")) continue;
-    const f = hookFileOf(p.dir);
+    const f = pluginEntryFile(p.dir);
     if (!f) {
       parts.push(`${p.id}@missing`);
       continue;
@@ -324,7 +327,7 @@ function normalize(raw: unknown): HookVerdict {
 export async function ensurePluginHooks(): Promise<HookStatus> {
   if (loading) return loading;
   const list = activePlugins();
-  const next = computeFingerprint(list);
+  const next = entryFingerprint(list);
   if (next === fingerprint) return hookStatus();
 
   loading = (async () => {
@@ -334,14 +337,14 @@ export async function ensurePluginHooks(): Promise<HookStatus> {
 
     for (const p of list) {
       if (!p.provides.includes("hooks")) continue;
-      const file = hookFileOf(p.dir);
+      const file = pluginEntryFile(p.dir);
       if (!file) {
         errs.push({ pluginId: p.id, message: `声明了钩子但没找到入口文件（应有一个 ${ENTRY_FILES.join(" / ")}）` });
         continue;
       }
       let mod: Record<string, unknown>;
       try {
-        const loadedEntry = await importEntry(file, p.id);
+        const loadedEntry = await loadPluginModule(file, p.id);
         mod = loadedEntry.mod;
         keep.add(loadedEntry.artifact);
       } catch (err) {

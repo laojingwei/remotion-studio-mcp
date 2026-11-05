@@ -133,6 +133,8 @@ import { RESOURCE_TOOLS } from "./tools/resources";
 import { PLUGIN_TOOLS } from "./tools/plugin";
 import { ensurePluginScenes } from "./plugin/scene-meta";
 import { ensurePluginHooks } from "./plugin/hooks";
+import { ensurePluginTools } from "./plugin/plugin-tools";
+import { pluginTools } from "./plugin/tool-registry";
 
 // 老调用方（server/index.ts）从这里引，保持导出面不变
 export { validateToolArgs } from "./tools/_shared";
@@ -5577,7 +5579,9 @@ const TOOLS: ToolDef[] = [
         .describe("按名字精确取某几个工具的完整文档（含参数表）——all=true 之后第二步就用它"),
     },
     run: async (a) => {
-      const others = TOOLS.filter((d) => !CORE_TOOL_NAMES.has(d.name) && !d.retiredTo);
+      // 插件工具和内置工具一起参与搜索：对 agent 来说它们没有区别，
+      // 分开列会变成"装了插件但搜不到"这种最难解释的状态
+      const others = [...TOOLS, ...pluginTools()].filter((d) => !CORE_TOOL_NAMES.has(d.name) && !d.retiredTo);
       if (a.names?.length) {
         const wanted: string[] = a.names;
         const picked = wanted
@@ -5662,7 +5666,8 @@ const TOOLS: ToolDef[] = [
     run: async (a) => {
       const name = a.name;
       if (!name || name === "tool_call") throw new Error("tool_call 不能调用自身");
-      const def = TOOLS.find((t) => t.name === name);
+      // 内置优先：插件工具撞名在注册时就被拦掉了，这里是兜底
+      const def = TOOLS.find((t) => t.name === name) ?? pluginTools().find((t) => t.name === name);
       if (!def) throw new Error(`没有工具「${name}」。先 tool_search 找（传 all=true 看全量目录），注意拼写`);
       let out = await def.run(validateToolArgs(def, (a.args ?? {}) as Record<string, unknown>) as never);
       // 门面模式下所有工具都从这里过：脏提醒必须挂在这儿，注册层的包装覆盖不到
@@ -5838,6 +5843,17 @@ export function buildMcpServer(): McpServer {
         await ensurePluginHooks();
       } catch (err) {
         console.warn("[plugin] 钩子加载失败（不影响工具调用）：", err);
+      }
+
+      /*
+       * 插件工具：必须在 tool_search 之前加载完，否则用户刚装的工具搜不到。
+       * 两者读同一个入口文件（共享 esbuild 产物缓存），所以这里只是把
+       * 模块里的 tools 数组变成 ToolDef 并登记，不会重复打包。
+       */
+      try {
+        await ensurePluginTools();
+      } catch (err) {
+        console.warn("[plugin] 工具加载失败（不影响工具调用）：", err);
       }
 
       /**

@@ -10,6 +10,7 @@ import path from "node:path";
 import { metaList } from "../shared/sceneMetas";
 import { ensurePluginScenes, pluginSceneTypes } from "./plugin/scene-meta";
 import { ensurePluginHooks } from "./plugin/hooks";
+import { ensurePluginTools } from "./plugin/plugin-tools";
 import type { Op } from "../shared/ops";
 import { createSeedProject } from "../shared/ops";
 import type { Project } from "../shared/schema";
@@ -131,6 +132,7 @@ const app = new Hono();
 /** 插件问题只报一次，避免每个请求刷屏 */
 let ensuredOnce = false;
 let hooksReported = false;
+let toolsReported = false;
 
 /**
  * 插件场景同步：**每个请求进来先做一次**。
@@ -176,6 +178,19 @@ app.use("*", async (_c, next) => {
     }
   } catch (err) {
     console.warn("[plugin] 钩子加载失败（不影响请求）：", err);
+  }
+  /*
+   * 插件工具与钩子读同一个入口文件，放在同一处加载。
+   * 分开加载不会出错（共享 esbuild 产物缓存），只是分开写两段 init 更容易漏掉一处。
+   */
+  try {
+    const ts = await ensurePluginTools();
+    if (ts.errors.length && !toolsReported) {
+      toolsReported = true;
+      for (const e of ts.errors) console.warn(`[plugin] ${e.pluginId}：${e.message}`);
+    }
+  } catch (err) {
+    console.warn("[plugin] 工具加载失败（不影响请求）：", err);
   }
   await next();
 });
@@ -2009,6 +2024,9 @@ try {
  */
 void ensurePluginHooks().catch(() => {
   /* 中间件里有正式的日志与兜底 */
+});
+void ensurePluginTools().catch(() => {
+  /* 同上 */
 });
 
 const httpServer = serve({ fetch: app.fetch, port: PORT, hostname: HOST }, (info) => {

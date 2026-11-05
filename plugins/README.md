@@ -14,15 +14,15 @@
 
 ## 一个插件长什么样
 
-```
+``` 
 plugins/我的插件/
   skills/*.md            技能指南      → list_guides / get_guide
   styles/*.md            风格规则      → list_styles / get_style / apply_style
   styles/presets.json    风格预设      → apply_style 一键落字段
   brief/steps.json       问诊步骤      → intake / save_brief 按你的流程走
   scenes/*.json + *.tsx  场景组件      → 选择器里多一种画面（必须放项目内）
-  plugin.ts              流程钩子      → 介入自检 / 写入复盘 / 设计锁
-  manifest.json          可选——只有需要声明版本/权限时才写
+  plugin.ts              钩子 / 工具   → 自检·写入·设计锁里说话，或加一个 MCP 工具
+  manifest.json          可选——需要声明权限/版本时才写
 ```
 
 **没有 manifest 也能用**：宿主按目录结构推断。这是刻意的——想加一份指南的人
@@ -38,6 +38,7 @@ plugins/我的插件/
 | 问诊步骤 | `brief/steps.json`，替换或追加内置 11 步；支持 `x.` 扩展字段 |
 | **场景组件** | `scenes/<type>.json` + `scenes/<type>.tsx`，给编辑器加一种新画面 |
 | **流程钩子** | `plugin.ts`，在自检/写入/设计锁三个环节说一句话；不改数据，只给意见 |
+| **工具** | `plugin.ts` 的 `tools`，给 agent 加一个 MCP 工具；能读工程、改工程（要声明权限，配合 `dryRun`） |
 
 元素库、整片模板、3D 配方、转场、特效属于后续批次，
 现在放进去会被识别但**明确标注不生效**（见 `list_plugins`）。
@@ -132,6 +133,59 @@ export default {
 
 完整可运行示例：`plugins/_example-audit/`（把 `plugin.ts.example` 改名成 `plugin.ts` 即生效）。
 
+## 工具插件：给 agent 加一个能干活的功能
+
+同一个 `plugin.ts` 里再加一个 `tools` 数组，agent 就能 `tool_search` 到它、`tool_call` 调它：
+
+```ts
+export default {
+  tools: [{
+    name: "my_prefix_reading_speed",          // 带插件前缀，撞内置名会被拒
+    description: "逐幕算语速，挑出过快/过慢的幕",  // agent 靠它决定要不要调
+    params: {
+      projectId: { type: "string", required: true, desc: "工程 id" },
+      dryRun:    { type: "boolean", default: true, desc: "true=只预览" },
+    },
+    async run(args, ctx) {
+      const p = ctx.readProject(args.projectId);   // 需要 project:read
+      return `共 ${p.scenes.length} 幕`;
+    },
+  }],
+};
+```
+
+能力（`ctx` 上只有这些，且每一条都要求权限）：
+
+| 方法 | 需要 |
+|---|---|
+| `ctx.listProjects()` / `ctx.readProject(id)` | `project:read` |
+| `ctx.applyOps(id, ops)` | `project:write` |
+| `ctx.log(msg)` | 无 |
+
+权限写在 `manifest.json`：
+
+```json
+{ "permissions": ["project:read", "project:write"] }
+```
+
+没声明就调用 → 直接抛 `PermissionDenied`，报错里说清缺哪一条。
+
+**必须说清：权限不是沙箱。** `plugin.ts` 是任意代码，`import fs` 就能绕过全部检查。
+权限声明的真实作用是**知情同意**——用户 `list_plugins` 能看到"这个插件要改我的工程"，
+再决定装不装。它挡住的是"通过宿主 API 的越权"，挡不住恶意代码。
+
+参数**不要 `import { z } from "zod"`**：插件带进来的那份 zod 和宿主那份不是同一个实例，
+schema 会静默失效。只声明数据（`string` / `number` / `boolean` / `enum` / `stringArray`），
+宿主用自己的 zod 建 schema。
+
+三条硬规矩：**名字带前缀**（撞名会被拒）、**写入类工具必须有 `dryRun` 且默认 `true`**、
+**出错就抛**（吞掉返回空字符串会让 agent 以为成功了）。
+
+`render` / `net` / `exec` / `assets:*` 有定义但**没有对应 API**，声明了也用不上
+（`list_plugins` 会标出来）。
+
+可运行示例：`plugins/_example-tool/`（语速体检 + 批量编号）。
+
 ## 写坏了会怎样
 
 不会拖垮服务。`list_plugins` 会把这个插件单独标成"加载失败"并给原因，
@@ -142,5 +196,6 @@ export default {
 - **加内容**（技能/风格）：`cp plugins/_example-content plugins/我的第一个插件`，改里面的 md
 - **改问诊**：看 `plugins/_example-brief/`，把 `steps.json.example` 改名成 `steps.json` 就生效
 - **加规则**（画质守门员那类）：看 `plugins/_example-audit/`，把 `plugin.ts.example` 改名成 `plugin.ts`
+- **加工具**（给 agent 用）：看 `plugins/_example-tool/`，同样改名；它示范了只读 + 写入两种工具和权限声明
 
-三份示例都可以整个删掉，不影响任何东西。
+四份示例都可以整个删掉，不影响任何东西。

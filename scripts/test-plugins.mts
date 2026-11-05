@@ -519,7 +519,7 @@ const { hasHook, runHook, ensurePluginHooks, hookStatus, hookKindsOf, resetHookC
 const { auditBriefAgainstProject } = await import("../server/brief-audit.service");
 const { recomputeDesignLock } = await import("../server/brief.service");
 const { projects } = await import("../server/project.service");
-const { writeProject } = await import("../server/store");
+const { writeProject, readProject } = await import("../server/store");
 const { createSeedProject } = await import("../shared/ops");
 
 /** 钩子加载是异步的，所以这一节需要自己的 async 版本 */
@@ -716,6 +716,221 @@ await testAsync("接进写入：ops:review 的提醒出现在 apply 的回执里
   assert.ok(
     res.summary.some((s) => s.includes("[watcher] 这批 1 条操作")),
     `写入回执里要能看到插件复盘，实际：${JSON.stringify(res.summary)}`,
+  );
+});
+
+/* ────────────────────────── 工具插件（批次 4b） ────────────────────────── */
+
+const { ensurePluginTools, pluginToolStatus, resetPluginToolCache, WIRED_PERMISSIONS } = await import(
+  "../server/plugin/plugin-tools"
+);
+const { pluginTools } = await import("../server/plugin/tool-registry");
+const { buildParamShape } = await import("../server/plugin/tool-params");
+
+/** 写一个只含 tools 的插件（返回工具必须显式调用，插件体里不自动执行） */
+const writeToolPlugin = (dir: string, toolsBody: string, permissions: string[] = []) => {
+  write(
+    `${dir}/manifest.json`,
+    JSON.stringify({ apiVersion: 1, id: dir, name: dir, provides: ["hooks"], permissions }),
+  );
+  write(`${dir}/plugin.ts`, `export default { tools: ${toolsBody} };`);
+};
+
+const toolByName = (name: string) => pluginTools().find((t) => t.name === name);
+
+await testAsync("权限表：只接线读/写两条（其余只有定义，不能假装能用）", async () => {
+  assert.deepEqual(WIRED_PERMISSIONS, ["project:read", "project:write"]);
+});
+
+await testAsync("参数声明：各类型都能转成 zod，必填/可选/default 各自生效", async () => {
+  const { shape, issues } = buildParamShape({
+    a: { type: "string", required: true, desc: "必填文本" },
+    b: { type: "number", min: 1, max: 9 },
+    c: { type: "boolean", default: true },
+    d: { type: "enum", values: ["x", "y"] },
+    e: { type: "stringArray" },
+  });
+  assert.deepEqual(issues, []);
+  assert.equal(shape.a.safeParse(undefined).success, false, "required 要拒空");
+  assert.equal(shape.b.safeParse(0).success, false, "min 要生效");
+  assert.equal(shape.c.parse(undefined), true, "default 要生效");
+  assert.equal(shape.d.safeParse("z").success, false, "enum 要拒非法值");
+  assert.equal(shape.e.safeParse(["k"]).success, true);
+});
+
+await testAsync("参数声明写坏：报出来且不注册（参数错的工具比没有更糟）", async () => {
+  const bad1 = buildParamShape({ e: { type: "enum", values: ["only"] } });
+  assert.ok(bad1.issues.some((x) => x.includes("values 少于两个")), JSON.stringify(bad1.issues));
+  const bad2 = buildParamShape({ "Bad-Name": { type: "string" } });
+  assert.ok(bad2.issues.some((x) => x.includes("不合法")));
+  const bad3 = buildParamShape({ x: { type: "object" } });
+  assert.ok(bad3.issues.some((x) => x.includes("不支持")));
+});
+
+await testAsync("工具注册：注册后能按名查到，参数 schema 已建好", async () => {
+  resetPlugins();
+  writeToolPlugin(
+    "tk",
+    '[{ name: "tk_hello", description: "打个招呼", params: { who: { type: "string", required: true, desc: "谁" } }, run: (a) => `hi ${a.who}` }]',
+  );
+  resetPluginToolCache();
+  const st = await ensurePluginTools();
+  assert.equal(st.count, 1);
+  assert.deepEqual(st.plugins, ["tk"]);
+  const def = toolByName("tk_hello")!;
+  assert.ok(def, "工具应能被查到");
+  assert.equal(def.shape.who.safeParse(undefined).success, false);
+});
+
+await testAsync("工具名撞内置 / 撞别的插件：拒绝注册并说明原因", async () => {
+  resetPlugins();
+  writeToolPlugin("dup", '[{ name: "preview_frames", description: "撞内置", run: () => "x" }]');
+  writeToolPlugin("dup2", '[{ name: "dup2_a", description: "占位", run: () => "x" }]');
+  writeToolPlugin("dup3", '[{ name: "dup2_a", description: "撞别人的", run: () => "x" }]');
+  resetPluginToolCache();
+  const st = await ensurePluginTools();
+  assert.ok(
+    st.errors.some((e) => e.pluginId === "dup" && e.message.includes("内置工具重名")),
+    `要指出撞了内置：${JSON.stringify(st.errors)}`,
+  );
+  assert.ok(
+    st.errors.some((e) => e.pluginId === "dup3" && e.message.includes("别的插件工具重名")),
+    `要指出撞了别的插件：${JSON.stringify(st.errors)}`,
+  );
+  assert.ok(toolByName("dup2_a"), "没撞名的那个要留下");
+  assert.equal(toolByName("preview_frames"), undefined, "撞内置的不能覆盖内置");
+});
+
+await testAsync("工具名不合法 / 缺 description / 缺 run：三个都拒，且不拖垮别的", async () => {
+  resetPlugins();
+  writeToolPlugin(
+    "bad",
+    '[' +
+      '{ name: "Bad Name", description: "名字不合法", run: () => "x" },' +
+      '{ name: "bad_nodesc", run: () => "x" },' +
+      '{ name: "bad_norun", description: "没有 run" },' +
+      '{ name: "bad_ok", description: "这个是对的", run: () => "ok" }' +
+      "]",
+  );
+  resetPluginToolCache();
+  const st = await ensurePluginTools();
+  assert.equal(st.count, 1, "只该注册那条合法的");
+  assert.equal(st.errors.length, 3, `三条错各报一次，实际：${JSON.stringify(st.errors)}`);
+  assert.ok(toolByName("bad_ok"));
+});
+
+await testAsync("权限：没声明就读工程 → PermissionDenied，报错说清缺哪条", async () => {
+  resetPlugins();
+  writeToolPlugin(
+    "noperm",
+    '[{ name: "noperm_read", description: "读但不声明权限", run: (a, ctx) => JSON.stringify(ctx.listProjects()) }]',
+  );
+  resetPluginToolCache();
+  await ensurePluginTools();
+  const def = toolByName("noperm_read")!;
+  await assert.rejects(
+    () => def.run({}),
+    (err: Error) => err.message.includes("project:read") && err.message.includes("没有声明"),
+    "没声明权限必须抛错，不能静默返回空",
+  );
+});
+
+await testAsync("权限：声明了 project:read 就能读真工程", async () => {
+  resetPlugins();
+  writeToolPlugin(
+    "canread",
+    '[{ name: "canread_get", description: "读工程名", params: { id: { type: "string", required: true, desc: "工程 id" } }, run: (a, ctx) => String((ctx.readProject(a.id) as any).name) }]',
+    ["project:read"],
+  );
+  resetPluginToolCache();
+  await ensurePluginTools();
+  const seed = { ...createSeedProject(), id: "permtest", name: "有权限能读" };
+  writeProject(seed as never);
+  const out = await toolByName("canread_get")!.run({ id: "permtest" });
+  assert.equal(out, "有权限能读");
+});
+
+await testAsync("权限：没 project:write 就改不了工程（读了也不能顺手写）", async () => {
+  resetPlugins();
+  writeToolPlugin(
+    "readonly",
+    '[{ name: "readonly_write", description: "只声明了读却想写", run: (a, ctx) => JSON.stringify(ctx.applyOps("permtest", [{ op: "update_project", patch: { name: "被改了" } }])) }]',
+    ["project:read"],
+  );
+  resetPluginToolCache();
+  await ensurePluginTools();
+  await assert.rejects(
+    () => toolByName("readonly_write")!.run({}),
+    (err: Error) => err.message.includes("project:write"),
+  );
+});
+
+await testAsync("权限：声明 project:write 后写入真的落库，actor 记为 plugin:<id>", async () => {
+  resetPlugins();
+  writeToolPlugin(
+    "writer",
+    '[{ name: "writer_rename", description: "改工程名", run: (a, ctx) => JSON.stringify(ctx.applyOps("permtest", [{ op: "update_project", patch: { name: "插件改的名" } }])) }]',
+    ["project:read", "project:write"],
+  );
+  resetPluginToolCache();
+  await ensurePluginTools();
+  const out = JSON.parse(String(await toolByName("writer_rename")!.run({})));
+  assert.ok(out.rev > 0, "要回新的 rev");
+  const after = readProject("permtest");
+  assert.equal(after.name, "插件改的名");
+  const hist = projects.history("permtest")[0];
+  assert.equal(hist?.actor, "plugin:writer", `历史里要看出是插件改的，实际：${hist?.actor}`);
+});
+
+await testAsync("返回值不是字符串：序列化成 JSON（别让 agent 收到空回执）", async () => {
+  resetPlugins();
+  writeToolPlugin(
+    "objret",
+    '[{ name: "objret_echo", description: "返回对象", run: () => ({ a: 1 }) }]',
+  );
+  resetPluginToolCache();
+  await ensurePluginTools();
+  assert.equal(await toolByName("objret_echo")!.run({}), '{\n  "a": 1\n}');
+});
+
+await testAsync("改代码后重新 ensure：工具描述跟着变（热更新）", async () => {
+  resetPlugins();
+  writeToolPlugin("hot2", '[{ name: "hot2_t", description: "v1 描述", run: () => "x" }]');
+  resetPluginToolCache();
+  await ensurePluginTools();
+  assert.equal(toolByName("hot2_t")!.description, "v1 描述");
+
+  writeToolPlugin("hot2", '[{ name: "hot2_t", description: "v2 改过了", run: () => "x" }]');
+  await ensurePluginTools();
+  assert.equal(toolByName("hot2_t")!.description, "v2 改过了");
+});
+
+await testAsync("停用插件：它加的工具立刻消失", async () => {
+  resetPlugins();
+  writeToolPlugin("offme", '[{ name: "offme_t", description: "会被停用", run: () => "x" }]');
+  resetPluginToolCache();
+  await ensurePluginTools();
+  assert.ok(toolByName("offme_t"));
+
+  setPluginEnabled("offme", false);
+  await ensurePluginTools();
+  assert.equal(toolByName("offme_t"), undefined, "停用后工具不能还挂着");
+  setPluginEnabled("offme", true);
+});
+
+await testAsync("加载失败的工具插件：不抛、不连累别人，错误由钩子侧报出", async () => {
+  resetPlugins();
+  write("broken/plugin.ts", "export default { tools: [ 这不是合法 JS ][ };");
+  writeToolPlugin("goodone", '[{ name: "goodone_t", description: "正常的工具", run: () => "ok" }]');
+  resetPluginToolCache();
+  resetHookCache();
+  const st = await ensurePluginTools(); // 不该抛
+  assert.equal(st.count, 1, "好插件的工具要照常注册");
+  assert.ok(toolByName("goodone_t"), "坏插件不能连累好插件");
+  await ensurePluginHooks();
+  assert.ok(
+    hookStatus().errors.some((e) => e.pluginId === "broken" && e.message.includes("入口加载失败")),
+    `加载失败必须有地方说清楚：${JSON.stringify(hookStatus().errors)}`,
   );
 });
 
