@@ -34,6 +34,21 @@
 
 ---
 
+## [1.1.2] - 2026-11-05
+
+### 修复
+
+- **1.1.1 构建出的编辑器整页黑屏**（`root` 为空，页面只剩背景色，控制台抛
+  `Cannot set properties of undefined (setting 'Activity')`）。
+  根因：`vite.config.ts` 的 `manualChunks` 把 node_modules 拆出独立的 vendor 块，它和 react 块
+  **互相引用成环**（构建时就有 `Circular chunk: vendor -> react -> vendor` 警告，但只是 warning，不拦构建）。
+  循环 chunk 的模块初始化顺序不定，react 包还没执行完就被别的模块赋值，React 在挂载前就死了。
+  修复：vendor 并入 react 块 —— three / remotion 只单向依赖 react，拆出去是安全的，环从结构上消失。
+  触发条件与依赖安装布局有关（全新安装拿到 rollup 4.67.4 的部署副本必现，锁在 4.65.0 的开发环境不触发），
+  所以 1.1.1 发布时本地验证没有暴露。
+
+---
+
 ## [1.1.1] - 2026-11-05
 
 ### 新增
