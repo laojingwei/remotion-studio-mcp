@@ -670,6 +670,9 @@ if (fs.existsSync(seedPath)) {
   S.props.graph.nodes = L.props.graph.nodes;
   S.props.graph.lights = L.props.graph.lights;
   S.props.graph.camera = L.props.graph.camera;
+  // cards 也要同步：漏了这行的话，包里的种子永远是 0 张卡片，
+  // 用户「重置示例」后右侧什么都不出现（1.1.2 发布前实测踩过）
+  S.props.cards = L.props.cards ?? [];
   seed.audioTracks = p.audioTracks;
   fs.writeFileSync(seedPath, JSON.stringify(seed, null, 2) + "\n");
   console.log("  seed 已同步");
