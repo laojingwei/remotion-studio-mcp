@@ -63,6 +63,7 @@ const HOW_TO = [
   "  skills/*.md          技能指南      → list_guides / get_guide 能读到",
   "  styles/*.md          风格规则      → list_styles 可见、get_style 可读、apply_style 可套",
   "  styles/presets.json  风格预设      → apply_style 一键落色板/字体/转场",
+  "  brief/steps.json     问诊步骤      → intake / save_brief 按你的步骤走（可替换或追加）",
   "放好就生效，不用重启、不用重新打包。删掉文件夹也一样立刻消失。",
   "需要更细的控制（版本、作者、权限）时再加 manifest.json；规则与示例见 plugins/README.md。",
   "元素库、整片模板、3D 配方、转场、特效、场景组件属于后续批次，现在放进去会被识别但不生效（上面会标「本版本未接入」）。",

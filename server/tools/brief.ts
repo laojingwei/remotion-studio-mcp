@@ -24,7 +24,7 @@ import type { ToolDef } from "./_shared";
 
 import fs from "node:fs";
 import path from "node:path";
-import { BRIEF_STEPS, CONFIRM_GROUPS, CORE_STEPS, briefCoverage, briefProgress, briefToText, confirmBrief, confirmGapText, legacyFieldNotice, readBrief, recomputeDesignLock, sceneCountHint, stepMissingFields, type Brief } from "../brief.service";
+import { briefSteps, briefStepsSource, CONFIRM_GROUPS, coreSteps, briefCoverage, briefProgress, briefToText, confirmBrief, confirmGapText, legacyFieldNotice, readBrief, recomputeDesignLock, sceneCountHint, stepMissingFields, type Brief } from "../brief.service";
 import { FORM_SPECS, designLockSummary, normalizeForm } from "../../shared/designLock";
 import { auditBriefAgainstProject, auditToText } from "../brief-audit.service";
 import { densitySummary, projectDensity, rhythmIssues } from "../../shared/density";
@@ -601,7 +601,17 @@ export const BRIEF_TOOLS: ToolDef[] = [
       const cov = briefCoverage(brief);
       const script = readScript(p.id);
 
+      // 问诊模板只探一次：每次 briefStepsSource() 都要扫一遍插件目录
+      const stepSrc = briefStepsSource();
       const covBlock = [
+        // 装了问诊插件才提这一行：内置是默认状态，每次都报一遍只是噪音
+        ...(stepSrc.source === "plugin"
+          ? [
+              `问诊模板：插件「${stepSrc.pluginId}」（${stepSrc.mode === "append" ? "追加在内置之后" : "替换内置"}，` +
+                `共 ${stepSrc.steps.length} 步 / 必答 ${coreSteps(stepSrc.steps).length} 步）` +
+                (stepSrc.issues.length ? `\n  ⚠️ ${stepSrc.issues.join("\n  ⚠️ ")}` : ""),
+            ]
+          : []),
         `契约完整性：${cov.summary}`,
         ...(legacyFieldNotice(brief) ? [legacyFieldNotice(brief) as string] : []),
         ...cov.blocking.slice(0, 10).map((x) => `  ✗ ${x.message}`),
@@ -685,8 +695,8 @@ export const BRIEF_TOOLS: ToolDef[] = [
         ].join(nl);
       }
 
-      const step = BRIEF_STEPS.find((s) => s.no === a.step);
-      if (!step) throw new Error(`没有第 ${a.step} 步（1–11）`);
+      const step = briefSteps().find((s) => s.no === a.step);
+      if (!step) throw new Error(`没有第 ${a.step} 步（现有：${briefSteps().map((s) => s.no).join("/")}）`);
       const missing = stepMissingFields(step.no, brief);
       return [
         `第 ${step.no} 步：${step.title}`,
@@ -713,9 +723,19 @@ export const BRIEF_TOOLS: ToolDef[] = [
         .number()
         .int()
         .min(1)
-        .max(11)
+        .max(99)
         .optional()
-        .describe("第几步（1–11）。1–9 是接单问诊；10 = 稿件类型；11 = 观感与规格"),
+        .describe(
+          "第几步（编号见 intake 返回的步骤表：内置问诊是 1–11，其中 1–9 必答；" +
+            "装了问诊插件的话按插件定义的步骤数）。带 step 时会校验该步必填",
+        ),
+      x: z
+        .record(z.any())
+        .optional()
+        .describe(
+          "扩展字段（插件问诊用）：键 = 步骤里 `x.` 后面的名字，如 {\"competitor\":\"竞品 A\"}。" +
+            "**只作记录，不参与设计锁推导**（填了不会改变密度/转场/音效的档位）",
+        ),
       editMode: z
         .string()
         .optional()
@@ -945,9 +965,16 @@ export const BRIEF_TOOLS: ToolDef[] = [
       const step = a.step;
       const fields: Record<string, unknown> = { ...briefFields };
       if (step !== undefined) {
-        if (step < 1 || step > 11) throw new Error(`step 只能是 1–11（收到 ${step}）`);
+        // 步数由当前生效的问诊模板决定（插件可换），不再硬编码 1–11
+        const stepTable = briefSteps();
+        if (!stepTable.some((s) => s.no === step)) {
+          throw new Error(
+            `step 只能是 ${stepTable.map((s) => s.no).join("/")}（收到 ${step}）。` +
+              `编号见 intake 的步骤表；换过问诊模板的话编号也会变`,
+          );
+        }
         const merged = { ...(readBrief(p.id) ?? {}), ...fields } as Brief;
-        const missing = stepMissingFields(step, merged);
+        const missing = stepMissingFields(step, merged, stepTable);
         if (missing.length) {
           throw new Error(
             `第 ${step} 步还缺必填：${missing.join("、")}。先问用户，补齐后 save_brief(step=${step}, ...)。`,
@@ -972,7 +999,7 @@ export const BRIEF_TOOLS: ToolDef[] = [
       // 批量通道（不带 step）不校验必填：把还缺的步骤明说，别让 agent 以为存完就过了
       const missingSteps =
         step === undefined
-          ? CORE_STEPS.filter((s) => stepMissingFields(s.no, brief as never).length > 0).map((s) => s.no)
+          ? coreSteps().filter((s) => stepMissingFields(s.no, brief as never).length > 0).map((s) => s.no)
           : [];
       const batchWarn = missingSteps.length
         ? `${String.fromCharCode(10)}⚠️ 批量通道不校验步骤：还差第 ${missingSteps.join("、")} 步的必填项，` +

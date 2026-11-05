@@ -115,6 +115,7 @@ export function inferProvides(dir: string): ProvideKind[] {
   if (has("scene3d/skies.json")) out.push("scene3d.sky");
   if (has("scene3d/presets.json")) out.push("scene3d.preset");
   if (has("scene3d/looks.json")) out.push("scene3d.look");
+  if (has("brief/steps.json")) out.push("brief.steps");
   return out;
 }
 
@@ -296,16 +297,18 @@ export function pluginFiles(kind: ProvideKind, ext: string): PluginFile[] {
             ? "templates"
             : kind === "elements"
               ? "elements"
-              : "scene3d";
+              : kind === "brief.steps"
+                ? "brief"
+                : "scene3d";
     const dir = path.join(p.dir, rel);
     for (const e of safeReadDir(dir)) {
       if (!e.isFile() || !e.name.toLowerCase().endsWith(ext)) continue;
-      // scene3d 目录里放的是 skies.json / presets.json / looks.json，
-      // 按 kind 精确挑，避免把 presets 当 skies 读
+      // scene3d 与 brief 目录里按文件名精确挑，避免把 presets 当 skies 读
       if (rel === "scene3d") {
         const want = kind === "scene3d.sky" ? "skies" : kind === "scene3d.preset" ? "presets" : "looks";
         if (path.basename(e.name, ext).toLowerCase() !== want) continue;
       }
+      if (rel === "brief" && path.basename(e.name, ext).toLowerCase() !== "steps") continue;
       out.push({ file: path.join(dir, e.name), pluginId: p.id });
     }
   }

@@ -22,7 +22,7 @@ import { loadUploadFile } from "./upload-path";
 import { recallAll, remember, type MemoryKind } from "./memory.service";
 import { ROOT as PROJECT_ROOT } from "./root";
 import { BACKDROP_TYPES } from "../shared/sceneKinds";
-import { BRIEF_STEPS, CONFIRM_GROUPS, CORE_STEPS, briefCoverage, briefProgress, briefToText, confirmBrief, legacyFieldNotice, readBrief, recomputeDesignLock, saveBrief, sceneCountHint, stepMissingFields, type Brief } from "./brief.service";
+import { CONFIRM_GROUPS, briefCoverage, briefProgress, briefToText, confirmBrief, legacyFieldNotice, readBrief, recomputeDesignLock, saveBrief, sceneCountHint, stepMissingFields, type Brief } from "./brief.service";
 import { listAnnotations, resolveAnnotations } from "./annotation.service";
 import { FORM_SPECS, designLockSummary, lockViolations, normalizeForm } from "../shared/designLock";
 import { auditBriefAgainstProject, auditToText } from "./brief-audit.service";

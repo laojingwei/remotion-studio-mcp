@@ -39,6 +39,7 @@ process.env.STUDIO_DATA_ROOT = DATA_DIR;
 const { scanPlugins, setPluginEnabled } = await import("../server/plugin/discovery");
 const { listSkills } = await import("../server/skills.service");
 const { listStyles, presetOf } = await import("../server/styles.service");
+const { briefSteps, briefStepsSource, coreSteps, stepMissingFields } = await import("../server/brief.service");
 
 let passed = 0;
 const failures: string[] = [];
@@ -249,6 +250,120 @@ test("插件 presets.json 改了就生效（缓存按 mtime 失效）", () => {
   // 同一个文件、改内容：mtime 变了就应该重读
   write("pre/styles/presets.json", JSON.stringify({ "with-preset": preset("第二版名") }));
   assert.equal(presetOf("with-preset")?.name, "第二版名", "预设缓存没按 mtime 失效");
+});
+
+/* ────────────────────────── 问诊步骤 ────────────────────────── */
+
+test("没有问诊插件：内置 11 步，必答 9 步", () => {
+  resetPlugins();
+  const steps = briefSteps();
+  assert.equal(steps.length, 11, "内置应该是 11 步（1–9 必答 + 10 稿件 + 11 观感）");
+  assert.equal(coreSteps(steps).length, 9, "必答应该是 9 步");
+});
+
+test("replace：整套换掉，步号按数组顺序自动分配（忽略用户写的 no）", () => {
+  resetPlugins();
+  write(
+    "br/brief/steps.json",
+    JSON.stringify({
+      mode: "replace",
+      steps: [
+        { no: 99, title: "甲", required: [["goal", "目标"]], questions: [] },
+        { no: 99, title: "乙", required: [["durationSec", "时长"]], questions: [] },
+        { title: "丙", core: false, required: [], questions: [] },
+      ],
+    }),
+  );
+  const steps = briefSteps();
+  assert.equal(steps.length, 3);
+  assert.deepEqual(
+    steps.map((s) => s.no),
+    [1, 2, 3],
+    "用户写的 no 必须被忽略——手写编号必然出现重复/跳号，而 no 是进度判定的键",
+  );
+  assert.deepEqual(
+    steps.map((s) => s.title),
+    ["甲", "乙", "丙"],
+  );
+  assert.equal(coreSteps(steps).length, 2, "core:false 的那步不进必答");
+});
+
+test("append：接在内置之后，编号顺延", () => {
+  resetPlugins();
+  write(
+    "br/brief/steps.json",
+    JSON.stringify({ mode: "append", steps: [{ title: "加一步", required: [["goal", "目标"]], questions: [] }] }),
+  );
+  const steps = briefSteps();
+  assert.equal(steps.length, 12);
+  assert.equal(steps[11].no, 12, "追加步的编号应从内置最大号 +1 开始");
+  assert.equal(steps[11].title, "加一步");
+});
+
+test("直接给数组：等价于 replace", () => {
+  resetPlugins();
+  write("br/brief/steps.json", JSON.stringify([{ title: "只有一步", required: [["goal", "目标"]] }]));
+  const src = briefStepsSource();
+  assert.equal(src.source, "plugin");
+  assert.equal(src.steps.length, 1);
+});
+
+test("坏 JSON：回退内置，并说明原因（不让问诊整个挂掉）", () => {
+  resetPlugins();
+  write("bad/brief/steps.json", "{ 这不是 JSON");
+  const src = briefStepsSource();
+  assert.equal(src.source, "builtin");
+  assert.equal(src.steps.length, 11);
+  assert.ok(
+    src.issues.some((i) => i.includes("解析失败")),
+    `应报解析失败，实际：${src.issues.join(" / ")}`,
+  );
+});
+
+test("缺 title 的步骤被跳过，其余照用", () => {
+  resetPlugins();
+  write(
+    "br/brief/steps.json",
+    JSON.stringify({ steps: [{ title: "好的", required: [] }, { required: [] }, { title: "也好的", required: [] }] }),
+  );
+  const steps = briefSteps();
+  assert.equal(steps.length, 2, "没有 title 的那步应被跳过");
+  assert.ok(briefStepsSource().issues.some((i) => i.includes("缺 title")));
+});
+
+test("全部不合法：回退内置并明说", () => {
+  resetPlugins();
+  write("br/brief/steps.json", JSON.stringify({ steps: [{ required: [] }] }));
+  const src = briefStepsSource();
+  assert.equal(src.source, "builtin");
+  assert.ok(
+    src.issues.some((i) => i.includes("回退内置")),
+    `应说明已回退，实际：${src.issues.join(" / ")}`,
+  );
+});
+
+test("x. 扩展字段：填了才算齐（否则问诊会永远停在这一步）", () => {
+  resetPlugins();
+  write(
+    "br/brief/steps.json",
+    JSON.stringify({ steps: [{ title: "竞品", required: [["x.competitor", "主要竞品"]] }] }),
+  );
+  assert.deepEqual(stepMissingFields(1, {}), ["主要竞品"], "没填就该报缺");
+  assert.deepEqual(stepMissingFields(1, { x: { competitor: "对手 A" } }), [], "填了就不该报缺");
+  // 空字符串算没填（和内置字段一致）
+  assert.deepEqual(stepMissingFields(1, { x: { competitor: "   " } }), ["主要竞品"], "空白字符串应算未填");
+});
+
+test("两个插件都提供问诊：只用第一个，并点名忽略了谁", () => {
+  resetPlugins();
+  write("aaa/brief/steps.json", JSON.stringify({ steps: [{ title: "A 的问诊", required: [] }] }));
+  write("zzz/brief/steps.json", JSON.stringify({ steps: [{ title: "Z 的问诊", required: [] }] }));
+  const src = briefStepsSource();
+  assert.equal(src.pluginId, "aaa", "按 id 排序取第一个，结果要稳定");
+  assert.ok(
+    src.issues.some((i) => i.includes("zzz")),
+    `应点名被忽略的插件，实际：${src.issues.join(" / ")}`,
+  );
 });
 
 /* ────────────────────────── 收尾 ────────────────────────── */
