@@ -4,7 +4,7 @@ import type { Theme } from "../../../shared/schema";
 import type { DslNode, Scene3DDsl } from "../../../shared/scene3dDsl";
 import { ease, evalNode } from "../../../shared/scene3dAnim";
 import { indexNodes, worldPointOf } from "../../../shared/scene3dTransform";
-import { hasCurve, pathAt, type Vec3 } from "../../../shared/scene3dPath";
+import { hasCurve, hasTargetCurve, pathAt, type Vec3 } from "../../../shared/scene3dPath";
 import { explicitBody, glowTexture, hash01, metalBody, resolveColor, shade } from "./color";
 import { Ground } from "./World";
 import { useDslTexture } from "./texture";
@@ -82,7 +82,7 @@ export const dslCamera = (spec: Scene3DDsl, t: number, fps = 30): DslCamera => {
           follow?: string;
           lookAt?: string;
           lookAtOffset?: [number, number, number];
-          curve?: { out?: number[]; in?: number[] };
+          curve?: { out?: number[]; in?: number[]; targetOut?: number[]; targetIn?: number[] };
         }>;
       }
     | undefined)?.anim;
@@ -164,7 +164,42 @@ export const dslCamera = (spec: Scene3DDsl, t: number, fps = 30): DslCamera => {
       } else {
         P.set(lv("posX", P.x), lv("posY", P.y), lv("posZ", P.z));
       }
-      T.set(lv("targetX", T.x), lv("targetY", T.y), lv("targetZ", T.z));
+      /**
+       * 看向点走**同一条曲线的切线**，不是线性插值。
+       *
+       * 只给位置加曲线时，机位是光滑的、镜头方向却在每段边界上折一下 ——
+       * 逐帧看就是「一抖一抖」（段长 12 帧 = 每 0.4 秒抖一次）。
+       * pathAt 的 out/in 描述的是"轨迹怎么弯"，看向点跟着同一条弯才是一台机器拍的。
+       */
+      const curveSpec = a.curve;
+      if (curveSpec && (hasCurve(curveSpec) || hasTargetCurve(curveSpec))) {
+        const t0: Vec3 = [
+          typeof a.from?.targetX === "number" ? a.from.targetX : T.x,
+          typeof a.from?.targetY === "number" ? a.from.targetY : T.y,
+          typeof a.from?.targetZ === "number" ? a.from.targetZ : T.z,
+        ];
+        const t1: Vec3 = [
+          typeof a.to?.targetX === "number" ? a.to.targetX : T.x,
+          typeof a.to?.targetY === "number" ? a.to.targetY : T.y,
+          typeof a.to?.targetZ === "number" ? a.to.targetZ : T.z,
+        ];
+        /**
+         * 看向点优先用**自己的**切线。只有老数据（没写 targetOut/targetIn）
+         * 才回落到位置曲线 —— 那份回落是历史行为，保留是为了别让既有工程变形。
+         */
+        const tOut = (hasTargetCurve(curveSpec) ? curveSpec.targetOut : curveSpec.out) ?? [0, 0, 0];
+        const tIn = (hasTargetCurve(curveSpec) ? curveSpec.targetIn : curveSpec.in) ?? [0, 0, 0];
+        const tq = pathAt(
+          t0,
+          t1,
+          [tOut[0] ?? 0, tOut[1] ?? 0, tOut[2] ?? 0],
+          [tIn[0] ?? 0, tIn[1] ?? 0, tIn[2] ?? 0],
+          p,
+        );
+        T.set(tq[0], tq[1], tq[2]);
+      } else {
+        T.set(lv("targetX", T.x), lv("targetY", T.y), lv("targetZ", T.z));
+      }
       fov = lv("fov", fov);
       // 每段都覆盖：system 段没有 follow，必须把上一段的跟随清掉，
       // 否则绝对坐标会被再叠加一次节点位置，镜头直接飞走

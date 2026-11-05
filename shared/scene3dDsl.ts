@@ -317,6 +317,13 @@ export const curveSchema = z
   .object({
     out: vec3.optional().describe("起点出切线偏移（相对直线方向，世界单位）"),
     in: vec3.optional().describe("终点入切线偏移（相对直线方向，世界单位）"),
+    /**
+     * 相机专用：看向点自己的出/入切线。
+     * 不写就沿用 out/in（老数据不变）；写了则机位与镜头方向各走各的曲线，
+     * 这正是"镜头不抖"的前提 —— 两者共用一条切线时，段边界必然折角。
+     */
+    targetOut: vec3.optional().describe("相机专用：看向点的出切线偏移"),
+    targetIn: vec3.optional().describe("相机专用：看向点的入切线偏移"),
   })
   .optional()
   .describe("轨迹曲线：out/in 是相对直线的偏移，全零=直线；物体位置与相机位置都生效");
@@ -538,16 +545,37 @@ export const dslSchema = z.object({
        */
       preset: z.string().optional().describe("世界预设 id（list_world_skies 查），op 层展开后不落盘"),
       mode: z
-        .enum(["auto", "gradient", "color", "image"])
+        .enum(["auto", "gradient", "color", "image", "space"])
         .default("auto")
         .describe(
           "auto=按主题明暗自动挑中性色；gradient=用 top/bottom 自己给；color=纯色；" +
-            "image=用一张等距柱状全景图（.hdr / .jpg）当世界",
+            "image=用一张等距柱状全景图（.hdr / .jpg）当世界；" +
+            "space=深空（近黑底 + 星点 + 银河 + 星云），天文/宇宙/悬浮主体用它，" +
+            "别再用 gradient 手调——渐变永远会留下一条假的「地平线」",
         ),
       color: colorToken.optional().describe("mode=color 时的纯色"),
-      top: colorToken.optional().describe("天顶色（mode=gradient）"),
-      bottom: colorToken.optional().describe("地平线色（mode=gradient）"),
+      top: colorToken.optional().describe("天顶色（mode=gradient / space 的星云底）"),
+      bottom: colorToken.optional().describe("地平线色（mode=gradient / space 的深空底色）"),
       glow: colorToken.optional().describe("地平线漫射光带的颜色（on gradient 才生效）"),
+      stars: z
+        .number()
+        .min(0)
+        .max(2)
+        .optional()
+        .describe("mode=space：星点密度与亮度倍数（0=没有星，1=默认，2=密集天区）"),
+      milkyWay: z
+        .number()
+        .min(0)
+        .max(2)
+        .optional()
+        .describe("mode=space：银河带强度（0=关，0.5=默认的淡淡一条，2=浓）"),
+      nebula: z
+        .number()
+        .min(0)
+        .max(1)
+        .optional()
+        .describe("mode=space：星云浓淡（柔光云气，0=关；默认 0.35，给 0.6 以上才有明显色彩）"),
+      spaceTint: colorToken.optional().describe("mode=space：星云主色调（默认冷蓝紫，写 #7A5C93 之类偏紫）"),
       image: z
         .string()
         .optional()
@@ -588,10 +616,17 @@ export const dslSchema = z.object({
         .number()
         .min(0)
         .max(1)
-        .default(0.35)
+        /**
+         * **不给默认值**，由渲染层按模式兜底（gradient/image 0.35，space 0）。
+         *
+         * 写成 `.default(0.35)` 的话，schema 解析时会把 0.35 填进数据 ——
+         * 深空场景不写 haze 也会吃到一层雾，而雾在深空里是把星点一层层吃掉，
+         * 表现是"远处银河整条消失"，很难联想到是雾。
+         */
+        .optional()
         .describe(
           "空气透视（雾）浓度，0=关。真实感的一大半来自它：远处的东西必须淡进背景，" +
-            "否则再好的光照也像「把模型摆在黑房间里」。天文/星空场景给 0",
+            "否则再好的光照也像「把模型摆在黑房间里」。不写按模式给默认（space=0，其余 0.35）",
         ),
       vignette: z.number().min(0).max(1).default(0.32).describe("四角压暗（屏幕空间），0=关"),
     })

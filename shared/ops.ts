@@ -2167,7 +2167,10 @@ export function applyOps(project: Project, ops: Op[]): OpResult {
             (savedWorld.mode === "gradient"
               ? `（${savedWorld.top ?? "auto"} → ${savedWorld.bottom ?? "auto"}）`
               : "") +
-            `，雾 ${savedWorld.haze}，暗角 ${savedWorld.vignette}`,
+            (savedWorld.mode === "space"
+              ? `（星点 ${savedWorld.stars ?? 1}× / 银河 ${savedWorld.milkyWay ?? 0.5} / 星云 ${savedWorld.nebula ?? 0.35}）`
+              : "") +
+            `，雾 ${savedWorld.haze ?? (savedWorld.mode === "space" ? 0 : 0.35)}，暗角 ${savedWorld.vignette}`,
         );
         break;
       }

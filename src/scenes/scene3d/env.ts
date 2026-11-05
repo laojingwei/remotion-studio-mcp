@@ -49,17 +49,76 @@ export const skyShader = {
     uniform vec3 topColor;
     uniform vec3 bottomColor;
     uniform vec3 glowColor;
+    /** 银河带的法线（各大圆的法线不同）、带色、强度；强度 0 = 不画，普通天空零成本 */
+    uniform vec3 bandNormal;
+    uniform vec3 bandColor;
+    uniform vec3 nebulaColor;
+    uniform float bandStrength;
+    uniform float nebulaStrength;
     varying vec3 vDir;
+
+    /**
+     * 3D 值噪声。**不能用球面经纬度参数化**：那样星星/云在极点会挤成一团，
+     * 而相机一抬头正好看的就是极点。直接对方向向量做 3D 采样，全天分布均匀。
+     */
+    float hash13(vec3 p3) {
+      p3 = fract(p3 * 0.1031);
+      p3 += dot(p3, p3.yzx + 33.33);
+      return fract((p3.x + p3.y) * p3.z);
+    }
+    float vnoise(vec3 x) {
+      vec3 i = floor(x);
+      vec3 f = fract(x);
+      f = f * f * (3.0 - 2.0 * f);
+      return mix(
+        mix(mix(hash13(i), hash13(i + vec3(1.0, 0.0, 0.0)), f.x),
+            mix(hash13(i + vec3(0.0, 1.0, 0.0)), hash13(i + vec3(1.0, 1.0, 0.0)), f.x), f.y),
+        mix(mix(hash13(i + vec3(0.0, 0.0, 1.0)), hash13(i + vec3(1.0, 0.0, 1.0)), f.x),
+            mix(hash13(i + vec3(0.0, 1.0, 1.0)), hash13(i + vec3(1.0, 1.0, 1.0)), f.x), f.y),
+        f.z);
+    }
+    float fbm(vec3 p) {
+      float a = 0.5;
+      float s = 0.0;
+      for (int k = 0; k < 4; k++) {
+        s += a * vnoise(p);
+        p *= 2.03;
+        a *= 0.5;
+      }
+      return s;
+    }
+
     void main() {
       vec3 d = normalize(vDir);
       // 地平线附近过渡最急，天顶最缓：smoothstep 的下沿压到 0 以下，
       // 让"贴地的那一圈"也有变化，否则低机位看成一条硬边
       float t = smoothstep(-0.18, 0.72, d.y);
       vec3 col = mix(bottomColor, topColor, t);
-      // 地平线暖光带：真实世界里太阳/棚灯在地平线附近漫射出一道亮带，
-      // 少了它，渐变是"纯数学"的，一眼假
+      // 地平线暖光带：真实世界里太阳/棚灯在地球表面附近漫射出一道亮带，
+      // 少了它，渐变是"纯数学"的，一眼假。深空模式把 glowColor 给 0 即可关掉
       float band = 1.0 - smoothstep(0.0, 0.14, abs(d.y - 0.02));
       col += glowColor * band;
+
+      if (bandStrength > 0.001) {
+        // 到银河带平面的距离（方向空间），带中心 0、两侧增大
+        float dist = abs(dot(d, normalize(bandNormal)));
+        float core = 1.0 - smoothstep(0.0, 0.16, dist);   // 约 18° 宽的银盘，平滑收边（高斯衰减太急，看着像光柱）
+        float halo = 1.0 - smoothstep(0.0, 0.42, dist);   // 更宽的外围云气
+        float n1 = fbm(d * 7.0);                     // 大尺度云团
+        float n2 = fbm(d * 22.0 + 11.0);             // 细节纹理
+        /**
+         * 尘埃暗带：真实银河中心偏一侧有一条暗缝（未电离的分子云挡光）。
+         * 只加亮不加暗，带子会是一条均匀的发光带 —— 那是"雾霾"不是银河。
+         */
+        float dust = exp(-((dist - 0.03) * (dist - 0.03)) / 0.0016) * (0.4 + 0.6 * n2);
+        float m = core * (0.15 + 1.05 * n1) * (0.8 + 0.3 * n2);
+        col += bandColor * m * (1.0 - 0.75 * dust) * bandStrength;
+        if (nebulaStrength > 0.001) {
+          // 星云只吃外围 halo：贴着银盘的色气会把它染成一条彩色带
+          float neb = halo * smoothstep(0.35, 0.85, n1 * 0.7 + n2 * 0.5);
+          col += nebulaColor * neb * nebulaStrength;
+        }
+      }
       gl_FragColor = vec4(col, 1.0);
     }
   `,
@@ -104,6 +163,12 @@ function buildStudio(): THREE.Scene {
         topColor: { value: lin("#2C3444").multiplyScalar(0.5) },
         bottomColor: { value: lin("#59636F").multiplyScalar(0.35) },
         glowColor: { value: lin("#FFB877").multiplyScalar(0.16) },
+        // 棚拍不需要银河：强度 0，shader 里整段跳过
+        bandNormal: { value: new THREE.Vector3(0, 1, 0) },
+        bandColor: { value: lin("#000000") },
+        nebulaColor: { value: lin("#000000") },
+        bandStrength: { value: 0 },
+        nebulaStrength: { value: 0 },
       },
       vertexShader: skyShader.vertex,
       fragmentShader: skyShader.fragment,

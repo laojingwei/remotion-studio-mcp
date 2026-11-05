@@ -1721,6 +1721,26 @@ export const scene3dMeta: SceneMeta = {
     title: z.string().default("").describe("画面下方标题（2D 叠层，3D 里不做中文文字），可留空"),
     sub: z.string().default("").describe("副标题，可留空"),
     /**
+     * 右侧小卡片：讲"现在镜头里这个天体是什么"。
+     *
+     * 为什么单独一个字段而不是塞字幕：字幕在底部居中、跟着语音走；卡片是**画面信息层**，
+     * 要跟运镜的分镜时间对齐（镜头推到哪颗星，卡片就是哪颗星），而且需要自己的一套入场动画。
+     * from/to 用帧号，跟着 camera.anim 的分镜边界填。
+     */
+    cards: z
+      .array(
+        z.object({
+          from: z.number().describe("出现帧"),
+          to: z.number().describe("消失帧"),
+          kicker: z.string().default("").describe("顶上小标签，如「第 1 颗 · 类地行星」"),
+          title: z.string().describe("天体名，如「水星」"),
+          lines: z.array(z.string()).default([]).describe("2–3 行要点，每行不超过 16 字"),
+        }),
+      )
+      .max(16)
+      .optional()
+      .describe("右侧天体介绍卡片（按帧区间显示，带入场/退场动画）"),
+    /**
      * 场景图 DSL（M2）。和 preset 是**二选一**：给了 graph 就完全忽略 preset / spin / count。
      * 校验分两层：zod 管字段与白名单，`dslIssues` 管 zod 表达不了的结构问题（重 id、
      * parent 不存在、parent 成环、关键帧只有 from）。

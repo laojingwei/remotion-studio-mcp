@@ -74,6 +74,8 @@ export type Scene3DProps = {
   /** 叠在 3D 上的标题（3D 里不做中文文字，见方案文档） */
   title: string;
   sub: string;
+  /** 右侧天体介绍卡片：按帧区间出现，带入场/退场动画 */
+  cards?: Array<{ from: number; to: number; kicker: string; title: string; lines: string[] }>;
 };
 
 /* ─────────────────────────── 光线风格（look） ─────────────────────────── */
@@ -1078,6 +1080,154 @@ const CameraSync: React.FC<{ pos: [number, number, number]; fov: number }> = ({ 
   return null;
 };
 
+
+/* ─────────────────────────── 右侧天体卡片 ─────────────────────────── */
+
+/**
+ * 镜头聚焦到某颗行星时，右侧浮出一张小卡片。
+ *
+ * 全部用 **frame 的纯函数**驱动（这个文件里不许出现 useFrame）：同一帧永远同一张画面，
+ * 渲染器跳帧也不会花。动画分层错开，读起来像"信息一条条落下来"，而不是一次性弹出：
+ *   0–18f  卡片整体从右侧滑入（easeOut）
+ *   3–17f  小标签先亮（字距从 0.34em 收到 0.16em，像对焦）
+ *   7–29f  名字从下方遮罩里升起
+ *  13f+    每条要点依次上浮（间隔 5 帧）
+ * 退场统一在最后 12 帧淡出并轻微右移，不抢下一个镜头。
+ */
+const PlanetCards: React.FC<{
+  cards: NonNullable<Scene3DProps["cards"]>;
+  frame: number;
+  theme: Theme;
+  h: (pct: number) => number;
+}> = ({ cards, frame, theme, h }) => {
+  const c = theme.palette;
+  const clamp01 = (v: number) => Math.max(0, Math.min(1, v));
+  const easeOut = (t: number) => 1 - Math.pow(1 - t, 3);
+  const easeIn = (t: number) => t * t * t;
+
+  const card = cards.find((x) => frame >= x.from && frame <= x.to);
+  if (!card) return null;
+
+  const enter = easeOut(clamp01((frame - card.from) / 12));
+  const leave = easeIn(clamp01((card.to - frame) / 10));
+  const vis = Math.min(enter, leave);
+
+  const tKicker = easeOut(clamp01((frame - card.from - 2) / 10));
+  const tTitle = easeOut(clamp01((frame - card.from - 5) / 16));
+
+  return (
+    <AbsoluteFill style={{ pointerEvents: "none" }}>
+      <div
+        style={{
+          position: "absolute",
+          right: h(6.5),
+          top: "50%",
+          transform: `translateY(-50%) translateX(${(1 - enter) * 46 - (1 - leave) * 12}px)`,
+          opacity: vis,
+          width: h(27),
+          padding: `${h(2.4)} ${h(2.6)} ${h(2.4)} ${h(2.6)}`,
+          // 星星背景下纯文字会糊，给一层极淡的玻璃板 + 左侧强调线
+          background: "linear-gradient(135deg, rgba(255,255,255,0.075), rgba(255,255,255,0.02))",
+          boxShadow: "0 18px 50px rgba(0,0,0,0.45)",
+        }}
+      >
+        {/* 左侧强调条：跟着名字一起"长"出来，比静态边框有精神 */}
+        <div
+          style={{
+            position: "absolute",
+            left: 0,
+            top: 0,
+            bottom: 0,
+            width: Math.max(3, h(0.22)),
+            background: `linear-gradient(180deg, ${c.accent} 0%, ${c.accent}22 100%)`,
+            transform: `scaleY(${tTitle})`,
+            transformOrigin: "top",
+          }}
+        />
+
+        {card.kicker ? (
+          <div
+            style={{
+              display: "flex",
+              alignItems: "center",
+              gap: h(0.7),
+              opacity: tKicker,
+              marginBottom: h(1),
+              whiteSpace: "nowrap",
+            }}
+          >
+            <span
+              style={{
+                width: h(0.5),
+                height: h(0.5),
+                background: c.accent,
+                transform: `scale(${0.2 + 0.8 * tKicker})`,
+                flex: "0 0 auto",
+              }}
+            />
+            <span
+              style={{
+                fontFamily: theme.font.body,
+                fontSize: h(1.26),
+                letterSpacing: `${0.32 - 0.16 * tKicker}em`,
+                color: c.accent,
+              }}
+            >
+              {card.kicker}
+            </span>
+          </div>
+        ) : null}
+
+        <div style={{ overflow: "hidden", marginBottom: h(1.4) }}>
+          <div
+            style={{
+              fontFamily: theme.font.heading,
+              fontSize: h(3.4),
+              fontWeight: 800,
+              color: c.text,
+              lineHeight: 1.1,
+              transform: `translateY(${(1 - tTitle) * 108}%)`,
+              opacity: 0.25 + 0.75 * tTitle,
+            }}
+          >
+            {card.title}
+          </div>
+        </div>
+
+        <div
+          style={{
+            height: 1,
+            marginBottom: h(1.3),
+            background: `linear-gradient(90deg, ${c.accent}AA 0%, rgba(255,255,255,0.06) 100%)`,
+            transform: `scaleX(${tTitle})`,
+            transformOrigin: "left",
+          }}
+        />
+
+        {card.lines.map((line, i) => {
+          const tl = easeOut(clamp01((frame - card.from - 10 - i * 4) / 12));
+          return (
+            <div
+              key={i}
+              style={{
+                fontFamily: theme.font.body,
+                fontSize: h(1.5),
+                lineHeight: 1.6,
+                color: c.text,
+                opacity: 0.82 * tl,
+                transform: `translateY(${(1 - tl) * h(1.1)}px)`,
+                marginBottom: h(0.5),
+              }}
+            >
+              {line}
+            </div>
+          );
+        })}
+      </div>
+    </AbsoluteFill>
+  );
+};
+
 export const Scene3DScene: React.FC<Scene3DProps> = ({
   theme,
   preset = "blank",
@@ -1088,6 +1238,7 @@ export const Scene3DScene: React.FC<Scene3DProps> = ({
   count = 5,
   title = "",
   sub = "",
+  cards,
   sceneId,
   overlay = false,
   subtitleReservePct = 0,
@@ -1168,7 +1319,12 @@ export const Scene3DScene: React.FC<Scene3DProps> = ({
   const world = graph ? resolveWorld(graph, theme) : null;
   const sceneBg = world ? world.bottom : c.background;
   const darkTheme = luminance(sceneBg) < 0.32;
-  const haze = graph?.world?.haze ?? 0.35;
+  /**
+   * 雾默认 0.35，但**深空必须是 0**：雾的终点色是深空底色（近黑），
+   * 它不会把远处洗成"灰蒙蒙"，而是把星点一层层吃掉 —— 远处的银河直接消失，
+   * 画面只剩中心几颗亮星，看起来像"星星生成失败"。
+   */
+  const haze = graph?.world?.haze ?? (graph?.world?.mode === "space" ? 0 : 0.35);
   /** 全景图当世界：背景交给 scene.background，不再铺纯色底 */
   const worldImage = graph?.world?.mode === "image" && !!graph.world.image;
   /**
@@ -1301,6 +1457,8 @@ export const Scene3DScene: React.FC<Scene3DProps> = ({
                   ? lookSpec.env * 0.55
                   : lookSpec.env
             }
+            /** 星空要跟着镜头转（相机是"钉在 +Z、内容搬运"，见 WorldLayer 注释） */
+            orientation={dslCam?.quat}
           />
         ) : null}
         {world && haze > 0 ? (
@@ -1457,6 +1615,9 @@ export const Scene3DScene: React.FC<Scene3DProps> = ({
           ) : null}
         </AbsoluteFill>
       )}
+
+      {/* 天体介绍卡片：和标题层分开，它是"画面信息"，位置在右侧 */}
+      {cards?.length && !isBackdrop ? <PlanetCards cards={cards} frame={frame} theme={theme} h={h} /> : null}
     </AbsoluteFill>
   );
 };

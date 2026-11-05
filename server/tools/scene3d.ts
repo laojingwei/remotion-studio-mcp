@@ -62,7 +62,16 @@ export const SCENE3D_TOOLS: ToolDef[] = [
           lights?: { type: string; position: number[]; intensity: number; color: string }[];
           particles?: { count: number; size: number };
           post?: { bloom?: number; threshold?: number; tonemap?: string; exposure?: number };
-          world?: { mode?: string; top?: string; bottom?: string; haze?: number; vignette?: number };
+          world?: {
+            mode?: string;
+            top?: string;
+            bottom?: string;
+            stars?: number;
+            milkyWay?: number;
+            nebula?: number;
+            haze?: number;
+            vignette?: number;
+          };
           ground?: {
             y?: number;
             color?: string;
@@ -178,7 +187,10 @@ export const SCENE3D_TOOLS: ToolDef[] = [
             (g.world.mode === "gradient"
               ? ` ${g.world.top ?? "auto"} → ${g.world.bottom ?? "auto"}`
               : "") +
-            `，雾 ${g.world.haze}，暗角 ${g.world.vignette}`,
+            (g.world.mode === "space"
+              ? `（星点 ${g.world.stars ?? 1}× / 银河 ${g.world.milkyWay ?? 0.5} / 星云 ${g.world.nebula ?? 0.35}）`
+              : "") +
+            `，雾 ${g.world.haze ?? (g.world.mode === "space" ? 0 : 0.35)}，暗角 ${g.world.vignette}`,
         );
       else out.push("世界：auto（按主题明暗挑中性色，不再是主题底色）");
       if (g.ground)
@@ -333,10 +345,11 @@ export const SCENE3D_TOOLS: ToolDef[] = [
       "**给自定义灯前先算好环境光**：look 的四盏灯会被撤掉、环境反射只剩 55%，" +
       "金属材质（metalness ≥ 0.6）的亮部几乎全来自环境反射 —— 至少给一盏 ambient intensity 1.2–2.0，否则渲成剪影；" +
       "天文片要压暗夜面才可以只给 0.1–0.3；" +
-      "世界背景：{mode:\"auto|gradient|color|image\", top,bottom,glow, image, imageLighting, imageRotation, haze:0.35, vignette:0.32} —— **背景不是主题色**，" +
+      "世界背景：{mode:\"auto|gradient|color|image|space\", top,bottom,glow, image, imageLighting, imageRotation, stars, milkyWay, nebula, spaceTint, haze, vignette} —— **背景不是主题色**，" +
       "auto 给「深蓝灰的夜 / 冷白天光」，gradient 自己给两个端点（低饱和）；image 用等距柱状全景图（**优先 .hdr**）当背景，" +
       "imageLighting:true 时同一张图同时当 IBL（照片里的太阳方位/天光/地面反光全变成真实光照，开了它就把 lights 调少）；" +
-      "haze 是空气透视，星空场景给 0；" +
+      "**天文/宇宙题材用 space**（黑底 + 星点 + 银河 + 星云，stars/milkyWay/nebula 调浓淡）——gradient 永远会留一条假的「地平线」，别拿它凑深空；" +
+      "haze 是空气透视，不写按模式给默认（space=0，其余 0.35），深空给 0 否则远处星点被吃掉；" +
       "地面：{y, color, roughness, metalness, size, shadow, mode:\"solid|shadow\", shadowOpacity} —— 不写 y 自动落在节点最低点，" +
       "有了地面才有接触阴影（真实感的一半）；**用全景图当世界时 mode 必须给 \"shadow\"**，" +
       "实体地面会把照片里真实的地和地平线盖成一块塑料布；" +
