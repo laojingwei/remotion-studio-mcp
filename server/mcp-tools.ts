@@ -131,6 +131,7 @@ import { STORYBOARD_TOOLS } from "./tools/storyboard";
 import { CLEANUP_TOOLS } from "./tools/cleanup";
 import { RESOURCE_TOOLS } from "./tools/resources";
 import { PLUGIN_TOOLS } from "./tools/plugin";
+import { ensurePluginScenes } from "./plugin/scene-meta";
 
 // 老调用方（server/index.ts）从这里引，保持导出面不变
 export { validateToolArgs } from "./tools/_shared";
@@ -5809,6 +5810,23 @@ export function buildMcpServer(): McpServer {
   const exposeAll = exposeAllTools();
   for (const def of TOOLS) {
     const handler = async (args: Record<string, any>) => {
+      /**
+       * 先把插件场景同步进 SCENE_METAS。
+       *
+       * 为什么放在每个工具的入口而不是启动时做一次：stdio 代理（mcp-proxy）是**独立进程**，
+       * 它有自己的 SCENE_METAS；`list_scene_types` / `add_scene` 里的 `getMeta` 跑在这个进程里。
+       * 启动时同步一次的话，运行中新装的插件对它永远不可见，表现为
+       * 「编辑器里能选、agent 说没有这个类型」。
+       *
+       * 成本可控：ensurePluginScenes 带指纹缓存，插件没变时只是十几次 stat。
+       * 插件算崩了也不该挡住工具调用，所以吞掉异常。
+       */
+      try {
+        ensurePluginScenes();
+      } catch (err) {
+        console.warn("[plugin] 场景同步失败（不影响工具调用）：", err);
+      }
+
       /**
        * 日志记真实工具名：门面模式下所有调用都经 tool_call，
        * 只记 "tool_call" 会让统计全是同一个名字，等于没记。

@@ -40,6 +40,9 @@ const { scanPlugins, setPluginEnabled } = await import("../server/plugin/discove
 const { listSkills } = await import("../server/skills.service");
 const { listStyles, presetOf } = await import("../server/styles.service");
 const { briefSteps, briefStepsSource, coreSteps, stepMissingFields } = await import("../server/brief.service");
+const { jsonToSceneMeta } = await import("../shared/pluginSceneMeta");
+const { registerSceneMeta, unregisterSceneMeta } = await import("../shared/sceneMetas");
+const { discoverSceneEntries, generatePluginEntry } = await import("../server/plugin/gen-entry");
 
 let passed = 0;
 const failures: string[] = [];
@@ -364,6 +367,149 @@ test("两个插件都提供问诊：只用第一个，并点名忽略了谁", ()
     src.issues.some((i) => i.includes("zzz")),
     `应点名被忽略的插件，实际：${src.issues.join(" / ")}`,
   );
+});
+
+/* ────────────────────────── 插件场景：JSON → SceneMeta ────────────────────────── */
+
+test("合法 json：字段转成 zod，默认值补进 defaultProps", () => {
+  const { meta } = jsonToSceneMeta(
+    {
+      type: "t-rating",
+      name: "评分",
+      fields: [
+        { key: "title", type: "text", label: "标题", default: "综合评分" },
+        { key: "score", type: "number", label: "分数", default: 8.5, min: 0, max: 10 },
+        { key: "on", type: "boolean", label: "开关", default: true },
+        { key: "tone", type: "enum", label: "语气", options: ["克制", "热烈"], default: "克制" },
+        { key: "tags", type: "stringArray", label: "标签", default: ["a"], maxItems: 5 },
+      ],
+    },
+    "test",
+  );
+  assert.ok(meta, "应该解析成功");
+  assert.equal(meta!.type, "t-rating");
+  assert.deepEqual(meta!.defaultProps, {
+    title: "综合评分",
+    score: 8.5,
+    on: true,
+    tone: "克制",
+    tags: ["a"],
+  });
+  // 空 props 必须能过（新建场景就是不传 props）
+  const parsed = meta!.schema.parse({});
+  assert.equal((parsed as any).score, 8.5);
+});
+
+test("字段没 default 也没 optional：报错并说明后果", () => {
+  const { issues } = jsonToSceneMeta(
+    { type: "t-bad", name: "坏", fields: [{ key: "x", type: "text", label: "X" }] },
+    "test",
+  );
+  assert.ok(
+    issues.some((i) => i.includes("既没有 default 也没标 optional")),
+    `应提示缺默认值，实际：${issues.join(" / ")}`,
+  );
+});
+
+test("缺 fields / type 非法 / 没有合法字段：都返回 null 而不是崩", () => {
+  assert.equal(jsonToSceneMeta({ type: "t1" }, "t").meta, null);
+  assert.equal(jsonToSceneMeta({ fields: [{ key: "a", type: "text", default: "x" }] }, "t").meta, null);
+  assert.equal(jsonToSceneMeta({ type: "T_BAD", fields: [] }, "t").meta, null);
+  assert.equal(jsonToSceneMeta({ type: "t2", fields: [{ key: "", type: "text" }] }, "t").meta, null);
+});
+
+test("enum 少于两个选项：拒绝（分段按钮至少要能二选一）", () => {
+  const { meta, issues } = jsonToSceneMeta(
+    { type: "t-enum", name: "E", fields: [{ key: "k", type: "enum", options: ["只有一个"], default: "只有一个" }] },
+    "t",
+  );
+  assert.equal(meta, null);
+  assert.ok(issues.some((i) => i.includes("options 少于 2")));
+});
+
+test("objectArray 没写 items：拒绝（否则编辑器加不出行）", () => {
+  const { meta, issues } = jsonToSceneMeta(
+    { type: "t-arr", name: "A", fields: [{ key: "rows", type: "objectArray", default: [] }] },
+    "t",
+  );
+  assert.equal(meta, null);
+  assert.ok(issues.some((i) => i.includes("没写 items")));
+});
+
+test("objectArray 子字段：默认值能补上（编辑器「添加一项」推的是空对象）", () => {
+  const { meta } = jsonToSceneMeta(
+    {
+      type: "t-rows",
+      name: "表",
+      fields: [
+        {
+          key: "rows",
+          type: "objectArray",
+          label: "明细",
+          default: [{ name: "甲", value: 1 }],
+          items: [
+            { key: "name", type: "text", default: "" },
+            { key: "value", type: "number", default: 0 },
+          ],
+        },
+      ],
+    },
+    "t",
+  );
+  assert.ok(meta);
+  const parsed = meta!.schema.parse({ rows: [{ name: "乙" }] }) as any;
+  assert.equal(parsed.rows[0].value, 0, "行内缺失的字段应补子字段默认值");
+});
+
+test("注册幂等：同 type 第二次注册被拒（不覆盖先注册的）", () => {
+  const meta = jsonToSceneMeta(
+    { type: "t-dup", name: "重复", fields: [{ key: "a", type: "text", default: "x" }] },
+    "t",
+  ).meta!;
+  const first = registerSceneMeta(meta);
+  assert.equal(first.ok, true);
+  const second = registerSceneMeta(meta);
+  assert.equal(second.ok, false, "第二次应被拒，否则「改了插件没变」会变成随机现象");
+  assert.ok(second.reason?.includes("已被占用"));
+  unregisterSceneMeta("t-dup");
+});
+
+/* ────────────────────────── 插件场景：生成器的配对检查 ────────────────────────── */
+
+test("生成器：json 有组件文件才算场景，缺组件的给提示", () => {
+  resetPlugins();
+  write("sc/scenes/with-comp.json", JSON.stringify({ type: "t1", name: "A", fields: [] }));
+  write("sc/scenes/with-comp.tsx", "export default function A() { return null; }");
+  write("sc/scenes/no-comp.json", JSON.stringify({ type: "t2", name: "B", fields: [] }));
+
+  const { entries, issues } = discoverSceneEntries(PLUGIN_DIR);
+  assert.equal(entries.length, 1, "只有配对了组件的才算");
+  assert.ok(entries[0].compFile.endsWith("with-comp.tsx"));
+  assert.ok(
+    issues.some((i) => i.includes("no-comp.json") && i.includes("同名组件")),
+    `应提示缺组件，实际：${issues.join(" / ")}`,
+  );
+});
+
+test("生成器：生成的文件里 import 路径不带 .tsx、json 带扩展名", () => {
+  resetPlugins();
+  write("sc/scenes/card.json", JSON.stringify({ type: "t-card", name: "卡", fields: [] }));
+  write("sc/scenes/card.tsx", "export default function C() { return null; }");
+  const out = path.join(TMP, "generated.ts");
+  generatePluginEntry({ outFile: out });
+  const text = fs.readFileSync(out, "utf8");
+  assert.match(text, /from ".*card"\;/, "组件 import 不该带 .tsx（TS 默认不允许）");
+  assert.match(text, /card\.json"/, "json import 要保留扩展名");
+  assert.ok(text.includes("registerSceneComponent"), "生成文件要负责注册");
+});
+
+test("生成器：没有场景时生成空占位，不 import 任何东西", () => {
+  resetPlugins();
+  const out = path.join(TMP, "empty.ts");
+  generatePluginEntry({ outFile: out });
+  const text = fs.readFileSync(out, "utf8");
+  assert.ok(text.includes("export const PLUGIN_SCENES"), "要有占位导出，否则编译报错");
+  assert.ok(!text.includes("jsonToSceneMeta"), "空情况不该 import（会被 lint 判未使用）");
 });
 
 /* ────────────────────────── 收尾 ────────────────────────── */

@@ -8,6 +8,7 @@ import { streamSSE } from "hono/streaming";
 import fs from "node:fs";
 import path from "node:path";
 import { metaList } from "../shared/sceneMetas";
+import { ensurePluginScenes, pluginSceneTypes } from "./plugin/scene-meta";
 import type { Op } from "../shared/ops";
 import { createSeedProject } from "../shared/ops";
 import type { Project } from "../shared/schema";
@@ -126,6 +127,34 @@ const ALLOW_LAN = !["127.0.0.1", "localhost", "::1"].includes(HOST.toLowerCase()
 
 const app = new Hono();
 
+/** 插件问题只报一次，避免每个请求刷屏 */
+let ensuredOnce = false;
+
+/**
+ * 插件场景同步：**每个请求进来先做一次**。
+ *
+ * 为什么放在全局中间件而不是逐个端点加：用到场景表的地方远比想象中多——
+ * `/api/scene-types`（选择器）、`/api/projects/:id/ops`（add_scene 要 `getMeta`）、
+ * 渲染前校验、密度审计……漏一处的表现是「选择器里有、加进来报未知类型」，
+ * 而且只在装了插件时复现。放这里只需要想一次。
+ *
+ * 成本可控：`ensurePluginScenes` 带指纹缓存，插件没变时只是十几次 stat。
+ * 插件算崩了也不该挡住请求，所以吞掉异常、只在日志里留痕。
+ */
+app.use("*", async (_c, next) => {
+  try {
+    const res = ensurePluginScenes();
+    if (res.issues.length && !ensuredOnce) {
+      // 只在第一次报，避免每个请求刷屏
+      ensuredOnce = true;
+      for (const i of res.issues) console.warn(`[plugin] ${i}`);
+    }
+  } catch (err) {
+    console.warn("[plugin] 场景同步失败（不影响请求）：", err);
+  }
+  await next();
+});
+
 /**
  * 写请求的安全闸：Host 必须是本机名（防 DNS rebinding），Origin 若存在也必须是本机。
  * 详见 server/security.ts 顶部注释——"没设 CORS" 挡不住 `text/plain` 的简单请求。
@@ -221,7 +250,14 @@ app.get("/api/health", (c) => {
 /* ────────────────────────────── 场景能力 ────────────────────────────── */
 
 /** agent 的第一步：发现有哪些场景类型、每个字段是什么 */
-app.get("/api/scene-types", (c) => c.json({ types: metaList() }));
+/**
+ * 场景类型清单（编辑器选择器 + 属性面板用）。
+ *
+ * 插件场景已由上面的全局中间件同步过，这里直接用即可。
+ */
+app.get("/api/scene-types", (c) =>
+  c.json({ types: metaList(), pluginSceneCount: pluginSceneTypes().length }),
+);
 
 /* ────────────────────────────── 工程 ────────────────────────────── */
 

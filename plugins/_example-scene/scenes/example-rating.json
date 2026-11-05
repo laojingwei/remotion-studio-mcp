@@ -1,0 +1,20 @@
+{
+  "type": "example-rating",
+  "name": "评分卡",
+  "category": "数据",
+  "summary": "一个大分数加几条亮点标签，适合测评结论、口碑展示、续作评分",
+  "duration": { "default": 120, "min": 45, "max": 600 },
+  "fields": [
+    { "key": "title", "type": "text", "label": "标题", "default": "综合评分" },
+    { "key": "score", "type": "number", "label": "分数", "default": 8.6, "min": 0, "max": 10 },
+    { "key": "verdict", "type": "text", "label": "一句话结论", "default": "这个价位没有对手" },
+    {
+      "key": "tags",
+      "type": "stringArray",
+      "label": "亮点标签",
+      "default": ["手感扎实", "续航一天半", "屏幕通透"],
+      "maxItems": 5
+    },
+    { "key": "tone", "type": "enum", "label": "语气", "options": ["克制", "热烈"], "default": "克制" }
+  ]
+}

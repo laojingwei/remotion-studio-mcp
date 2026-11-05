@@ -10,6 +10,7 @@ import { totalDuration } from "../shared/schema";
 import { PUBLIC_DIR } from "./store";
 import { bundleOutDir, cleanupLegacyBundles } from "./bundle-cache";
 import { cleanupOutputs, ensureOutDir, outDirOf, projectOutDir } from "./outputs.service";
+import { generatePluginEntry } from "./plugin/gen-entry";
 
 let serveUrlPromise: Promise<string> | null = null;
 
@@ -117,13 +118,30 @@ const cleanLegacyOnce = () => {
 /** 打包一次并缓存，后续所有渲染复用；源码变更时自动失效重打包 */
 export async function getServeUrl(): Promise<string> {
   cleanLegacyOnce();
-  const sig = sourceSignature();
+  let sig = sourceSignature();
   if (serveUrlPromise && lastSignature !== null && sig !== lastSignature) {
+    /**
+     * 插件变了 → **必须先重新生成入口，再打包**。
+     *
+     * 反过来的顺序（先打包再生成）会把上一版组件打进 bundle：
+     * 现象是"改了插件、渲染出来还是旧的"，而预览里已经是新的——
+     * 这种"预览对、成片错"是最难自查的一类问题。
+     */
+    const gen = generatePluginEntry();
+    for (const issue of gen.issues) console.log(`[render] 插件提示：${issue}`);
+    if (gen.changed) {
+      console.log(`[render] 插件场景变更，已重新生成入口（${gen.count} 个）`);
+      // 生成文件本身在 src/ 下，重算签名，避免下一次又判成"变了"再打一次
+      sig = sourceSignature();
+    }
     console.log("[render] 检测到场景源码变更，重新打包…");
     resetBundle();
   }
   if (!serveUrlPromise) {
-    lastSignature = sig;
+    // 首次打包前也生成一次：服务刚启动时生成文件可能落后于磁盘上的插件
+    const gen = generatePluginEntry();
+    if (gen.changed) console.log(`[render] 已生成插件入口（${gen.count} 个场景）`);
+    lastSignature = sourceSignature();
     const outDir = bundleOutDir(PROJECT_ROOT);
     // 没有渲染在用旧产物才整目录删掉重打；有就就地覆盖，旧散件下次再清
     if (activeRenders === 0) {
@@ -137,6 +155,23 @@ export async function getServeUrl(): Promise<string> {
       entryPoint: path.join(PROJECT_ROOT, "src", "index.ts"),
       publicDir: PUBLIC_DIR,
       outDir,
+      /**
+       * 插件 SDK 的别名。
+       *
+       * 插件组件写在 `plugins/` 下，用相对路径 import 宿主的 `src/` 会随目录深度失效，
+       * 所以给它一个稳定入口（vite 侧有一份等价配置，见 vite.config.ts）。
+       * 注意必须给**绝对路径**：webpack 的 alias 不做相对解析。
+       */
+      webpackOverride: (config) => ({
+        ...config,
+        resolve: {
+          ...config.resolve,
+          alias: {
+            ...(config.resolve?.alias ?? {}),
+            "@studio/sdk": path.join(PROJECT_ROOT, "src", "sdk.ts").split(path.sep).join("/"),
+          },
+        },
+      }),
       onProgress: (p: number) => {
         bundleProgress = p;
       },
@@ -156,10 +191,15 @@ export async function getServeUrl(): Promise<string> {
   return url;
 }
 
-/** src/ 与 shared/ 下所有文件的 mtime 和，用作"代码是否变了"的指纹 */
+/**
+ * src/ 、shared/ 与 plugins/ 下所有文件的 mtime 和，用作"代码是否变了"的指纹。
+ *
+ * **plugins/ 必须在里面**：插件场景是代码，改了不重打包的话，
+ * 预览（走 vite 实时读）是新的、成片（走 bundle）是旧的 —— 最难自查的一种不一致。
+ */
 function sourceSignature(): number {
   let sum = 0;
-  for (const dir of ["src", "shared"]) {
+  for (const dir of ["src", "shared", "plugins"]) {
     const root = path.join(PROJECT_ROOT, dir);
     if (!fs.existsSync(root)) continue;
     for (const entry of fs.readdirSync(root, { recursive: true, withFileTypes: true })) {

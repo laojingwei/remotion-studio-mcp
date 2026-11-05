@@ -47,7 +47,8 @@ export const PROJECT_PLUGIN_DIR = overrideDir
 export const USER_PLUGIN_DIR = path.join(os.homedir(), ".remotion-studio", "plugins");
 
 /** 启用状态文件（放 data/ 下，跟 tts-config.json 同一层） */
-const STATE_FILE = path.join(DATA_ROOT, "plugins.json");
+export const PLUGIN_STATE_FILE = path.join(DATA_ROOT, "plugins.json");
+const STATE_FILE = PLUGIN_STATE_FILE;
 
 export type PluginScope = "project" | "user";
 
@@ -116,6 +117,8 @@ export function inferProvides(dir: string): ProvideKind[] {
   if (has("scene3d/presets.json")) out.push("scene3d.preset");
   if (has("scene3d/looks.json")) out.push("scene3d.look");
   if (has("brief/steps.json")) out.push("brief.steps");
+  // 场景组件：scenes 目录里有 .json 就算（同名的 .tsx 由生成器配对检查）
+  if (hasJson("scenes")) out.push("scene");
   return out;
 }
 

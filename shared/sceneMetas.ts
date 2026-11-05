@@ -1938,6 +1938,42 @@ export const SCENE_METAS: SceneMeta[] = [
   layeredMeta,
 ];
 
+/**
+ * 注册一个插件场景。**幂等**：同 type 只认第一个注册者。
+ *
+ * 为什么是"运行时注册"而不是把插件 meta 直接拼进上面的数组字面量：
+ * 这份数组在 `shared/` 里，而插件内容在磁盘上。三端（服务端 / 编辑器 / 渲染端）
+ * 的加载方式各不相同（readFileSync / API / 生成文件的静态 import），
+ * 但都可以在启动时算出同一份 `SceneMeta`，然后调这里注册。
+ *
+ * 重复注册（HMR 重载、服务端重复扫描）返回 `ok:false` 而不是覆盖：
+ * 覆盖会让"改了插件但画面没变"变成一个随机现象——取决于谁后注册。
+ */
+export function registerSceneMeta(meta: SceneMeta): { ok: boolean; reason?: string } {
+  const owner = SCENE_METAS.find((m) => m.type === meta.type);
+  if (owner) {
+    return {
+      ok: false,
+      reason: `type「${meta.type}」已被占用（内置场景或先注册的插件）。给插件的场景换个 type，建议带插件前缀`,
+    };
+  }
+  SCENE_METAS.push(meta);
+  return { ok: true };
+}
+
+/**
+ * 注销一个场景（只该用于"插件被停用"，不要用来删内置场景）。
+ *
+ * 存在的理由：`toggle_plugin` 承诺"停用后立刻从清单里消失"。只有注册、没有注销的话，
+ * 停用后场景还挂在 SCENE_METAS 里，用户会以为开关没生效。
+ */
+export function unregisterSceneMeta(type: string): boolean {
+  const i = SCENE_METAS.findIndex((m) => m.type === type);
+  if (i < 0) return false;
+  SCENE_METAS.splice(i, 1);
+  return true;
+}
+
 export const getMeta = (type: string): SceneMeta | undefined =>
   SCENE_METAS.find((m) => m.type === type);
 

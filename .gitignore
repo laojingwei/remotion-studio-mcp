@@ -62,3 +62,5 @@ memory/
 !/plugins/_example-content/**
 !/plugins/_example-brief/
 !/plugins/_example-brief/**
+!/plugins/_example-scene/
+!/plugins/_example-scene/**
