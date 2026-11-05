@@ -126,4 +126,58 @@ export const PLUGIN_TOOLS: ToolDef[] = [
       return `已改写 ${ops.length} 幕字幕${nl}${previews.join(nl)}${warnBlock}${nl}${(res.summary ?? []).join(nl)}`;
     },
   },
+  {
+    name: "reprocess_assets",
+    description:
+      "把插件里注册的**文件处理规则**（压缩、剥元数据、转格式、统一响度…）套到工程里**已有**的素材上。" +
+      "插件的自动处理只对**新上传**生效，这个工具是补历史素材用的。\n" +
+      "什么时候用：用户装了文件处理插件后说「把我之前的图都压一下」；或者换了插件想重跑。\n" +
+      "**默认 dryRun=true 只给预览**。处理结果会写成**新文件**（原名加 @指纹 后缀），原文件保留——" +
+      "所以写错了不会毁素材，但要改工程引用得另调 set_* 或让用户手动换。\n" +
+      "注意：调用只产出文件 + 溯源记录，**不会自动改工程里已引用的 URL**。要替换需按返回的新 URL 改场景。",
+    shape: {
+      projectId: z.string().optional().describe("工程 id，不传 = 当前默认工程（list_projects 查）"),
+      names: z.array(z.string()).optional().describe("只处理这些文件名；不传 = 全工程素材"),
+      dryRun: z.boolean().optional().describe("只预览不写（默认 true）"),
+    },
+    run: async (a) => {
+      const p = await resolveProject(a.projectId);
+      const nl = String.fromCharCode(10);
+      const r = await api<any>(`/api/projects/${p.id}/assets/reprocess`, {
+        method: "POST",
+        body: JSON.stringify({ names: a.names, dryRun: a.dryRun !== false }),
+      });
+
+      if (r.error) return `处理失败：${r.error}`;
+      const items = (r.items ?? []) as { name: string; action: string; note: string; newUrl?: string }[];
+      if (!items.length) {
+        return (r.warnings ?? []).join(nl) || "工程里没有可处理的素材（或没装文件处理插件）。";
+      }
+
+      const done = items.filter((i) => i.action === "process");
+      const skipped = items.filter((i) => i.action !== "process");
+      const dry = a.dryRun !== false;
+
+      const lines = [
+        dry
+          ? `预览：${done.length}/${items.length} 个素材会被处理（dryRun=true，没有写入）`
+          : `已处理 ${done.length}/${items.length} 个素材`,
+        ...done.slice(0, 12).map((i) => `  · ${i.name} → ${i.note}`),
+        ...(done.length > 12 ? [`  …还有 ${done.length - 12} 个`] : []),
+      ];
+      if (skipped.length) {
+        lines.push(`跳过 ${skipped.length} 个：`);
+        lines.push(...skipped.slice(0, 6).map((i) => `  · ${i.name}：${i.note}`));
+        if (skipped.length > 6) lines.push(`  …还有 ${skipped.length - 6} 个`);
+      }
+      if ((r.warnings ?? []).length) lines.push(`⚠️ ${(r.warnings as string[]).join(`${nl}⚠️ `)}`);
+      if (dry && done.length) lines.push("确认后传 dryRun=false 执行。");
+      if (!dry && done.length) {
+        lines.push(
+          `处理产物是新文件，工程里的旧引用不会自动换。要换就按上面的新文件名改对应场景的 src。`,
+        );
+      }
+      return lines.join(nl);
+    },
+  },
 ];

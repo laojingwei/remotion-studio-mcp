@@ -70,3 +70,5 @@ memory/
 !/plugins/_example-tool/**
 !/plugins/_example-text/
 !/plugins/_example-text/**
+!/plugins/_example-media/
+!/plugins/_example-media/**

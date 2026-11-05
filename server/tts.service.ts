@@ -1,11 +1,11 @@
 import fs from "node:fs";
 import { spawnSync } from "node:child_process";
-import { ROOT as PROJECT_ROOT } from "./root";
 import { DATA_ROOT } from "./paths";
 import path from "node:path";
 import { assetUrlOf } from "../shared/customTemplate";
 import { escapeForTts } from "../shared/ttsText";
 import { PREVIEW_DIR, PREVIEW_REL, projectAssetDir, projectAssetRel } from "./assets.service";
+import { ffmpegPath } from "./ffmpeg";
 
 /**
  * 文本转语音（TTS）。
@@ -202,23 +202,6 @@ export async function synthesize(
 
 /* ───────────────────────── 响度归一（E1） ───────────────────────── */
 
-/** ffmpeg 位置：环境变量 > Remotion 自带 > PATH */
-function ffmpegBin(): string {
-  const env = (process.env.FFMPEG_PATH ?? "").trim();
-  if (env && fs.existsSync(env)) return env;
-  if (process.platform === "win32") {
-    const bundled = path.join(
-      PROJECT_ROOT,
-      "node_modules",
-      "@remotion",
-      "compositor-win32-x64-msvc",
-      "ffmpeg.exe",
-    );
-    if (fs.existsSync(bundled)) return bundled;
-  }
-  return "ffmpeg"; // 交给 PATH；找不到就跳过归一
-}
-
 /**
  * TTS 出来的旁白普遍 -25 ~ -27 LUFS、峰值 -8dBFS，配平时一抬就到峰值墙，
  * 用户第一反应永远是「声音太小」（复盘问题 16）。
@@ -230,10 +213,12 @@ function ffmpegBin(): string {
  */
 export function normalizeLoudness(file: string): boolean {
   if ((process.env.TTS_NORMALIZE ?? "").trim() === "0") return false;
+  const bin = ffmpegPath();
+  if (!bin) return false; // 没有 ffmpeg 就跳过，不是错误
   const tmp = `${file}.norm${path.extname(file)}`;
   try {
     const r = spawnSync(
-      ffmpegBin(),
+      bin,
       [
         "-y",
         "-hide_banner",

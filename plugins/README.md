@@ -21,7 +21,7 @@ plugins/我的插件/
   styles/presets.json    风格预设      → apply_style 一键落字段
   brief/steps.json       问诊步骤      → intake / save_brief 按你的流程走
   scenes/*.json + *.tsx  场景组件      → 选择器里多一种画面（必须放项目内）
-  plugin.ts              钩子 / 工具   → 说意见、改字、或加一个 MCP 工具
+  plugin.ts              钩子/工具/处理器 → 说意见、改字、洗素材，或加一个 MCP 工具
   manifest.json          可选——需要声明权限/版本时才写
 ```
 
@@ -40,10 +40,56 @@ plugins/我的插件/
 | **流程钩子** | `plugin.ts`，在自检/写入/设计锁三个环节说一句话；不改数据，只给意见 |
 | **工具** | `plugin.ts` 的 `tools`，给 agent 加一个 MCP 工具；能读工程、改工程（要声明权限，配合 `dryRun`） |
 | **文本处理** | `plugin.ts` 的 `text:transform`，在字幕/稿件写进工程之前改字（术语表、品牌名、口头禅） |
+| **文件处理** | `plugin.ts` 的 `media:process`，新上传的图/音/视频先过一遍（压缩、剥元数据、统一响度）；补历史素材用 `reprocess_assets` |
 
 元素库、整片模板、3D 配方、转场、特效属于后续批次，
 现在放进去会被识别但**明确标注不生效**（见 `list_plugins`）。
 完整路线见 `docs/2026-11-05-插件化架构与实施计划.md`。
+
+## 文件处理：原文件永远不动
+
+`media:process` 跑在素材入库的那一刻。产出的东西写成**新文件**：
+
+```
+你上传           1712ab-cd.jpg
+落库（原文件）   1712ab-cd.jpg               ← 一直保留，回滚全靠它
+处理产物         1712ab-cd@x1y2z.jpg         ← 工程引用这个
+```
+
+`@` 后面是**处理器指纹**（启用了哪些插件 + 各自版本）。这带来三个性质：
+
+| 场景 | 结果 |
+|---|---|
+| 同一套插件重复跑 | 同名，不产生垃圾 |
+| 换了插件 / 升了 version | 换新名字，新旧可对比 |
+| 停用插件 | 新上传不再处理，**已处理的文件不受影响**（否则删个插件工程就花了） |
+
+```ts
+// plugins/我的处理/plugin.ts
+export default {
+  "media:process": async (ctx) => {
+    if (ctx.kind !== "image") return null;      // 不管的就不动手
+    if (!ctx.ffmpeg) return null;               // 这台机器没处理能力，原样入库
+    const out = `${ctx.tmpDir}/out.jpg`;
+    spawnSync(ctx.ffmpeg, ["-y", "-i", ctx.file, "-vf", "scale=1920:-2", out]);
+    return { file: out, note: "限宽 1920" };    // 也可以直接 { buffer: ... }
+  },
+};
+```
+
+四件事必须知道：
+
+1. **`ctx.file` 是只读的。** 写它会让宿主失去"原文件永远在"的保证，用户就回不去了。
+   产物放 `ctx.tmpDir`（宿主处理完自动清），用 `{ file }` 或 `{ buffer }` 返回。
+2. **返回 `null` 表示"看过但不动手"**，不算错误。抛错才会被记成失败。
+3. **自动处理只对新上传生效。** 已有素材用 `reprocess_assets`，默认只预览。
+   它产出新文件但**不会自动改工程的引用** —— 换不换由你决定。
+4. **超时 60 秒，并发 1。** 在等上传的请求里跑，不能拖死服务。
+   注意 `Promise.race` 只能救 async 卡住；插件里写 `while(true){}` 会把整个进程卡死，
+   宿主没有任何办法中断它。
+
+`ctx.ffmpeg` 指向 Remotion 自带的那个（装了 Remotion 就一定在），所以不需要为了处理图片
+给宿主装 sharp。示例：`plugins/_example-media/`。
 
 ## 场景组件：唯一必须放项目内的一类
 
@@ -227,5 +273,7 @@ export default {
 - **加规则**（画质守门员那类）：看 `plugins/_example-audit/`，把 `plugin.ts.example` 改名成 `plugin.ts`
 - **加工具**（给 agent 用）：看 `plugins/_example-tool/`，同样改名；它示范了只读 + 写入两种工具和权限声明
 - **改字**（术语表/品牌名）：看 `plugins/_example-text/`，同样改名；它示范了幂等的写法与宿主护栏
+- **洗素材**（压缩/剥元数据/统一响度）：看 `plugins/_example-media/`，同样改名；它示范了
+  「什么情况下该返回 null」——这比"能处理什么"更容易写错
 
-五份示例都可以整个删掉，不影响任何东西。
+六份示例都可以整个删掉，不影响任何东西。

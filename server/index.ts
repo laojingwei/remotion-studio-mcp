@@ -32,6 +32,7 @@ import {
   removeProjectAssets,
   writeProjectAsset,
 } from "./assets.service";
+import { ingestAsset, reprocessProjectAssets } from "./asset-pipeline.service";
 import {
   RESOURCE_CATEGORIES,
   browseCategory,
@@ -1390,9 +1391,43 @@ app.post("/api/projects/:id/assets", async (c) => {
 
     const ext = path.extname(file.name || "").toLowerCase() || ".bin";
     const name = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}${ext}`;
-    const url = writeProjectAsset(id, name, buffer);
 
-    return c.json({ url, name: file.name, size: buffer.length });
+    /*
+     * 走处理管道而不是直接落盘：插件可以在素材入库前改它（压缩、剥元数据、
+     * 转格式、加响度）。没装插件时这个调用只是一次数组判断 + 一次 writeFileSync，
+     * 和原来的 `writeProjectAsset` 开销一样。
+     */
+    const r = await ingestAsset(id, name, buffer);
+
+    return c.json({
+      url: r.url,
+      // `name` 保持原语义（用户选的那个文件名），前端/agent 一直在用它
+      name: file.name,
+      size: r.bytes,
+      // 处理过才带这几个字段：没装插件时回执保持和以前一模一样
+      ...(r.processed
+        ? { fileName: r.name, processed: true, processorNote: r.note, processorWarnings: r.warnings }
+        : {}),
+    });
+  } catch (err) {
+    return fail(c, err);
+  }
+});
+
+/**
+ * 把已装的文件处理插件套到**已有素材**上。
+ *
+ * 为什么需要独立端点：插件的自动处理只对**新上传**生效。用户装完插件，
+ * 工程里那几十张图不会自己变，这个入口就是补这件事。
+ *
+ * `dryRun` 默认 true —— 给用户先看一眼会产出什么，再决定写不写。
+ */
+app.post("/api/projects/:id/assets/reprocess", async (c) => {
+  try {
+    const id = c.req.param("id");
+    const body = (await c.req.json().catch(() => ({}))) as { names?: string[]; dryRun?: boolean };
+    const r = await reprocessProjectAssets(id, { onlyNames: body.names, dryRun: body.dryRun !== false });
+    return c.json(r);
   } catch (err) {
     return fail(c, err);
   }

@@ -55,10 +55,17 @@ import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { activePlugins, type DiscoveredPlugin } from "./discovery";
+import { ffmpegPath } from "../ffmpeg";
 
 /* ─────────────────────────── 钩子定义 ─────────────────────────── */
 
-export const HOOK_KINDS = ["audit:rules", "ops:review", "brief:derive", "text:transform"] as const;
+export const HOOK_KINDS = [
+  "audit:rules",
+  "ops:review",
+  "brief:derive",
+  "text:transform",
+  "media:process",
+] as const;
 export type HookKind = (typeof HOOK_KINDS)[number];
 
 /** 钩子的中文说明（`list_plugins` 与文档共用） */
@@ -67,7 +74,17 @@ export const HOOK_LABEL: Record<HookKind, string> = {
   "ops:review": "写入后复盘",
   "brief:derive": "设计锁补充规则",
   "text:transform": "文本处理（字幕/稿件）",
+  "media:process": "文件处理（图/音/视频）",
 };
+
+/**
+ * 异步钩子：跑在 I/O 路径上（上传、批量重处理），一次可能几百毫秒。
+ *
+ * 它们**不能**走 `runHook`——那个是同步的，为保存工程服务。两者混用会让
+ * "为什么这次保存要 3 秒"变成一个无法定位的问题。所以名单显式分开，
+ * `runHook` 遇到异步钩子直接报错，而不是悄悄拿回一个 Promise 当垃圾数据。
+ */
+export const ASYNC_HOOK_KINDS = ["media:process"] as const;
 
 export type HookContext = {
   "audit:rules": {
@@ -91,6 +108,7 @@ export type HookContext = {
     /** 宿主刚推导出的设计锁（只读，已深冻结） */
     lock: Record<string, unknown>;
   };
+  "media:process": MediaHookContext;
   "text:transform": {
     /** 当前文本（可能已被前一个插件处理过） */
     text: string;
@@ -116,6 +134,212 @@ export type HookVerdict = {
 };
 
 const EMPTY: HookVerdict = { blocking: [], warnings: [], passed: [], lockRules: [] };
+
+/* ─────────────────────────── 文件处理 ─────────────────────────── */
+
+/** 能处理的媒体类型（跟 assets 的扩展名分类一致） */
+export type MediaKind = "image" | "audio" | "video" | "file";
+
+export type MediaHookContext = {
+  /** 原文件绝对路径。**只读**：要改就返回新 buffer，不要写这个文件 */
+  file: string;
+  /** 文件内容（宿主已读入）。原地修改不会被采纳，必须放进返回值 */
+  buffer: Buffer;
+  /** 原始文件名（带扩展名）。输出扩展名变了就在返回值里改 fileName */
+  fileName: string;
+  kind: MediaKind;
+  projectId: string | null;
+  /** 可写临时目录，处理完宿主自动删。要调外部命令就往这里输出 */
+  tmpDir: string;
+  /** ffmpeg 可执行文件路径（Remotion 自带那份）；找不到为 null */
+  ffmpeg: string | null;
+  log: (msg: string) => void;
+};
+
+/**
+ * 插件返回：
+ * - `{ buffer }`            改完了，宿主用它
+ * - `{ file: "/abs/path" }` 产物在磁盘上（spawn ffmpeg 的典型形态），宿主读走
+ * - `null` / `undefined`    不处理（比如这个格式它不认）
+ */
+export type MediaHookResult =
+  | { buffer: Buffer; fileName?: string; note?: string }
+  | { file: string; note?: string }
+  | null
+  | undefined;
+
+export type MediaStep = { pluginId: string; note: string; before: number; after: number };
+
+export type MediaPipelineResult = {
+  changed: boolean;
+  buffer: Buffer;
+  fileName: string;
+  steps: MediaStep[];
+  warnings: string[];
+};
+
+/** 单次处理的整体预算。上传接口在等它，不能让一个插件把请求挂死 */
+const MEDIA_TIMEOUT_MS = 60_000;
+/** 输出体积上限：相对输入 4 倍，且不超过 200MB。防的是"插件把 2MB 图变成 200MB" */
+const MEDIA_GROWTH = 4;
+const MEDIA_MAX_BYTES = 200 * 1024 * 1024;
+
+/** 有媒体处理器吗（消费点据此跳过整个流程，不白读文件） */
+export function hasMediaProcessor(): boolean {
+  return loaded.some((h) => h.kind === "media:process");
+}
+
+/**
+ * 跑文件处理链。与文本链同构（串联、上一个的输出是下一个的输入），
+ * 但**异步 + 有超时 + 有临时目录**——这三点是文件与文本的真正差别。
+ *
+ * ## 超时的真实边界（必须说清，不能让作者以为有保护）
+ *
+ * `Promise.race` 只能救**异步**卡住的情况（await 一个不返回的 Promise）。
+ * 插件里写 `while(true){}` 会把整个 Node 进程卡死，宿主没有任何办法中断它——
+ * 这是同一进程内跑第三方代码的固有代价，真要解决只能上 worker/子进程隔离。
+ * 所以这里的超时定位是"防止一个慢外部命令拖住上传"，不是"沙箱"。
+ *
+ * ## 为什么只有匹配到处理器时才读文件
+ *
+ * 批量重处理一个工程可能有几十个素材。如果先读一遍再判断有没有人处理，
+ * 装个只处理图片的插件也要把视频全读进内存。所以顺序是：先看有没有处理器
+ * → 有才读。没装插件时整条链的开销是零（一次数组判断）。
+ */
+export async function runMediaPipeline(input: {
+  file: string;
+  fileName: string;
+  kind: MediaKind;
+  projectId?: string | null;
+  timeoutMs?: number;
+}): Promise<MediaPipelineResult> {
+  const list = hookList("media:process");
+  const idle: MediaPipelineResult = {
+    changed: false,
+    buffer: Buffer.alloc(0),
+    fileName: input.fileName,
+    steps: [],
+    warnings: [],
+  };
+  if (!list.length) return idle;
+
+  let cur: Buffer;
+  try {
+    cur = fs.readFileSync(input.file);
+  } catch (err) {
+    return { ...idle, warnings: [`读不到文件：${errText(err)}`] };
+  }
+
+  const started = Date.now();
+  const budget = input.timeoutMs ?? MEDIA_TIMEOUT_MS;
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "studio-media-"));
+  const steps: MediaStep[] = [];
+  const warnings: string[] = [];
+  let fileName = input.fileName;
+
+  try {
+    for (const h of list) {
+      const left = budget - (Date.now() - started);
+      if (left <= 0) {
+        warnings.push(`处理超时（${budget}ms），后面的插件已跳过`);
+        break;
+      }
+
+      const ctx: MediaHookContext = {
+        file: input.file,
+        buffer: cur,
+        fileName,
+        kind: input.kind,
+        projectId: input.projectId ?? null,
+        tmpDir,
+        ffmpeg: ffmpegPath(),
+        log: (m) => console.log(`[plugin:${h.pluginId}] ${m}`),
+      };
+
+      let raw: unknown;
+      try {
+        /*
+         * 用 race 兜住 async 卡死。注意它拦不住同步死循环（见函数注释）——
+         * 那会把整个进程卡住，只能靠作者自觉。
+         */
+        raw = await Promise.race([
+          Promise.resolve(h.fn(ctx)),
+          new Promise((_, rej) => setTimeout(() => rej(new Error(`超过 ${budget}ms 未返回`)), left)),
+        ]);
+      } catch (err) {
+        noteHookFailure(h, "media:process", err);
+        warnings.push(`插件「${h.pluginId}」处理失败，已跳过：${errText(err)}`);
+        continue;
+      }
+
+      const taken = takeMediaResult(raw, h.pluginId, warnings);
+      if (!taken) continue;
+
+      const before = cur.length;
+      if (taken.buffer.equals(cur)) continue; // 没改动就不算一步（避免回执里全是噪音）
+
+      if (!taken.buffer.length) {
+        warnings.push(`插件「${h.pluginId}」返回了空文件，已忽略（否则素材会变成 0 字节）`);
+        continue;
+      }
+      if (taken.buffer.length > before * MEDIA_GROWTH + 1024 * 1024 || taken.buffer.length > MEDIA_MAX_BYTES) {
+        warnings.push(
+          `插件「${h.pluginId}」输出体积异常（${fmtBytes(before)} → ${fmtBytes(taken.buffer.length)}），已忽略`,
+        );
+        continue;
+      }
+
+      cur = taken.buffer;
+      if (taken.fileName && taken.fileName !== fileName) fileName = taken.fileName;
+      steps.push({ pluginId: h.pluginId, note: taken.note, before, after: cur.length });
+    }
+  } finally {
+    try {
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    } catch {
+      /* 临时目录清不掉不影响结果 */
+    }
+  }
+
+  return { changed: steps.length > 0, buffer: cur, fileName, steps, warnings };
+}
+
+/** 把插件返回值统一成 { buffer, fileName, note }；不合法就记一条警告并返回 null */
+function takeMediaResult(
+  raw: unknown,
+  pluginId: string,
+  warnings: string[],
+): { buffer: Buffer; fileName?: string; note: string } | null {
+  if (raw === null || raw === undefined) return null;
+  if (typeof raw !== "object") {
+    warnings.push(`插件「${pluginId}」返回值不合法（要 { buffer } / { file } / null），已跳过`);
+    return null;
+  }
+  const r = raw as { buffer?: unknown; file?: unknown; fileName?: unknown; note?: unknown };
+  const note = typeof r.note === "string" ? r.note : "";
+
+  if (Buffer.isBuffer(r.buffer)) {
+    return { buffer: r.buffer, fileName: typeof r.fileName === "string" ? r.fileName : undefined, note };
+  }
+  if (typeof r.file === "string" && r.file.trim()) {
+    try {
+      return { buffer: fs.readFileSync(r.file), fileName: typeof r.fileName === "string" ? r.fileName : undefined, note };
+    } catch (err) {
+      warnings.push(`插件「${pluginId}」说产物在 ${r.file}，但读不到：${errText(err)}`);
+      return null;
+    }
+  }
+  warnings.push(`插件「${pluginId}」返回的对象里既没有 buffer 也没有 file，已跳过`);
+  return null;
+}
+
+const fmtBytes = (n: number): string =>
+  n >= 1024 * 1024 ? `${(n / 1024 / 1024).toFixed(1)}MB` : `${Math.max(1, Math.round(n / 1024))}KB`;
+
+/** 处理链的一句话说明（回执用；用户必须知道自己的图被谁改过） */
+export function mediaStepsToNote(r: MediaPipelineResult): string {
+  return r.steps.map((s) => `「${s.pluginId}」${fmtBytes(s.before)}→${fmtBytes(s.after)}${s.note ? `（${s.note}）` : ""}`).join("、");
+}
 
 /* ─────────────────────────── 加载状态 ─────────────────────────── */
 
@@ -480,6 +704,13 @@ function noteHookFailure(h: LoadedHook, kind: HookKind, err: unknown): void {
  * ——否则一个坏插件会在用户每次保存工程时打印一次堆栈，日志很快没法看。
  */
 export function runHook<K extends HookKind>(kind: K, ctx: HookContext[K]): HookVerdict {
+  /*
+   * 异步钩子不能走这里。它返回的是 Promise，被当成 verdict 合并会得到
+   * 一个"什么都没说"的空结果——不报错、不生效、极难自查。宁可当场炸。
+   */
+  if ((ASYNC_HOOK_KINDS as readonly string[]).includes(kind)) {
+    throw new Error(`${kind} 是异步钩子，要用 runMediaPipeline，不能用 runHook`);
+  }
   const list = hookList(kind);
   if (!list.length) return { ...EMPTY };
 

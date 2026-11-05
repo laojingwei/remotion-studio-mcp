@@ -1078,6 +1078,246 @@ await testAsync("文本链：幂等（跑两次和跑一次一样）", async () 
   assert.equal(twice.changed, false, "第二次不该再有改动");
 });
 
+/* ────────────────────────── 文件处理链 ────────────────────────── */
+
+const { hasMediaProcessor, runMediaPipeline, mediaStepsToNote } = await import("../server/plugin/hooks");
+const { ingestAsset, reprocessProjectAssets, readProvenance, processorFingerprint } = await import(
+  "../server/asset-pipeline.service"
+);
+const { projectAssetDir } = await import("../server/assets.service");
+
+/** 造一个"媒体文件"。宿主按扩展名分类、按字节流处理，不解码，所以内容随便写 */
+const mkMedia = (name: string, content: string): string => {
+  const f = path.join(TMP, "media", name);
+  fs.mkdirSync(path.dirname(f), { recursive: true });
+  fs.writeFileSync(f, content);
+  return f;
+};
+
+/**
+ * 装载一批媒体处理器插件（每个 dir 一段源码）。
+ *
+ * 必须显式 `setPluginEnabled(dir, true)`：停用状态是持久化在 data/plugins.json 里的，
+ * `resetPlugins()` 只删目录、不清状态。所以"上一个用例停用了同名插件"会静默影响
+ * 下一个用例——现象是插件明明写了却没生效。
+ */
+const loadMedia = async (plugins: Record<string, string>) => {
+  resetPlugins();
+  for (const [dir, body] of Object.entries(plugins)) {
+    writeHookPlugin(dir, body);
+    setPluginEnabled(dir, true);
+  }
+  resetHookCache();
+  await ensurePluginHooks();
+};
+
+await testAsync("没有文件处理器：不读文件、buffer 为空（开销为零）", async () => {
+  resetPlugins();
+  resetHookCache();
+  await ensurePluginHooks();
+  assert.equal(hasMediaProcessor(), false);
+  const f = mkMedia("a.png", "原始内容");
+  const r = await runMediaPipeline({ file: f, fileName: "a.png", kind: "image" });
+  assert.equal(r.changed, false);
+  assert.equal(r.buffer.length, 0, "没有处理器时不该把文件读进内存");
+  assert.deepEqual(r.steps, []);
+});
+
+await testAsync("处理器返回 buffer：内容被替换，记一步并带 note", async () => {
+  await loadMedia({
+    img: 'export default { "media:process": (ctx) => ctx.kind === "image" ? { buffer: Buffer.from("处理过"), note: "打了个标" } : null };',
+  });
+  const f = mkMedia("b.png", "原始内容");
+  const r = await runMediaPipeline({ file: f, fileName: "b.png", kind: "image" });
+  assert.equal(r.changed, true);
+  assert.equal(r.buffer.toString(), "处理过");
+  assert.equal(r.steps.length, 1);
+  assert.equal(r.steps[0].pluginId, "img");
+  assert.match(mediaStepsToNote(r), /img/);
+});
+
+await testAsync("返回 null = 看过但不动手：不算一步，也不算故障", async () => {
+  await loadMedia({ picky: 'export default { "media:process": () => null };' });
+  const f = mkMedia("c.png", "原样");
+  const r = await runMediaPipeline({ file: f, fileName: "c.png", kind: "image" });
+  assert.equal(r.changed, false);
+  assert.deepEqual(r.warnings, [], "不处理是设计，不该进警告");
+});
+
+await testAsync("返回空文件：拒收（否则素材会变成 0 字节）", async () => {
+  await loadMedia({ zero: 'export default { "media:process": () => ({ buffer: Buffer.alloc(0) }) };' });
+  const f = mkMedia("d.png", "有内容");
+  const r = await runMediaPipeline({ file: f, fileName: "d.png", kind: "image" });
+  assert.equal(r.changed, false);
+  assert.ok(r.warnings.some((w) => w.includes("空文件")), `应有空文件警告：${r.warnings.join("/")}`);
+});
+
+await testAsync("输出暴涨：拒收（防插件把 2MB 图变成 200MB）", async () => {
+  await loadMedia({ fat: 'export default { "media:process": () => ({ buffer: Buffer.alloc(8 * 1024 * 1024) }) };' });
+  const f = mkMedia("e.png", "x".repeat(200));
+  const r = await runMediaPipeline({ file: f, fileName: "e.png", kind: "image" });
+  assert.equal(r.changed, false);
+  assert.ok(r.warnings.some((w) => w.includes("体积异常")), `应有体积警告：${r.warnings.join("/")}`);
+});
+
+await testAsync("抛错只跳过自己，后面的插件照常跑", async () => {
+  await loadMedia({
+    boom: 'export default { "media:process": () => { throw new Error("我坏了"); } };',
+    fine: 'export default { "media:process": () => ({ buffer: Buffer.from("fine 处理了") }) };',
+  });
+  const f = mkMedia("f.png", "原始");
+  const r = await runMediaPipeline({ file: f, fileName: "f.png", kind: "image" });
+  assert.equal(r.changed, true, "坏插件不该让整条链失效");
+  assert.equal(r.buffer.toString(), "fine 处理了");
+  assert.ok(r.warnings.some((w) => w.includes("boom")), "出错的插件要被点名");
+});
+
+await testAsync("多处理器是流水线：后一个拿到前一个的结果", async () => {
+  await loadMedia({
+    "a-wrap": 'export default { "media:process": (ctx) => ({ buffer: Buffer.from("[" + ctx.buffer.toString() + "]") }) };',
+    "b-bang": 'export default { "media:process": (ctx) => ({ buffer: Buffer.from(ctx.buffer.toString() + "!") }) };',
+  });
+  const f = mkMedia("g.png", "x");
+  const r = await runMediaPipeline({ file: f, fileName: "g.png", kind: "image" });
+  assert.equal(r.buffer.toString(), "[x]!");
+  assert.deepEqual(r.steps.map((s) => s.pluginId), ["a-wrap", "b-bang"]);
+});
+
+test("runHook 遇到异步钩子直接报错（不静默返回空意见）", () => {
+  assert.throws(
+    () => runHook("media:process" as never, {} as never),
+    /异步钩子/,
+    "异步钩子被当成 verdict 用会得到空结果，必须当场炸",
+  );
+});
+
+/* ── 落盘：原文件必须永远保留 ── */
+
+const PID = "__test_media__";
+/**
+ * 删掉本用例自己的那几个文件。
+ *
+ * ## 为什么不做"清空整个目录"
+ *
+ * 本机有 safe-delete 钩子：**任何**删除操作（`rmSync` 和 `unlinkSync` 都算）累计到
+ * 50 个文件就整轮拒绝（`SAFE_DELETE_BULK_CONFIRM_REQUIRED`）。而 `npm test` 会先跑
+ * 十几个别的脚本，到这一节时配额已经快用完了 —— 删除被静默拒绝，文件就留在目录里，
+ * 后面的断言看到一堆别人的文件，报出「6 !== 2」这种完全指错方向的错。
+ *
+ * 所以改成两个更稳的做法：
+ *  1. 每个用例用**独有的文件名**（shot / a / b / same / plain / old1 / old2），互不覆盖
+ *  2. 断言只数自己那几个（`startsWith` 过滤），不去数整个目录
+ *
+ * 这比"清空再断言"更能说明测试在测什么：它测的是"我这个文件被怎么处理了"，
+ * 不是"目录里一共有几个文件"。
+ */
+const rmFiles = (...names: string[]) => {
+  const dir = projectAssetDir(PID);
+  for (const n of names) {
+    try {
+      fs.unlinkSync(path.join(dir, n));
+    } catch {
+      /* 不存在就跳过；被钩子拒了也不影响——断言只数自己的文件 */
+    }
+  }
+};
+
+await testAsync("ingestAsset：原文件保留 + 产物带指纹后缀 + 溯源可查", async () => {
+  rmFiles("shot.png");
+  await loadMedia({ tag: 'export default { "media:process": () => ({ buffer: Buffer.from("TAGGED"), note: "打标" }) };' });
+  const out = await ingestAsset(PID, "shot.png", Buffer.from("ORIGINAL"));
+  assert.equal(out.processed, true, `应被处理：${JSON.stringify(out.warnings)}`);
+  assert.match(out.name, /^shot@[a-z0-9]{5}\.png$/, `产物名应带指纹：${out.name}`);
+
+  const dir = projectAssetDir(PID);
+  assert.equal(fs.readFileSync(path.join(dir, "shot.png"), "utf8"), "ORIGINAL", "原文件必须还在（回滚全靠它）");
+  assert.equal(fs.readFileSync(path.join(dir, out.name), "utf8"), "TAGGED");
+
+  const prov = readProvenance(PID);
+  assert.equal(prov[out.name]?.origin, "shot.png");
+  assert.deepEqual(prov[out.name]?.plugins, ["tag"]);
+});
+
+await testAsync("两个不同原文件 → 两个不同产物（插件给固定文件名也不能互相覆盖）", async () => {
+  rmFiles("a.png", "b.png");
+  // 插件返回固定的 fileName —— 示例插件就是这么写的（"clean.jpg"）
+  await loadMedia({
+    fixname: 'export default { "media:process": () => ({ buffer: Buffer.from("CLEAN"), fileName: "clean.jpg" }) };',
+  });
+  const a = await ingestAsset(PID, "a.png", Buffer.from("A"));
+  const b = await ingestAsset(PID, "b.png", Buffer.from("B"));
+  assert.notEqual(a.name, b.name, `两个产物不能同名（否则第二张覆盖第一张）：${a.name}`);
+  assert.match(a.name, /^a@[a-z0-9]{5}\.jpg$/, "base 要取原文件名，扩展名采纳插件的");
+  assert.match(b.name, /^b@[a-z0-9]{5}\.jpg$/);
+  assert.equal(fs.readFileSync(path.join(projectAssetDir(PID), a.name), "utf8"), "CLEAN");
+});
+
+await testAsync("重复 ingest 同一文件：产物同名（幂等，不堆副本）", async () => {
+  rmFiles("same.png");
+  await loadMedia({ tag: 'export default { "media:process": () => ({ buffer: Buffer.from("TAGGED") }) };' });
+  const one = await ingestAsset(PID, "same.png", Buffer.from("X"));
+  const two = await ingestAsset(PID, "same.png", Buffer.from("X"));
+  assert.equal(two.name, one.name, "同一套处理器重跑应得到同一个文件名");
+  const mine = fs.readdirSync(projectAssetDir(PID)).filter((f) => f.startsWith("same"));
+  assert.equal(mine.length, 2, `应只有原文件 + 一个产物，实际：${mine.join("、")}`);
+});
+
+await testAsync("停用插件后：新上传不再处理，产物仍是原文件", async () => {
+  rmFiles("plain.png");
+  await loadMedia({ tag: 'export default { "media:process": () => ({ buffer: Buffer.from("TAGGED") }) };' });
+  setPluginEnabled("tag", false);
+  resetHookCache();
+  await ensurePluginHooks();
+  const out = await ingestAsset(PID, "plain.png", Buffer.from("ASIS"));
+  assert.equal(out.processed, false);
+  assert.equal(out.name, "plain.png", "没插件就该直接落原名");
+  assert.equal(fs.readFileSync(path.join(projectAssetDir(PID), "plain.png"), "utf8"), "ASIS");
+});
+
+await testAsync("reprocess：dryRun 不写盘，false 才写，已是当前指纹的跳过", async () => {
+  await loadMedia({ tag: 'export default { "media:process": () => ({ buffer: Buffer.from("TAGGED") }) };' });
+  const dir = projectAssetDir(PID);
+  fs.mkdirSync(dir, { recursive: true });
+  rmFiles("old1.png", "old2.png");
+  fs.writeFileSync(path.join(dir, "old1.png"), "ONE");
+  fs.writeFileSync(path.join(dir, "old2.png"), "TWO");
+
+  const fp = processorFingerprint();
+  // 目录里可能还有别的用例的文件，只断言 old* 这一组
+  const mineOf = (items: { name: string; action: string }[]) => items.filter((i) => i.name.startsWith("old"));
+
+  const dry = await reprocessProjectAssets(PID, {});
+  const dryMine = mineOf(dry.items).filter((i) => i.action === "process");
+  assert.equal(dryMine.length, 2, `应识别出两个待处理：${JSON.stringify(mineOf(dry.items))}`);
+  assert.equal(fs.existsSync(path.join(dir, `old1@${fp}.png`)), false, "dryRun 不能写盘");
+
+  const real = await reprocessProjectAssets(PID, { dryRun: false });
+  assert.equal(mineOf(real.items).filter((i) => i.action === "process").length, 2);
+  assert.equal(fs.readFileSync(path.join(dir, `old1@${fp}.png`), "utf8"), "TAGGED");
+
+  // 再跑一次：已是当前指纹的产物要被跳过，不能 @fp@fp 叠名字
+  const again = await reprocessProjectAssets(PID, { dryRun: false });
+  assert.equal(
+    mineOf(again.items).filter((i) => i.action === "process").length,
+    0,
+    `第二次不该再处理：${JSON.stringify(mineOf(again.items))}`,
+  );
+  const oldFiles = fs.readdirSync(dir).filter((f) => f.startsWith("old"));
+  assert.equal(oldFiles.length, 4, `old1/old2 应各有原文件+产物，实际：${oldFiles.join("、")}`);
+});
+
+await testAsync("reprocess：没装处理器时明确说链是空的（不是静默 0）", async () => {
+  resetPlugins();
+  resetHookCache();
+  await ensurePluginHooks();
+  const r = await reprocessProjectAssets(PID, {});
+  assert.equal(r.processed, 0);
+  assert.ok(r.warnings.some((w) => w.includes("没有装")), `应说明原因：${r.warnings.join("/")}`);
+});
+
+// 收尾清掉本文件自己造的文件（不删整个目录：safe-delete 会按数量拦）
+rmFiles("shot.png", "a.png", "b.png", "same.png", "plain.png", "old1.png", "old2.png");
+
 /* ────────────────────────── 收尾 ────────────────────────── */
 
 fs.rmSync(TMP, { recursive: true, force: true });
