@@ -41,6 +41,14 @@ const test = (name: string, fn: () => void) => {
 
 const styles = listStyles();
 const slugs = styles.map((s) => s.slug);
+/**
+ * "每个风格都有预设"只对**内置**风格成立。
+ *
+ * 插件风格允许只写一份 md（和 `_template.md` 一样，靠 get_style 读规则手搓），
+ * 允许它没有预设是这个机制的设计，不是缺失。若把插件也算进来，
+ * 任何人装一个纯文本风格都会让 `npm test` 变红——那等于用测试禁止插件。
+ */
+const builtinSlugs = styles.filter((s) => s.source === "builtin").map((s) => s.slug);
 const presetSlugs = Object.keys(
   JSON.parse(fs.readFileSync(path.join(STYLE_DIR, "presets.json"), "utf8")) as Record<string, unknown>,
 );
@@ -65,8 +73,8 @@ const contrast = (a: string, b: string): number => {
 
 /* ────────────────────────── 覆盖关系 ────────────────────────── */
 
-test(`每个风格都有预设（${slugs.length} 个风格 / ${presetSlugs.length} 条预设）`, () => {
-  const missing = slugs.filter((s) => !presetOf(s));
+test(`每个内置风格都有预设（${builtinSlugs.length} 个内置 / ${presetSlugs.length} 条预设）`, () => {
+  const missing = builtinSlugs.filter((s) => !presetOf(s));
   assert.equal(missing.length, 0, `这些风格还没有预设：${missing.join("、")}`);
 });
 

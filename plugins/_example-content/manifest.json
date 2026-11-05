@@ -1,0 +1,9 @@
+{
+  "id": "example-content",
+  "name": "示例插件（可以删）",
+  "version": "1.0.0",
+  "apiVersion": 1,
+  "description": "演示 L0 内容插件的最小形态：一份技能 + 一份风格。删掉整个文件夹不会有任何副作用。",
+  "author": "remotion-studio",
+  "provides": ["skill", "style"]
+}

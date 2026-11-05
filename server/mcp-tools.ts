@@ -130,6 +130,7 @@ import { SCRIPT_TOOLS } from "./tools/script";
 import { STORYBOARD_TOOLS } from "./tools/storyboard";
 import { CLEANUP_TOOLS } from "./tools/cleanup";
 import { RESOURCE_TOOLS } from "./tools/resources";
+import { PLUGIN_TOOLS } from "./tools/plugin";
 
 // 老调用方（server/index.ts）从这里引，保持导出面不变
 export { validateToolArgs } from "./tools/_shared";
@@ -5556,6 +5557,8 @@ const TOOLS: ToolDef[] = [
   ...STORYBOARD_TOOLS,
   ...CLEANUP_TOOLS,
   ...RESOURCE_TOOLS,
+  /* 插件管理：看装了什么、拨开关。插件本身不需要工具安装（拷个文件夹就行） */
+  ...PLUGIN_TOOLS,
 
   /* ───────────── 工具门面：按需发现与执行（其余工具经这两层调用） ───────────── */
   {

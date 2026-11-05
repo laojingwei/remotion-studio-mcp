@@ -48,3 +48,15 @@ memory/
 /.other_modules/*
 !/.other_modules/.gitkeep
 !/.other_modules/README.md
+
+# ── 插件（用户自己做的东西，不入库）─────────────────────────
+# 为什么整块忽略：插件目录里放的是"这个人/这个团队"的偏好与私有配方。
+# 如果跟着仓库走，一次 `git pull` 或 `npm update` 就能把别人的劳动覆盖掉——
+# 这是所有插件系统最常见的翻车点，也是插件必须放在仓库外或忽略区的根本原因。
+# 三个人共用一个项目时，各人的插件目录互不冲突。
+#
+# 只放行两类：目录说明，以及那份用来演示机制的示例插件。
+/plugins/*
+!/plugins/README.md
+!/plugins/_example-content/
+!/plugins/_example-content/**

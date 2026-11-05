@@ -3,7 +3,7 @@
 一份 `Project JSON`，三个消费方：**Agent 改它、用户在 Web 上拖它、Remotion 渲染它**。
 因为共用同一个数据源，agent 和用户的编辑天然互通 —— 不是后期加的功能，是架构的结果。
 
-> **版本** 1.1.3（开发线 v1.01）· **MCP 工具** 124 个（4 个常驻 + 120 个按需发现）·
+> **版本** 1.1.3（开发线 v1.01）· **MCP 工具** 126 个（4 个常驻 + 122 个按需发现）·
 > **变更** 每一版改了什么见 [CHANGELOG.md](CHANGELOG.md)
 > **许可** 本仓库代码 MIT，依赖里有两个非宽松（Remotion License / AGPL），见 [开源协议](#开源协议)
 
@@ -139,9 +139,9 @@ http://127.0.0.1:4380/mcp
 
 > 注意地址要带 `/mcp`：`/` 是编辑器本身的 HTTP API（REST + SSE），不是 MCP 端点。
 
-### 工具清单（124 个 = 4 常驻 + 120 按需）
+### 工具清单（126 个 = 4 常驻 + 122 按需）
 
-**门面模式**：宿主只看到 4 个常驻工具，其余 120 个用 `tool_search` 按意图现找、用 `tool_call` 执行。
+**门面模式**：宿主只看到 4 个常驻工具，其余 122 个用 `tool_search` 按意图现找、用 `tool_call` 执行。
 这样工具描述不占常驻上下文（否则光工具说明就要几万 token）。
 
 ```
@@ -173,6 +173,7 @@ get_guide(name="manual", section="…")   → 按需读指南（不常驻）
 | 风格 | `list_styles` / `get_style` / `apply_style`（一键套风格） |
 | 需求 / 分镜 | `intake`（9 步问诊）/ `save_brief` / `get_brief` / `confirm_brief` / `save_storyboard` / `get_storyboard` / `build_storyboard` / `check_project`（只读诊断） |
 | 技能 / 记忆 | `list_guides` / `remember` / `recall` |
+| 插件 | `list_plugins`（装了哪些、为什么没生效）/ `toggle_plugin`（临时停用） |
 | 协作 | `get_user_messages` / `reply_user` / `get_annotations`（逐帧批注）/ `resolve_annotation`（标已修） |
 | 自检 | `tool_stats`（最近 7 天的调用次数 / 失败率 / 高频报错，来自 `data/logs/tool-calls-*.jsonl`） |
 
@@ -221,6 +222,29 @@ get_guide(name="manual", section="…")   → 按需读指南（不常驻）
 - 坑/偏好默认全局，配方可 global 或 project
 
 创作需求用 `save_brief` / `get_brief` 落盘（`data/projects/<id>/brief.json`），创作中随时对照，不用反复问用户。
+
+### 扩展插件（给这个项目加能力）
+
+放一个文件夹就生效，**不用重启、不用重新打包**；删掉就消失。
+
+```
+plugins/我的插件/
+  skills/*.md          技能指南   → list_guides / get_guide 能读到
+  styles/*.md          风格规则   → list_styles 可见、apply_style 可套
+  styles/presets.json  风格预设   → apply_style 一键落色板/字体/转场
+  manifest.json        可选——只有要声明版本/权限时才写
+```
+
+两个位置：`<项目>/plugins/`（跟项目走）和 `~/.remotion-studio/plugins/`（跨项目，升级不覆盖）。
+`plugins/` 默认不进 git（示例插件除外），所以你的东西不会被 `git pull` 覆盖。
+
+- `list_plugins` 看装了什么、为什么没生效（写坏的 manifest 只会让那一个插件失败，服务照常）
+- `toggle_plugin(id, enabled)` 临时停用，文件不动
+- 规则与示例见 [plugins/README.md](plugins/README.md)；`plugins/_example-content/` 是一份可直接改的样板
+
+当前版本已接入技能与风格两类（L0 内容层）。元素库、整片模板、3D 配方、转场、特效、场景组件
+属于后续批次——`list_plugins` 会给未接入的项明确标注「本版本未接入，暂不生效」，
+不会让你以为放了没反应是坏了。
 
 ---
 
@@ -982,7 +1006,7 @@ server/              唯一写入口 + 渲染队列 + MCP 代理
   bundle.service    工程包导入导出（project.json + assets + manifest）
   zip.ts            最小 zip 读写（写 stored，读兼容 deflate）
   render.service    bundle 缓存 + 素材同步 + 渲染队列
-  mcp-tools.ts      工具聚合与门面（124 个 = 4 常驻 + 120 按需）
+  mcp-tools.ts      工具聚合与门面（126 个 = 4 常驻 + 122 按需）
   mcp-proxy.ts      stdio 代理（工具调用转发给 HTTP 服务）
   skills/           18 篇技能指南（list_guides / get_guide 读）
 web/                 编辑器：预览 / 属性面板 / 时间轴 / 素材面板 / 详情浮窗
