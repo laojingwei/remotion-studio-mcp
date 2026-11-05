@@ -22,6 +22,7 @@ plugins/我的插件/
   brief/steps.json       问诊步骤      → intake / save_brief 按你的流程走
   scenes/*.json + *.tsx  场景组件      → 选择器里多一种画面（必须放项目内）
   plugin.ts              钩子/工具/处理器 → 说意见、改字、洗素材，或加一个 MCP 工具
+  package.json + dist/   同上，但做成**完整工程**（可以带自己的 dependencies）
   manifest.json          可选——需要声明权限/版本时才写
 ```
 
@@ -45,6 +46,80 @@ plugins/我的插件/
 元素库、整片模板、3D 配方、转场、特效属于后续批次，
 现在放进去会被识别但**明确标注不生效**（见 `list_plugins`）。
 完整路线见 `docs/2026-11-05-插件化架构与实施计划.md`。
+
+## 插件可以是一个完整工程
+
+上面那种「一个 `plugin.ts`」适合几十行的小规则。但真实插件常常是一个 npm 包或 git 仓库：
+有自己的依赖、构建脚本、测试，甚至原生模块。**这种也能直接用**。
+
+```
+plugins/我的插件/
+  package.json      ← 宿主从这里读 name / version / 入口
+  src/index.ts      ← 源码（你想怎么写就怎么写）
+  dist/index.mjs    ← 构建产物（宿主真正加载的）
+  node_modules/     ← 你自己的依赖，宿主不碰
+```
+
+```json
+{
+  "name": "@team/rhythm-check",
+  "version": "1.0.0",
+  "type": "module",
+  "main": "./dist/index.mjs",
+  "exports": { ".": "./dist/index.mjs" },
+  "scripts": { "build": "esbuild src/index.ts --bundle --format=esm --platform=node --outfile=dist/index.mjs" },
+  "remotionStudio": { "provides": ["hooks"] }
+}
+```
+
+**不需要写 `manifest.json`**——`package.json` 就是清单。插件专属的字段放进 `remotionStudio`。
+
+### 两种形态的差别
+
+| | 单文件 `plugin.ts` | 完整工程 |
+|---|---|---|
+| 谁编译 | 宿主用 esbuild 现场编译 | **你自己**（`npm run build`） |
+| 能用 npm 依赖 | ❌ 会被内联，原生模块直接失败 | ✅ 从插件自己的 `node_modules` 解析 |
+| 能用原生模块（sharp 等） | ❌ | ✅ |
+| 改完要做什么 | 什么都不用做 | 重新 build（宿主会自动重载产物） |
+
+只有一个文件就写单文件；一旦要 `npm i` 东西，就做成工程。
+
+### 宿主怎么找入口
+
+按顺序：`exports["."]` 的 `import` → `module` → `main` → 约定路径（`dist/index.mjs` 等）。
+
+- 找到 `.js` / `.mjs` / `.cjs` → **直接 `import()`，不打包**
+- 找到 `.ts` → 退回宿主编译（等于单文件模式）
+
+**所以入口一定要指向构建产物。** 指向 `src/index.ts` 等于绕过你自己的构建流程。
+
+### 一条硬约定：框架依赖用 peerDependencies
+
+`react` / `react-dom` / `remotion` / `@remotion/*` **不能**写进 `dependencies`。
+
+它们必须由宿主提供。否则插件会自带一份另一个版本的 React，渲染时就是 `Invalid hook call`——
+报错点在宿主代码里，查半天查不到插件头上。宿主会在加载时检查并警告。
+
+### 宿主不替你 `npm install`
+
+```bash
+cd plugins/我的插件
+npm install
+npm run build
+```
+
+这两条**你自己跑**。`npm install` 会联网、会执行 `postinstall` 脚本（= 在用户机器上跑任意代码），
+这种事不能藏在「扫一下插件目录」里。
+
+没构建的话，`list_plugins` 会明确告诉你缺什么：
+
+```
+入口：⚠ 不可用 —— package.json 把入口指向 dist/index.mjs，但这个文件不存在
+      在该插件目录执行：npm install && npm run build
+```
+
+完整示例：`plugins/_example-engineering/`。
 
 ## 文件处理：原文件永远不动
 
@@ -275,5 +350,7 @@ export default {
 - **改字**（术语表/品牌名）：看 `plugins/_example-text/`，同样改名；它示范了幂等的写法与宿主护栏
 - **洗素材**（压缩/剥元数据/统一响度）：看 `plugins/_example-media/`，同样改名；它示范了
   「什么情况下该返回 null」——这比"能处理什么"更容易写错
+- **做成工程**（有依赖 / 要发 npm / 多人维护）：看 `plugins/_example-engineering/`，
+  它是唯一一个开箱即用的示例——因为产物 `dist/` 已经提交了
 
-六份示例都可以整个删掉，不影响任何东西。
+七份示例都可以整个删掉，不影响任何东西。

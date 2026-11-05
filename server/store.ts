@@ -9,7 +9,20 @@ import { TRANSITION_TYPES } from "../shared/transitions";
 
 export const DATA_DIR = PROJECTS_ROOT;
 export const OUT_DIR = path.join(PROJECT_ROOT, "out");
-export const PUBLIC_DIR = path.join(PROJECT_ROOT, "public");
+
+/**
+ * 静态素材目录（`/assets/*` 的实体位置）。
+ *
+ * 和 `STUDIO_DATA_ROOT` 一样支持覆盖：测试要能完全不碰仓库里的 `public/`。
+ * 这不是洁癖——`public/assets/projects/<id>/` 下的测试残留会一直堆着，而且
+ * 本机有 safe-delete 钩子（单轮删超过 50 个文件会被整批拒绝），
+ * 测试想在项目目录里"先清空再断言"根本做不到，删除被静默拒绝后报表会指向
+ * 完全错误的方向（"6 !== 2"）。指到临时目录就都没了。
+ *
+ * 生产环境不设这个变量，行为与以前完全一致。
+ */
+const publicOverride = process.env.STUDIO_PUBLIC_DIR?.trim();
+export const PUBLIC_DIR = publicOverride ? path.resolve(publicOverride) : path.join(PROJECT_ROOT, "public");
 
 /**
  * 悬空链接自愈：data / out / public 有可能是指向外部工作区（如 D:\Remotion workspace）的符号链接。

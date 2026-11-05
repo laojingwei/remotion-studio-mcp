@@ -26,7 +26,8 @@
 import type { Permission, PluginManifest } from "./manifest";
 import { PermissionDenied } from "./permissions";
 import { activePlugins, type DiscoveredPlugin } from "./discovery";
-import { entryFingerprint, loadPluginModule, pluginEntryFile } from "./hooks";
+import { entryFingerprint } from "./hooks";
+import { loadPluginEntry, resolvePluginEntry } from "./entry";
 import { buildParamShape } from "./tool-params";
 import { replacePluginTools, pluginToolEntries, type PluginToolEntry } from "./tool-registry";
 import { listProjectIds, readProject } from "../store";
@@ -158,12 +159,11 @@ export async function ensurePluginTools(): Promise<PluginToolStatus> {
 
     for (const p of list) {
       if (!p.provides.includes("hooks")) continue;
-      const file = pluginEntryFile(p.dir);
-      if (!file) continue; // 钩子那边已经报过"缺入口"，这里不重复报
+      if (resolvePluginEntry(p.dir).kind === "unbuilt") continue; // 钩子那边已报过"入口不可用"
 
       let mod: Record<string, unknown>;
       try {
-        mod = (await loadPluginModule(file, p.id)).mod;
+        mod = (await loadPluginEntry(p.dir, p.id)).mod;
       } catch {
         continue; // 加载失败同样由钩子那边报；同一件事报两遍等于噪音
       }

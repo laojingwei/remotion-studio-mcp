@@ -27,11 +27,13 @@ import path from "node:path";
 import { ROOT } from "../root";
 import { DATA_ROOT } from "../paths";
 import {
+  packageToManifest,
   parseManifest,
   toPluginId,
   type PluginManifest,
   type ProvideKind,
 } from "./manifest";
+import { declaresCodeEntry, isBrokenPackage, lintPackage, readPackageJson, resolvePluginEntry } from "./entry";
 
 /** 项目内插件目录（相对工程根） */
 export const PROJECT_PLUGIN_DIR_NAME = "plugins";
@@ -119,11 +121,15 @@ export function inferProvides(dir: string): ProvideKind[] {
   if (has("brief/steps.json")) out.push("brief.steps");
   // 场景组件：scenes 目录里有 .json 就算（同名的 .tsx 由生成器配对检查）
   if (hasJson("scenes")) out.push("scene");
-  // 流程钩子：根目录有入口文件就算。文件名的候选表在 hooks.ts，
-  // 这里只做存在性判断——两边都改是唯一会漂的地方，所以这里只认最常见的几个
-  if (["plugin.ts", "plugin.mts", "plugin.mjs", "plugin.js", "index.ts", "index.mjs"].some((f) => has(f))) {
-    out.push("hooks");
-  }
+  /*
+   * 代码插件：能不能解析出一个入口（单文件 plugin.ts，或 package.json 指向的
+   * 已构建 dist/）。判断交给 `resolvePluginEntry`，不在两处各维护一份文件名表——
+   * 那正是最早那个"改了一边忘另一边"的坑。
+   */
+  const pkg = readPackageJson(dir);
+  // 已构建（能解析出入口）**或**声明了入口但还没构建 —— 两种都算代码插件。
+  // 后者必须被发现，否则用户 clone 下来还没 build 时，插件会凭空消失。
+  if (resolvePluginEntry(dir).kind !== "unbuilt" || declaresCodeEntry(pkg)) out.push("hooks");
   return out;
 }
 
@@ -202,6 +208,9 @@ export function scanPlugins(): DiscoveredPlugin[] {
       const manifestFile = path.join(dir, "manifest.json");
       let manifest: PluginManifest | null = null;
 
+      const pkg = readPackageJson(dir);
+      const entryInfo = resolvePluginEntry(dir);
+
       if (fs.existsSync(manifestFile)) {
         let raw: unknown = null;
         try {
@@ -214,6 +223,33 @@ export function scanPlugins(): DiscoveredPlugin[] {
           manifest = parsed.manifest;
           warnings.push(...parsed.warnings);
           errors.push(...parsed.errors);
+        }
+        if (pkg) warnings.push(...lintPackage(pkg));
+      } else if (pkg && isBrokenPackage(pkg)) {
+        errors.push("package.json 存在但解析失败（JSON 语法错误？）——修好它，或者删掉它改用单文件 plugin.ts");
+      } else if (pkg) {
+        /*
+         * 没有 manifest.json 时，package.json 就是清单。
+         *
+         * 但**有 package.json 不等于就是插件**：用户的 plugins/ 下可能躺着一个
+         * 随手拷进来的 npm 包。判据三条，命中任一才算：
+         *   1. 写了 `remotionStudio` 字段（作者明确声明）
+         *   2. 能解析出代码入口（它至少能 export 钩子/工具/处理链）
+         *   3. 声明了 `main` / `module` / `exports`，但产物**还没构建**
+         *
+         * 第三条是刻意放宽的。只认前两条的话，用户 git clone 一个插件、还没跑
+         * `npm install && npm run build` 时，宿主**完全看不见它**——不报错、不提示，
+         * 现象就是"我装了但没生效"，而这正是最难自查的一类问题。
+         * 宁可多认一个待构建的目录（它会显示成"未构建 + 该跑什么命令"），
+         * 也不要让插件凭空消失。
+         */
+        const hasPluginField = pkg.remotionStudio && typeof pkg.remotionStudio === "object";
+        if (hasPluginField || entryInfo.kind !== "unbuilt" || declaresCodeEntry(pkg)) {
+          const parsed = parseManifest(packageToManifest(pkg, dirId), { dirId });
+          manifest = parsed.manifest;
+          warnings.push(...parsed.warnings);
+          errors.push(...parsed.errors);
+          warnings.push(...lintPackage(pkg));
         }
       }
 

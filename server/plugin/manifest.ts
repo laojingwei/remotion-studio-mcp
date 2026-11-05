@@ -108,6 +108,44 @@ export type PluginManifest = {
   render?: { scenes?: string[] };
 };
 
+/**
+ * 把 `package.json` 转成 manifest 的原始形状，再走同一套校验。
+ *
+ * 为什么要这条：工程化插件的"清单"天然就是 `package.json`——它有 name、version、
+ * description、author。让作者再抄一份 `manifest.json` 是纯粹的重复，而且两份会漂。
+ *
+ * 插件专属的字段放进 `remotionStudio` 命名空间（provides / permissions / apiVersion），
+ * 这样既不污染 npm 生态的约定，也不让 npm 工具链看不懂这个包。
+ *
+ * ```json
+ * {
+ *   "name": "@team/my-plugin",
+ *   "version": "1.2.0",
+ *   "remotionStudio": { "provides": ["hooks"], "permissions": ["project:read"] }
+ * }
+ * ```
+ *
+ * `id` 仍然取**目录名**而不是 `pkg.name`：npm 包名可能是 `@scope/name`，
+ * 带斜杠和 @ 的 id 不能当启用状态的键。
+ */
+export function packageToManifest(pkg: Record<string, unknown>, dirId: string): unknown {
+  const rs =
+    pkg.remotionStudio && typeof pkg.remotionStudio === "object"
+      ? (pkg.remotionStudio as Record<string, unknown>)
+      : {};
+  const author = typeof pkg.author === "string" ? pkg.author : undefined;
+  return {
+    id: dirId,
+    name: typeof pkg.name === "string" ? pkg.name : dirId,
+    version: typeof pkg.version === "string" ? pkg.version : "0.0.0",
+    description: typeof pkg.description === "string" ? pkg.description : undefined,
+    author,
+    apiVersion: typeof rs.apiVersion === "number" ? rs.apiVersion : undefined,
+    provides: Array.isArray(rs.provides) ? rs.provides : undefined,
+    permissions: Array.isArray(rs.permissions) ? rs.permissions : undefined,
+  };
+}
+
 export type ManifestParse = {
   manifest: PluginManifest | null;
   /** 非致命问题：能加载但要注意（如版本过旧、未知 provides 被忽略） */

@@ -55,6 +55,7 @@ import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { activePlugins, type DiscoveredPlugin } from "./discovery";
+import { CACHE_DIR, SCRIPT_ENTRIES, loadPluginEntry, resolvePluginEntry } from "./entry";
 import { ffmpegPath } from "../ffmpeg";
 
 /* ─────────────────────────── 钩子定义 ─────────────────────────── */
@@ -367,119 +368,18 @@ const failures = new Map<LoadedHook, number>();
 const MAX_FAILURES = 3;
 const SLOW_MS = 30;
 
-/** 插件入口候选（按顺序取第一个存在的） */
-const ENTRY_FILES = ["plugin.ts", "plugin.mts", "plugin.mjs", "plugin.js", "index.ts", "index.mjs"];
-
-/** 打包产物落在这里。放系统临时目录：不该混进用户的 plugins/ 或 data/ */
-const CACHE_DIR = path.join(os.tmpdir(), "remotion-studio-plugin-cache");
-
-/** 插件入口文件（`plugin.ts` / `index.mjs` …）。工具插件复用同一个入口，所以导出 */
-export function pluginEntryFile(dir: string): string | null {
-  for (const name of ENTRY_FILES) {
-    const f = path.join(dir, name);
-    try {
-      if (fs.statSync(f).isFile()) return f;
-    } catch {
-      /* 不存在就试下一个 */
-    }
-  }
-  return null;
-}
-
-/** 目录里有没有"待启用的示例入口"（`plugin.ts.example` 这类） */
-function hasExampleEntry(dir: string): boolean {
+/**
+ * 目录里有没有"待启用的示例入口"（`plugin.ts.example` 这类）。
+ *
+ * 导出给 summary 用：示例没启用**不是错误**，`list_plugins` 不该给它打警告——
+ * 一片红等于没有红，真错误就没人看了。
+ */
+export function hasExampleEntry(dir: string): boolean {
   try {
     return fs.readdirSync(dir).some((f) => /\.(ts|mts|mjs|js|cjs)\.example$/.test(f));
   } catch {
     return false;
   }
-}
-
-/** FNV-1a → base36：够短、稳定、不需要引入依赖（和 manifest 里的 id 哈希同一个做法） */
-function shortHash(s: string): string {
-  let h = 0x811c9dc5;
-  for (let i = 0; i < s.length; i++) {
-    h ^= s.charCodeAt(i);
-    h = Math.imul(h, 0x01000193) >>> 0;
-  }
-  return `${h.toString(36)}${(s.length % 1296).toString(36).padStart(2, "0")}`;
-}
-
-const safeName = (s: string) => s.replace(/[^a-zA-Z0-9._-]+/g, "-").slice(0, 40) || "plugin";
-
-type Esbuild = {
-  buildSync: (o: Record<string, unknown>) => unknown;
-};
-
-/** esbuild 是 vite/tsx 的既有依赖；拿不到就退回直接 import（项目内插件仍可用） */
-let esbuildMod: Esbuild | null | undefined;
-
-async function esbuildOf(): Promise<Esbuild | null> {
-  if (esbuildMod !== undefined) return esbuildMod;
-  try {
-    esbuildMod = (await import("esbuild")) as unknown as Esbuild;
-  } catch {
-    esbuildMod = null;
-  }
-  return esbuildMod;
-}
-
-function esbuildErrText(err: unknown): string {
-  const e = err as { errors?: { text?: string; location?: { line?: number; column?: number } }[]; message?: string };
-  const first = e?.errors?.[0];
-  if (first?.text) {
-    const loc = first.location ? `（第 ${first.location.line} 行）` : "";
-    return `${first.text}${loc}`;
-  }
-  return e?.message ?? String(err);
-}
-
-/**
- * 加载一个插件入口，返回它的模块。
- *
- * 优先走 esbuild 打包（见文件头注释：query 缓存在项目外不生效）。
- * 打包失败必须报出来——静默退回直接 import 会让语法错误看起来像"插件没装"。
- */
-/** 加载插件入口模块（带 esbuild 缓存）。工具插件复用，导出 */
-export async function loadPluginModule(file: string, id: string): Promise<{ mod: Record<string, unknown>; artifact: string }> {
-  const st = fs.statSync(file);
-  const tag = `${Math.round(st.mtimeMs)}-${st.size}`;
-  const eb = await esbuildOf();
-
-  if (eb) {
-    fs.mkdirSync(CACHE_DIR, { recursive: true });
-    const out = path.join(CACHE_DIR, `${safeName(id)}-${shortHash(`${file}|${tag}`)}.mjs`);
-    if (!fs.existsSync(out)) {
-      try {
-        eb.buildSync({
-          entryPoints: [file],
-          // 打成单文件：临时目录里没有 node_modules，靠 esbuild 把相对依赖与依赖库都内联
-          bundle: true,
-          format: "esm",
-          platform: "node",
-          target: "node20",
-          outfile: out,
-          absWorkingDir: path.dirname(file),
-          logLevel: "silent",
-          sourcemap: false,
-        });
-      } catch (err) {
-        // 写坏的半成品不留在缓存里，否则改了也一直用坏的那份
-        try {
-          fs.rmSync(out, { force: true });
-        } catch {
-          /* 忽略 */
-        }
-        throw new Error(`编译失败：${esbuildErrText(err)}`);
-      }
-    }
-    return { mod: (await import(pathToFileURL(out).href)) as Record<string, unknown>, artifact: out };
-  }
-
-  return {
-    mod: (await import(`${pathToFileURL(file).href}?v=${tag}`)) as Record<string, unknown>,
-    artifact: file,
-  };
 }
 
 /** 清掉这一轮不再使用的打包产物（改了插件就会生成新文件，不清理会一直涨） */
@@ -507,21 +407,28 @@ function pruneCache(keep: Set<string>): void {
  * size 必须进指纹：编辑器同一个时间片里连存两次，mtime 可能一样，
  * 只看 mtime 会漏掉后一次修改。
  */
-/** 入口指纹：工具插件与钩子共用同一套判定，改了任一处两边一起重载 */
+/**
+ * 入口指纹：工具插件与钩子共用同一套判定，改了任一处两边一起重载。
+ *
+ * 用解析后的入口路径而不是"猜文件名"：工程化插件的入口在 `dist/` 里，
+ * 而它的源码在 `src/`；盯着源码目录的 mtime 是没意义的（改了源码不重新构建，
+ * 产物根本没变）。这里只认产物和 package.json —— 它们变了，运行时就该重载。
+ */
 export function entryFingerprint(list: DiscoveredPlugin[]): string {
   const parts: string[] = [];
   for (const p of list) {
     if (!p.provides.includes("hooks")) continue;
-    const f = pluginEntryFile(p.dir);
-    if (!f) {
-      parts.push(`${p.id}@missing`);
+    const entry = resolvePluginEntry(p.dir);
+    if (entry.kind === "unbuilt" || !entry.file) {
+      // 未构建也要进指纹：用户补上 dist/ 之后必须触发重新加载
+      parts.push(`${p.id}@${entry.kind}@${entry.detail}`);
       continue;
     }
     try {
-      const st = fs.statSync(f);
-      parts.push(`${f}@${st.mtimeMs}@${st.size}`);
+      const st = fs.statSync(entry.file);
+      parts.push(`${p.id}:${entry.kind}:${Math.round(st.mtimeMs)}:${st.size}`);
     } catch {
-      parts.push(`${f}@gone`);
+      parts.push(`${p.id}@gone`);
     }
   }
   return parts.join("|");
@@ -582,23 +489,27 @@ export async function ensurePluginHooks(): Promise<HookStatus> {
 
     for (const p of list) {
       if (!p.provides.includes("hooks")) continue;
-      const file = pluginEntryFile(p.dir);
-      if (!file) {
+      const resolved = resolvePluginEntry(p.dir);
+      if (resolved.kind === "unbuilt") {
         /*
          * 带 `.example` 后缀的入口是"示例还没启用"，不是错误。
          * 仓库里自带的示例默认都是这个状态，把它们报成加载失败会让
          * `list_plugins` 一打开就是一片红——真正的错误就没人看了。
+         *
+         * 但**工程化插件未构建不是这种情况**：它有 package.json、有依赖、只是还没
+         * `npm run build`。对它必须说实话并给出命令，否则用户会以为插件写错了。
          */
         if (!hasExampleEntry(p.dir)) {
-          errs.push({ pluginId: p.id, message: `声明了钩子但没找到入口文件（应有一个 ${ENTRY_FILES.join(" / ")}）` });
+          const hint = resolved.hint ? `${resolved.detail}。${resolved.hint}` : resolved.detail;
+          errs.push({ pluginId: p.id, message: `入口不可用：${hint}` });
         }
         continue;
       }
       let mod: Record<string, unknown>;
       try {
-        const loadedEntry = await loadPluginModule(file, p.id);
-        mod = loadedEntry.mod;
-        keep.add(loadedEntry.artifact);
+        const loaded = await loadPluginEntry(p.dir, p.id);
+        mod = loaded.mod;
+        keep.add(loaded.artifact);
       } catch (err) {
         errs.push({ pluginId: p.id, message: `入口加载失败：${errText(err)}` });
         continue;

@@ -35,6 +35,9 @@ fs.mkdirSync(DATA_DIR, { recursive: true });
 
 process.env.STUDIO_PLUGINS_DIR = PLUGIN_DIR;
 process.env.STUDIO_DATA_ROOT = DATA_DIR;
+// 素材目录也指到临时目录：否则媒体测试会往仓库的 public/assets 里写文件、删文件，
+// 而删除会撞上 safe-delete 的批量上限（静默失败 → 残留 → 断言指向完全错误的方向）
+process.env.STUDIO_PUBLIC_DIR = path.join(TMP, "public");
 
 const { scanPlugins, setPluginEnabled } = await import("../server/plugin/discovery");
 const { listSkills } = await import("../server/skills.service");
@@ -1078,6 +1081,207 @@ await testAsync("文本链：幂等（跑两次和跑一次一样）", async () 
   assert.equal(twice.changed, false, "第二次不该再有改动");
 });
 
+/* ────────────────────────── 工程化插件（package.json） ────────────────────────── */
+
+const { resolvePluginEntry, lintPackage } = await import("../server/plugin/entry");
+
+/** 造一个工程化插件目录 */
+const mkEng = (
+  dir: string,
+  pkg: Record<string, unknown>,
+  dist: string | null,
+  extra: Record<string, string> = {},
+): string => {
+  write(`${dir}/package.json`, JSON.stringify(pkg, null, 2));
+  if (dist !== null) write(`${dir}/dist/index.mjs`, dist);
+  for (const [rel, content] of Object.entries(extra)) write(`${dir}/${rel}`, content);
+  return path.join(PLUGIN_DIR, dir);
+};
+
+test("工程化：exports 指向已构建产物 → module 模式（不交给 esbuild）", () => {
+  resetPlugins();
+  const dir = mkEng("eng1", { name: "e1", version: "1.0.0", exports: { ".": "./dist/index.mjs" } }, "export default {};");
+  const r = resolvePluginEntry(dir);
+  assert.equal(r.kind, "module");
+  assert.ok(r.file?.endsWith(path.join("dist", "index.mjs")), `入口不对：${r.file}`);
+  assert.match(r.detail, /不打包/);
+});
+
+test("工程化：main 也能认（很多包只写 main）", () => {
+  resetPlugins();
+  const dir = mkEng("eng2", { name: "e2", version: "1.0.0", main: "./dist/main.mjs" }, null, {
+    "dist/main.mjs": "export default {};",
+  });
+  assert.equal(resolvePluginEntry(dir).kind, "module");
+});
+
+test("工程化：exports 省略 \".\" 的常见写法也认", () => {
+  resetPlugins();
+  const dir = mkEng("eng3", { name: "e3", version: "1.0.0", exports: { import: "./dist/i.mjs", require: "./dist/i.cjs" } }, null, {
+    "dist/i.mjs": "export default {};",
+  });
+  const r = resolvePluginEntry(dir);
+  assert.equal(r.kind, "module");
+  assert.ok(r.file?.endsWith("i.mjs"), "应优先 ESM 入口");
+});
+
+test("工程化：exports 写成字符串也认", () => {
+  resetPlugins();
+  const dir = mkEng("eng4", { name: "e4", version: "1.0.0", exports: "./dist/s.mjs" }, null, {
+    "dist/s.mjs": "export default {};",
+  });
+  assert.equal(resolvePluginEntry(dir).kind, "module");
+});
+
+test("工程化：没写 main/exports 但按约定有 dist/index.mjs → 也能用", () => {
+  resetPlugins();
+  const dir = mkEng("eng5", { name: "e5", version: "1.0.0" }, "export default {};");
+  const r = resolvePluginEntry(dir);
+  assert.equal(r.kind, "module");
+  assert.match(r.detail, /按约定/);
+});
+
+test("工程化：入口指向不存在的文件 → unbuilt，且提示要跑哪两条命令", () => {
+  resetPlugins();
+  const dir = mkEng("eng6", {
+    name: "e6",
+    version: "1.0.0",
+    exports: { ".": "./dist/index.mjs" },
+    scripts: { build: "tsc" },
+  }, null);
+  const r = resolvePluginEntry(dir);
+  assert.equal(r.kind, "unbuilt");
+  assert.match(r.detail, /不存在/);
+  assert.match(r.hint!, /npm install && npm run build/, `提示要具体到命令：${r.hint}`);
+});
+
+test("工程化：没写 build 脚本时，提示不硬编 npm run build", () => {
+  resetPlugins();
+  const dir = mkEng("eng7", { name: "e7", version: "1.0.0", exports: { ".": "./dist/x.mjs" }, dependencies: { a: "1" } }, null);
+  const r = resolvePluginEntry(dir);
+  assert.equal(r.kind, "unbuilt");
+  assert.match(r.hint!, /npm install/);
+  assert.ok(!/npm run build/.test(r.hint!), `没有 build 脚本就不该让人跑 build：${r.hint}`);
+});
+
+test("工程化：package.json 坏了 → unbuilt，且说清是 JSON 问题", () => {
+  resetPlugins();
+  write("eng8/package.json", "{ 这不是 JSON }");
+  const r = resolvePluginEntry(path.join(PLUGIN_DIR, "eng8"));
+  assert.equal(r.kind, "unbuilt");
+  assert.match(r.detail, /解析失败/);
+});
+
+test("普通 npm 包目录（不像插件）：静默跳过，不误报成坏插件", () => {
+  resetPlugins();
+  write("somedep/package.json", JSON.stringify({ name: "lodash-like", version: "1.0.0" }));
+  write("somedep/README.md", "一个跟本宿主无关的包");
+  assert.deepEqual(scanPlugins(), [], "有 package.json 不等于就是插件");
+});
+
+test("工程化：package.json 就是清单（name/version/remotionStudio 生效）", () => {
+  resetPlugins();
+  mkEng(
+    "engpkg",
+    {
+      name: "@scope/rhythm",
+      version: "3.2.1",
+      description: "节奏检查",
+      exports: { ".": "./dist/index.mjs" },
+      remotionStudio: { provides: ["hooks"], permissions: [] },
+    },
+    "export default {};",
+  );
+  const p = scanPlugins().find((x) => x.id === "engpkg");
+  assert.ok(p, "应被发现");
+  assert.equal(p.name, "@scope/rhythm");
+  assert.equal(p.version, "3.2.1");
+  assert.deepEqual(p.provides, ["hooks"]);
+  assert.equal(p.manifest?.description, "节奏检查");
+});
+
+test("id 取目录名而不是 npm 包名（@scope/x 不能当启用键）", () => {
+  resetPlugins();
+  mkEng("scoped", { name: "@scope/some-thing", version: "1.0.0", exports: { ".": "./dist/index.mjs" } }, "export default {};");
+  const p = scanPlugins().find((x) => x.id === "scoped");
+  assert.ok(p, `应能用目录名找到，实际：${scanPlugins().map((x) => x.id).join(",")}`);
+});
+
+test("lintPackage：把 react 写进 dependencies 要警告（否则渲染时 Invalid hook call）", () => {
+  const w = lintPackage({ dependencies: { react: "^18", remotion: "4" } });
+  assert.ok(w.some((x) => x.includes("peerDependencies")), `应提示改 peerDependencies：${w.join("/")}`);
+});
+
+await testAsync("工程化插件能用自己 node_modules 里的依赖（关键能力）", async () => {
+  resetPlugins();
+  mkEng(
+    "engdep",
+    { name: "engdep", version: "1.0.0", exports: { ".": "./dist/index.mjs" } },
+    'import { tag } from "tiny-helper";\nexport default { "audit:rules": () => ({ warnings: ["dep:" + tag] }) };\n',
+    {
+      "node_modules/tiny-helper/package.json": JSON.stringify({ name: "tiny-helper", version: "1.0.0", type: "module", main: "index.js" }),
+      "node_modules/tiny-helper/index.js": 'export const tag = "OK";\n',
+    },
+  );
+  resetHookCache();
+  await ensurePluginHooks();
+  const v = runHook("audit:rules", auditCtx());
+  assert.ok(
+    v.warnings.some((w) => w.includes("dep:OK")),
+    `依赖没解析到（单文件模式会编译失败，工程模式应该成功）：${v.warnings.join("/")}`,
+  );
+});
+
+await testAsync("工程化插件热更新：改 dist 后重新 ensure 生效", async () => {
+  resetPlugins();
+  mkEng(
+    "enghot",
+    { name: "enghot", version: "1.0.0", exports: { ".": "./dist/index.mjs" } },
+    'export default { "audit:rules": () => ({ warnings: ["v1"] }) };\n',
+  );
+  resetHookCache();
+  await ensurePluginHooks();
+  assert.deepEqual(runHook("audit:rules", auditCtx()).warnings, ["[enghot] v1"]);
+
+  // 内容变长 → size 与 mtime 都变 → 指纹变 → 重新 import
+  write("enghot/dist/index.mjs", 'export default { "audit:rules": () => ({ warnings: ["v2 改过了"] }) };\n');
+  resetHookCache();
+  await ensurePluginHooks();
+  assert.deepEqual(runHook("audit:rules", auditCtx()).warnings, ["[enghot] v2 改过了"]);
+});
+
+await testAsync("工程化插件未构建：报错指路，且不拖垮别的插件", async () => {
+  resetPlugins();
+  mkEng("engbad", { name: "engbad", version: "1.0.0", exports: { ".": "./dist/index.mjs" } }, null);
+  mkEng(
+    "enggood",
+    { name: "enggood", version: "1.0.0", exports: { ".": "./dist/index.mjs" } },
+    'export default { "audit:rules": () => ({ warnings: ["我好着"] }) };\n',
+  );
+  resetHookCache();
+  const st = await ensurePluginHooks();
+
+  const bad = st.errors.find((e) => e.pluginId === "engbad");
+  assert.ok(bad, `未构建要报出来：${JSON.stringify(st.errors)}`);
+  assert.match(bad!.message, /dist\/index\.mjs/, "要说清是哪条路径不对");
+  assert.deepEqual(runHook("audit:rules", auditCtx()).warnings, ["[enggood] 我好着"], "好的那个必须照常工作");
+});
+
+await testAsync("单文件与工程共存：两种插件同时生效", async () => {
+  resetPlugins();
+  writeHookPlugin("legacy", 'export default { "audit:rules": () => ({ warnings: ["单文件"] }) };');
+  mkEng(
+    "modern",
+    { name: "modern", version: "1.0.0", exports: { ".": "./dist/index.mjs" } },
+    'export default { "audit:rules": () => ({ warnings: ["工程"] }) };\n',
+  );
+  resetHookCache();
+  await ensurePluginHooks();
+  const ws = runHook("audit:rules", auditCtx()).warnings;
+  assert.ok(ws.some((w) => w.includes("单文件")), `单文件插件失效了：${ws.join("/")}`);
+  assert.ok(ws.some((w) => w.includes("工程")), `工程插件失效了：${ws.join("/")}`);
+});
+
 /* ────────────────────────── 文件处理链 ────────────────────────── */
 
 const { hasMediaProcessor, runMediaPipeline, mediaStepsToNote } = await import("../server/plugin/hooks");
@@ -1211,6 +1415,25 @@ const PID = "__test_media__";
  * 这比"清空再断言"更能说明测试在测什么：它测的是"我这个文件被怎么处理了"，
  * 不是"目录里一共有几个文件"。
  */
+/** 按前缀删（产物名带指纹后缀，事先算不出来，只能按前缀清） */
+const rmPrefix = (...prefixes: string[]) => {
+  const dir = projectAssetDir(PID);
+  let files: string[] = [];
+  try {
+    files = fs.readdirSync(dir);
+  } catch {
+    return;
+  }
+  for (const f of files) {
+    if (!prefixes.some((p) => f.startsWith(p))) continue;
+    try {
+      fs.unlinkSync(path.join(dir, f));
+    } catch {
+      /* 同上 */
+    }
+  }
+};
+
 const rmFiles = (...names: string[]) => {
   const dir = projectAssetDir(PID);
   for (const n of names) {
@@ -1278,7 +1501,8 @@ await testAsync("reprocess：dryRun 不写盘，false 才写，已是当前指�
   await loadMedia({ tag: 'export default { "media:process": () => ({ buffer: Buffer.from("TAGGED") }) };' });
   const dir = projectAssetDir(PID);
   fs.mkdirSync(dir, { recursive: true });
-  rmFiles("old1.png", "old2.png");
+  // 连上一轮遗留的产物一起清（产物名带指纹，只能按前缀删）
+  rmPrefix("old");
   fs.writeFileSync(path.join(dir, "old1.png"), "ONE");
   fs.writeFileSync(path.join(dir, "old2.png"), "TWO");
 
