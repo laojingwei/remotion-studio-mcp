@@ -20,6 +20,8 @@ plugins/我的插件/
   styles/*.md            风格规则      → list_styles / get_style / apply_style
   styles/presets.json    风格预设      → apply_style 一键落字段
   brief/steps.json       问诊步骤      → intake / save_brief 按你的流程走
+  scenes/*.json + *.tsx  场景组件      → 选择器里多一种画面（必须放项目内）
+  plugin.ts              流程钩子      → 介入自检 / 写入复盘 / 设计锁
   manifest.json          可选——只有需要声明版本/权限时才写
 ```
 
@@ -35,6 +37,7 @@ plugins/我的插件/
 | 风格预设 | `styles/presets.json`，可一键套色板/字体/转场 |
 | 问诊步骤 | `brief/steps.json`，替换或追加内置 11 步；支持 `x.` 扩展字段 |
 | **场景组件** | `scenes/<type>.json` + `scenes/<type>.tsx`，给编辑器加一种新画面 |
+| **流程钩子** | `plugin.ts`，在自检/写入/设计锁三个环节说一句话；不改数据，只给意见 |
 
 元素库、整片模板、3D 配方、转场、特效属于后续批次，
 现在放进去会被识别但**明确标注不生效**（见 `list_plugins`）。
@@ -95,6 +98,40 @@ export default function MyRating({ theme, score }: Props) {
 **每个字段都要给 default**（或标 `optional: true`）——新建这种场景时 props 是空的，
 没有默认值 zod 会当场拒。
 
+## 流程钩子：不改数据，只给意见
+
+`plugin.ts` 默认导出一个对象，键是钩子名：
+
+```ts
+export default {
+  "audit:rules": (ctx) => ({ warnings: ["开场太短了"] }),
+};
+```
+
+| 钩子 | 什么时候被调用 | ctx 里有什么 |
+|---|---|---|
+| `audit:rules` | 调 `audit_project` 体检时 | `{ brief, project, lock }` |
+| `ops:review` | 每次写入工程之后（已落库） | `{ before, after, ops }` |
+| `brief:derive` | 推导设计锁时 | `{ brief, lock }` |
+
+返回 `{ blocking?, warnings?, passed?, lockRules? }`，都是字符串数组，全部可省。
+宿主管家会自动加 `[你的插件id]` 前缀——用户必须看得出这条不是宿主的判断。
+
+三条边界：
+
+1. **同步**。钩子跑在保存工程/自检的同步路径上，不能 `await`、不能发网络请求。
+   超过 30ms 会被记一条"太慢"。
+2. **只读**。入参是深冻结快照，改它直接抛错。想让数据变，请做成 MCP 工具，别指望钩子。
+3. **不需要声明权限**。宿主不把 fs / fetch / 子进程交给钩子插件，它只拿到数据。
+
+⚠️ **但代码就是代码**：`plugin.ts` 会被 `import()` 执行，顶层就能读写文件。
+这里的"只读"是 API 约定，**不是沙箱**。装一个代码插件 = 在这台机器上装一个程序，
+只装你信得过的。
+
+改完 `plugin.ts` **立刻生效**（不用重启）：宿主会把它重新打包成一个带内容指纹的临时模块再加载。
+
+完整可运行示例：`plugins/_example-audit/`（把 `plugin.ts.example` 改名成 `plugin.ts` 即生效）。
+
 ## 写坏了会怎样
 
 不会拖垮服务。`list_plugins` 会把这个插件单独标成"加载失败"并给原因，
@@ -104,5 +141,6 @@ export default function MyRating({ theme, score }: Props) {
 
 - **加内容**（技能/风格）：`cp plugins/_example-content plugins/我的第一个插件`，改里面的 md
 - **改问诊**：看 `plugins/_example-brief/`，把 `steps.json.example` 改名成 `steps.json` 就生效
+- **加规则**（画质守门员那类）：看 `plugins/_example-audit/`，把 `plugin.ts.example` 改名成 `plugin.ts`
 
-两份示例都可以整个删掉，不影响任何东西。
+三份示例都可以整个删掉，不影响任何东西。

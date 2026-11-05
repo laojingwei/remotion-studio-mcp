@@ -1,0 +1,148 @@
+/**
+ * 画质守门员 —— 钩子插件的最小完整示例。
+ *
+ * 用法：把这个文件改名成 `plugin.ts`（去掉 `.example`），它就生效了。
+ * 默认不改名，是因为它会在**每一次**自检/写入里加几句话——
+ * 示例不该改变别人的默认体验。
+ *
+ * ## 插件契约（就这三条）
+ *
+ * 1. `export default` 一个对象，键是钩子名。
+ * 2. 每个函数**同步**返回 `{ blocking?, warnings?, passed?, lockRules? }`。
+ * 3. 拿到的入参是深冻结快照：**只读**，改它会直接抛错（这是故意的）。
+ *
+ * ## 不要做的事
+ *
+ * - 不要发网络请求、不要读大文件：钩子跑在保存工程/自检的同步路径上，
+ *   超过 30ms 会被记一条"太慢"。
+ * - 不要 try/catch 吞掉一切后返回空：宿主会把连续失败 3 次的钩子摘掉，
+ *   你的插件会静默消失。让错误抛出来，`list_plugins` 里能看到原因。
+ */
+
+/** 一条字幕读得完的字数上限（口播 4 字/秒时，42 字约 10 秒） */
+const MAX_SUBTITLE = 42;
+/** 单幕短于这个时长，观众来不及看清就切走了 */
+const MIN_SCENE_SEC = 1.2;
+
+type Scene = {
+  id?: string;
+  name?: string;
+  type?: string;
+  durationInFrames?: number;
+  subtitle?: string;
+  props?: Record<string, unknown>;
+};
+
+const scenesOf = (project: Record<string, unknown>): Scene[] =>
+  Array.isArray(project.scenes) ? (project.scenes as Scene[]) : [];
+
+const label = (s: Scene, i: number) => s.name || s.type || s.id || `第 ${i + 1} 幕`;
+
+export default {
+  /* ── 自检时补检查项 ────────────────────────────────────────── */
+  "audit:rules"(ctx: {
+    brief: Record<string, unknown>;
+    project: Record<string, unknown>;
+    lock: Record<string, unknown> | null;
+  }) {
+    const scenes = scenesOf(ctx.project);
+    const fps = Number(ctx.project.fps) || 30;
+    const warnings: string[] = [];
+    const passed: string[] = [];
+
+    if (!scenes.length) return { warnings: ["还没有画面，跳过画面节奏检查"] };
+
+    /* 1. 单幕过短：不是"不好看"，是"看不完" */
+    const tooShort = scenes
+      .map((s, i) => ({ s, i, sec: (Number(s.durationInFrames) || 0) / fps }))
+      .filter((x) => x.sec > 0 && x.sec < MIN_SCENE_SEC);
+    if (tooShort.length) {
+      warnings.push(
+        `${tooShort.length} 幕短于 ${MIN_SCENE_SEC}s：` +
+          tooShort.map((x) => `${label(x.s, x.i)}（${x.sec.toFixed(2)}s）`).join("、") +
+          " —— 观众还没看清就切走了，要么加帧要么并进前一幕",
+      );
+    } else {
+      passed.push(`没有过短的幕（最短 ${Math.min(...scenes.map((s) => (Number(s.durationInFrames) || 0) / fps)).toFixed(2)}s）`);
+    }
+
+    /* 2. 一条字幕读不完：字幕是"跟着说"的，不是"贴一段话" */
+    const longSubs = scenes
+      .map((s, i) => ({ s, i, len: String(s.subtitle ?? "").trim().length }))
+      .filter((x) => x.len > MAX_SUBTITLE);
+    if (longSubs.length) {
+      warnings.push(
+        `${longSubs.length} 条字幕超过 ${MAX_SUBTITLE} 字：` +
+          longSubs.map((x) => `${label(x.s, x.i)}（${x.len} 字）`).join("、") +
+          " —— 拆成两条，或者把长句挪进画面正文",
+      );
+    }
+
+    /* 3. 连着三幕同一类型：视觉疲劳，剪出来像卡住了 */
+    const streaks: string[] = [];
+    for (let i = 2; i < scenes.length; i++) {
+      const t = scenes[i].type;
+      const same = t && t === scenes[i - 1].type && t === scenes[i - 2].type;
+      // 只在"这一段连续"的**起点**报一次：四幕连着会在 i=2、i=3 各命中一次，
+      // 同一个问题报两遍会让用户以为有两处
+      const isRunStart = !same || scenes[i - 3]?.type !== t;
+      if (same && isRunStart) {
+        let end = i;
+        while (end + 1 < scenes.length && scenes[end + 1].type === t) end++;
+        streaks.push(`${label(scenes[i], i)}～${label(scenes[end], end)} 连续 ${end - i + 3} 幕都是 ${t}`);
+      }
+    }
+    if (streaks.length) {
+      warnings.push(`画面类型重复：${streaks.join("；")} —— 中间插一幕不同版式，节奏才不会塌`);
+    }
+
+    return { warnings, passed };
+  },
+
+  /* ── 每次写入后复盘（只能提醒，写已经发生了） ──────────────── */
+  "ops:review"(ctx: {
+    before: Record<string, unknown>;
+    after: Record<string, unknown>;
+    ops: Record<string, unknown>[];
+  }) {
+    const before = scenesOf(ctx.before);
+    const after = scenesOf(ctx.after);
+    const warnings: string[] = [];
+
+    // 批量删幕很可能是误操作：撤销栈里它只是一条 update_project
+    const removed = before.length - after.length;
+    if (removed > 3) {
+      warnings.push(`这一批删掉了 ${removed} 幕（${before.length} → ${after.length}），确认是有意的？改坏了要从版本历史里找回来`);
+    }
+
+    // 标题型字段过长：排版会溢出，而"溢出"在编辑器里不一定看得出（要出图才明显）
+    for (const s of after) {
+      const heading = String((s.props as Record<string, unknown> | undefined)?.heading ?? "").trim();
+      if (heading.length > 24) {
+        warnings.push(`${label(s, 0)} 的标题 ${heading.length} 字（建议 ≤ 24）：「${heading.slice(0, 20)}…」`);
+      }
+    }
+
+    return { warnings };
+  },
+
+  /* ── 设计锁补规则：让自定义问诊字段真的有用 ────────────────── */
+  "brief:derive"(ctx: { brief: Record<string, unknown>; lock: Record<string, unknown> }) {
+    const x = (ctx.brief.x ?? {}) as Record<string, unknown>;
+    const lockRules: string[] = [];
+
+    // `x.` 是问诊插件问出来、宿主不认识的自定义字段。
+    // 把它们翻成验收时能看见的一条规则 —— 否则这些字段问完就躺在 brief.json 里没人用。
+    const competitor = String(x.competitor ?? "").trim();
+    if (competitor) {
+      lockRules.push(`竞品对照：不要出现「${competitor}」的说法与视觉（来自自定义问诊字段 x.competitor）`);
+    }
+
+    const forbiddenTone = String(x.forbiddenTone ?? "").trim();
+    if (forbiddenTone) {
+      lockRules.push(`语气禁区：${forbiddenTone}`);
+    }
+
+    return { lockRules };
+  },
+};

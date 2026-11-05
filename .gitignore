@@ -64,3 +64,5 @@ memory/
 !/plugins/_example-brief/**
 !/plugins/_example-scene/
 !/plugins/_example-scene/**
+!/plugins/_example-audit/
+!/plugins/_example-audit/**

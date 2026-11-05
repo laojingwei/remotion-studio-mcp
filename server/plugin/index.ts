@@ -42,4 +42,20 @@ export {
   PermissionDenied,
 } from "./permissions";
 
+export {
+  HOOK_KINDS,
+  HOOK_LABEL,
+  ensurePluginHooks,
+  hasHook,
+  hookStatus,
+  runHook,
+  frozenSnapshot,
+  resetHookCache,
+  type HookKind,
+  type HookContext,
+  type HookVerdict,
+  type HookStatus,
+  type HookError,
+} from "./hooks";
+
 export { pluginsToText } from "./summary";

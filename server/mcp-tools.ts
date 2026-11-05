@@ -132,6 +132,7 @@ import { CLEANUP_TOOLS } from "./tools/cleanup";
 import { RESOURCE_TOOLS } from "./tools/resources";
 import { PLUGIN_TOOLS } from "./tools/plugin";
 import { ensurePluginScenes } from "./plugin/scene-meta";
+import { ensurePluginHooks } from "./plugin/hooks";
 
 // 老调用方（server/index.ts）从这里引，保持导出面不变
 export { validateToolArgs } from "./tools/_shared";
@@ -5825,6 +5826,18 @@ export function buildMcpServer(): McpServer {
         ensurePluginScenes();
       } catch (err) {
         console.warn("[plugin] 场景同步失败（不影响工具调用）：", err);
+      }
+
+      /*
+       * 钩子同理，而且这里更必要：`audit_project` / `save_brief` / `apply_ops`
+       * 这些工具直接跑在代理进程里，钩子不加载就等于没装。
+       * await 是必须的——工具入口本来就是 async，而钩子的调用点（同步路径）
+       * 只能消费"已经 import 完"的结果。
+       */
+      try {
+        await ensurePluginHooks();
+      } catch (err) {
+        console.warn("[plugin] 钩子加载失败（不影响工具调用）：", err);
       }
 
       /**

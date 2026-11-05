@@ -119,6 +119,11 @@ export function inferProvides(dir: string): ProvideKind[] {
   if (has("brief/steps.json")) out.push("brief.steps");
   // 场景组件：scenes 目录里有 .json 就算（同名的 .tsx 由生成器配对检查）
   if (hasJson("scenes")) out.push("scene");
+  // 流程钩子：根目录有入口文件就算。文件名的候选表在 hooks.ts，
+  // 这里只做存在性判断——两边都改是唯一会漂的地方，所以这里只认最常见的几个
+  if (["plugin.ts", "plugin.mts", "plugin.mjs", "plugin.js", "index.ts", "index.mjs"].some((f) => has(f))) {
+    out.push("hooks");
+  }
   return out;
 }
 

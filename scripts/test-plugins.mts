@@ -512,6 +512,213 @@ test("生成器：没有场景时生成空占位，不 import 任何东西", () 
   assert.ok(!text.includes("jsonToSceneMeta"), "空情况不该 import（会被 lint 判未使用）");
 });
 
+/* ────────────────────────── 钩子（批次 4） ────────────────────────── */
+
+const { hasHook, runHook, ensurePluginHooks, hookStatus, hookKindsOf, resetHookCache, frozenSnapshot } =
+  await import("../server/plugin/hooks");
+const { auditBriefAgainstProject } = await import("../server/brief-audit.service");
+const { recomputeDesignLock } = await import("../server/brief.service");
+const { projects } = await import("../server/project.service");
+const { writeProject } = await import("../server/store");
+const { createSeedProject } = await import("../shared/ops");
+
+/** 钩子加载是异步的，所以这一节需要自己的 async 版本 */
+const testAsync = async (name: string, fn: () => Promise<void>) => {
+  try {
+    await fn();
+    passed++;
+    console.log(`  ✓ ${name}`);
+  } catch (err) {
+    failures.push(name);
+    console.error(`  ✗ ${name}`);
+    const msg = err instanceof Error ? err.message : String(err);
+    for (const line of msg.split("\n")) console.error(`    ${line}`);
+  }
+};
+
+/** 写一个钩子插件，返回它的插件 id */
+const writeHookPlugin = (dir: string, body: string): string => {
+  write(`${dir}/plugin.ts`, body);
+  return dir;
+};
+
+const auditCtx = () => ({ brief: {}, project: {}, lock: null }) as never;
+
+await testAsync("没有钩子插件：hasHook 全假，runHook 返回空意见（不崩）", async () => {
+  resetPlugins();
+  resetHookCache();
+  await ensurePluginHooks();
+  assert.equal(hasHook("audit:rules"), false);
+  assert.deepEqual(runHook("audit:rules", auditCtx()).warnings, []);
+});
+
+await testAsync("plugin.ts 提供 audit:rules：加载后生效，意见带插件 id 前缀", async () => {
+  resetPlugins();
+  writeHookPlugin("gate", 'export default { "audit:rules": () => ({ warnings: ["字幕太长"] }) };');
+  resetHookCache();
+  await ensurePluginHooks();
+  assert.equal(hasHook("audit:rules"), true);
+  const v = runHook("audit:rules", auditCtx());
+  assert.deepEqual(v.warnings, ["[gate] 字幕太长"], "插件意见必须带归属前缀");
+  assert.deepEqual(hookKindsOf("gate"), ["audit:rules"]);
+});
+
+await testAsync("返回值乱写（null / 数字 / 空串）：当没说话，不抛错", async () => {
+  resetPlugins();
+  writeHookPlugin(
+    "sloppy",
+    'export default { "audit:rules": () => ({ warnings: [1, null, "  ", "有用的一条"] }) };',
+  );
+  writeHookPlugin("nil", 'export default { "audit:rules": () => undefined };');
+  resetHookCache();
+  await ensurePluginHooks();
+  const v = runHook("audit:rules", auditCtx());
+  assert.deepEqual(v.warnings, ["[sloppy] 有用的一条"], "只保留真正的字符串，且不受别的插件影响");
+});
+
+await testAsync("一个插件抛错：其余照常，错误进 hookStatus", async () => {
+  resetPlugins();
+  writeHookPlugin("boom", 'export default { "audit:rules": () => { throw new Error("我坏了"); } };');
+  writeHookPlugin("fine", 'export default { "audit:rules": () => ({ warnings: ["我还行"] }) };');
+  resetHookCache();
+  await ensurePluginHooks();
+  const v = runHook("audit:rules", auditCtx());
+  assert.deepEqual(v.warnings, ["[fine] 我还行"], "坏插件不能连带别人");
+  const errs = hookStatus().errors;
+  assert.ok(
+    errs.some((e) => e.pluginId === "boom" && e.message.includes("我坏了")),
+    `错误要能指回插件，实际：${JSON.stringify(errs)}`,
+  );
+});
+
+await testAsync("连续失败 3 次：自动摘除（否则每次保存都刷一条堆栈）", async () => {
+  resetPlugins();
+  writeHookPlugin("cursed", 'export default { "audit:rules": () => { throw new Error("永远坏"); } };');
+  resetHookCache();
+  await ensurePluginHooks();
+  assert.equal(hasHook("audit:rules"), true);
+  runHook("audit:rules", auditCtx());
+  runHook("audit:rules", auditCtx());
+  runHook("audit:rules", auditCtx());
+  assert.equal(hasHook("audit:rules"), false, "第 3 次后应被摘除");
+  assert.ok(
+    hookStatus().errors.some((e) => e.message.includes("已停用")),
+    "摘除要有记录，不能悄悄消失",
+  );
+});
+
+await testAsync("改 plugin.ts：重新 ensure 后新逻辑生效（热更新）", async () => {
+  resetPlugins();
+  writeHookPlugin("hot", 'export default { "audit:rules": () => ({ warnings: ["v1"] }) };');
+  resetHookCache();
+  await ensurePluginHooks();
+  assert.deepEqual(runHook("audit:rules", auditCtx()).warnings, ["[hot] v1"]);
+
+  // 同一毫秒内写入也要能被发现：指纹里有 size
+  writeHookPlugin("hot", 'export default { "audit:rules": () => ({ warnings: ["v2 改过了"] }) };');
+  await ensurePluginHooks();
+  assert.deepEqual(runHook("audit:rules", auditCtx()).warnings, ["[hot] v2 改过了"]);
+});
+
+await testAsync("入参是深冻结快照：插件改它会抛错（而不是把宿主改坏）", async () => {
+  resetPlugins();
+  writeHookPlugin(
+    "hacker",
+    'export default { "audit:rules": (ctx) => { try { ctx.brief.hacked = 1; return { warnings: ["没冻结"] }; } catch { return { warnings: ["已冻结"] }; } } };',
+  );
+  resetHookCache();
+  await ensurePluginHooks();
+  // 快照由调用方准备（runHook 刻意不替调用方冻结，避免冻住宿主的活对象）
+  const ctx = { brief: frozenSnapshot({ real: true }), project: frozenSnapshot({}), lock: null };
+  assert.deepEqual(runHook("audit:rules", ctx as never).warnings, ["[hacker] 已冻结"]);
+});
+
+await testAsync("声明了 hooks 但没有入口文件：报错指路，服务不崩", async () => {
+  resetPlugins();
+  write(
+    "empty-hook/manifest.json",
+    JSON.stringify({ apiVersion: 1, id: "empty-hook", name: "空钩子", provides: ["hooks"] }),
+  );
+  resetHookCache();
+  await ensurePluginHooks();
+  assert.equal(hasHook("audit:rules"), false);
+  assert.ok(
+    hookStatus().errors.some((e) => e.pluginId === "empty-hook" && e.message.includes("入口文件")),
+    "要说清是缺入口文件，而不是静默不生效",
+  );
+});
+
+await testAsync("停用插件：钩子立刻消失（文件不动）", async () => {
+  resetPlugins();
+  writeHookPlugin("toggled", 'export default { "audit:rules": () => ({ warnings: ["在"] }) };');
+  resetHookCache();
+  await ensurePluginHooks();
+  assert.equal(hasHook("audit:rules"), true);
+
+  setPluginEnabled("toggled", false);
+  await ensurePluginHooks();
+  assert.equal(hasHook("audit:rules"), false, "停用后不该还挂着一个已停用插件的钩子");
+  setPluginEnabled("toggled", true);
+  await ensurePluginHooks();
+  assert.equal(hasHook("audit:rules"), true, "重新启用要能恢复");
+});
+
+/* ── 三个真实消费点：不是只测 runHook，而是测它真的接上了 ── */
+
+await testAsync("接进自检：插件报 blocking 会让体检不通过", async () => {
+  resetPlugins();
+  writeHookPlugin(
+    "strict",
+    'export default { "audit:rules": () => ({ blocking: ["画面里没有人脸"], passed: ["时长合规"] }) };',
+  );
+  resetHookCache();
+  await ensurePluginHooks();
+
+  const r = auditBriefAgainstProject({} as never, { fps: 30, scenes: [] } as never);
+  assert.equal(r.ok, false, "插件说 must-fix，体检就必须不通过");
+  assert.ok(
+    r.blocking.some((x) => x.includes("[strict] 画面里没有人脸")),
+    `blocking 里要有插件项，实际：${JSON.stringify(r.blocking)}`,
+  );
+  assert.ok(r.passed.some((x) => x.includes("[strict] 时长合规")));
+});
+
+await testAsync("接进设计锁：brief:derive 的规则出现在 rules 里", async () => {
+  resetPlugins();
+  writeHookPlugin(
+    "derive",
+    'export default { "brief:derive": (ctx) => ({ lockRules: [`竞品：${ctx.brief.x?.competitor ?? "无"}`] }) };',
+  );
+  resetHookCache();
+  await ensurePluginHooks();
+
+  const lock = recomputeDesignLock({ form: "口播讲解", x: { competitor: "某品牌" } } as never);
+  assert.ok(
+    lock.rules.some((r) => r.includes("[derive] 竞品：某品牌")),
+    `自定义问诊字段要能变成验收规则，实际：${JSON.stringify(lock.rules)}`,
+  );
+  // 判定字段不能被插件改：这条边界是设计锁的可信度来源
+  assert.equal(typeof lock.maxTextElements, "number", "插件不能影响判定字段");
+});
+
+await testAsync("接进写入：ops:review 的提醒出现在 apply 的回执里", async () => {
+  resetPlugins();
+  writeHookPlugin(
+    "watcher",
+    'export default { "ops:review": (ctx) => ({ warnings: [`这批 ${ctx.ops.length} 条操作`] }) };',
+  );
+  resetHookCache();
+  await ensurePluginHooks();
+
+  const seed = { ...createSeedProject(), id: "hooktest", rev: 1 };
+  writeProject(seed as never);
+  const res = projects.apply("hooktest", [{ op: "update_project", patch: { name: "改个名" } } as never]);
+  assert.ok(
+    res.summary.some((s) => s.includes("[watcher] 这批 1 条操作")),
+    `写入回执里要能看到插件复盘，实际：${JSON.stringify(res.summary)}`,
+  );
+});
+
 /* ────────────────────────── 收尾 ────────────────────────── */
 
 fs.rmSync(TMP, { recursive: true, force: true });

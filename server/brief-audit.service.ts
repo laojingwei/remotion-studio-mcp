@@ -11,6 +11,7 @@
 import { totalDuration } from "../shared/schema";
 import { lockViolations, type DesignLock } from "../shared/designLock";
 import { sceneAuditElements } from "../shared/sceneElements";
+import { frozenSnapshot, hasHook, runHook } from "./plugin/hooks";
 import type { Brief } from "./brief.service";
 
 export type AuditResult = {
@@ -238,6 +239,24 @@ export function auditBriefAgainstProject(
   const dels = (brief.deliverables ?? []).filter((d) => String(d?.type ?? "").trim());
   if (dels.length) {
     passed.push(`交付清单 ${dels.length} 项：${dels.map((d) => d.type).join("、")}（导出时逐项核对）`);
+  }
+
+  /* ⑧ 插件补充规则 —— 画质守门员之类。
+   *
+   * 放在这里而不是另开一个工具，是因为插件要看的正是「契约 + 成片 + 设计锁」这三份
+   * 已经齐备的数据；另开工具会让用户/agent 忘记跑它，等于没装。
+   *
+   * 插件报的 blocking 会让体检不通过 —— 这是插件能有的最强权力，所以每条都带
+   * `[插件id]` 前缀：用户必须看得出这条不是宿主说的。 */
+  if (hasHook("audit:rules")) {
+    const v = runHook("audit:rules", {
+      brief: frozenSnapshot(brief) as unknown as Record<string, unknown>,
+      project: frozenSnapshot(project) as unknown as Record<string, unknown>,
+      lock: (lock ? frozenSnapshot(lock) : null) as unknown as Record<string, unknown> | null,
+    });
+    blocking.push(...v.blocking);
+    warnings.push(...v.warnings);
+    passed.push(...v.passed);
   }
 
   return { ok: blocking.length === 0, blocking, warnings, passed };

@@ -9,6 +9,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { metaList } from "../shared/sceneMetas";
 import { ensurePluginScenes, pluginSceneTypes } from "./plugin/scene-meta";
+import { ensurePluginHooks } from "./plugin/hooks";
 import type { Op } from "../shared/ops";
 import { createSeedProject } from "../shared/ops";
 import type { Project } from "../shared/schema";
@@ -129,6 +130,7 @@ const app = new Hono();
 
 /** 插件问题只报一次，避免每个请求刷屏 */
 let ensuredOnce = false;
+let hooksReported = false;
 
 /**
  * 插件场景同步：**每个请求进来先做一次**。
@@ -151,6 +153,29 @@ app.use("*", async (_c, next) => {
     }
   } catch (err) {
     console.warn("[plugin] 场景同步失败（不影响请求）：", err);
+  }
+  await next();
+});
+
+/**
+ * 插件钩子加载：跟场景同步同一个位置、同一个理由。
+ *
+ * 钩子的调用点（自检 / 写工程 / 设计锁）全是同步函数，等不了异步加载，
+ * 所以必须在请求进来之前就把插件 import 完。放在这里而不是启动时一次，
+ * 是因为改了 `plugin.ts` 也要能立刻生效——指纹变了就重新 import。
+ *
+ * `ensurePluginHooks` 自己带 fingerprint 与 in-flight 去重，并发请求不会重复加载；
+ * 插件加载失败只记错误、不挡请求（一个坏插件不该让编辑器打不开）。
+ */
+app.use("*", async (_c, next) => {
+  try {
+    const st = await ensurePluginHooks();
+    if (st.errors.length && !hooksReported) {
+      hooksReported = true;
+      for (const e of st.errors) console.warn(`[plugin] ${e.pluginId}：${e.message}`);
+    }
+  } catch (err) {
+    console.warn("[plugin] 钩子加载失败（不影响请求）：", err);
   }
   await next();
 });
@@ -1974,6 +1999,17 @@ try {
 } catch {
   /* 提醒失败不影响启动 */
 }
+
+/*
+ * 启动时预热插件钩子（不阻塞监听）。
+ *
+ * 不做的话，第一个请求要等 esbuild 打包插件（实测 240ms 左右），
+ * 用户看到的是"刚打开编辑器那一下特别慢"。放到这里，这几十上百毫秒
+ * 混在启动过程里，谁也感觉不到。失败也不影响启动——请求中间件还会再试。
+ */
+void ensurePluginHooks().catch(() => {
+  /* 中间件里有正式的日志与兜底 */
+});
 
 const httpServer = serve({ fetch: app.fetch, port: PORT, hostname: HOST }, (info) => {
   // 对外展示用 localhost（更好读）；内部探活仍走 127.0.0.1

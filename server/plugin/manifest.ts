@@ -39,6 +39,7 @@ export const PROVIDE_KINDS = [
   /* ── L1 注册表层 ── */
   "brief.steps", //      brief/steps.json       → 问诊步骤（替换或追加）
   "scene", //            scenes/<type>.json + <type>.tsx → 新场景类型（**必须放项目内**）
+  "hooks", //            plugin.ts              → 介入流程（自检 / 写入复盘 / 设计锁）
 ] as const;
 
 export type ProvideKind = (typeof PROVIDE_KINDS)[number];
@@ -54,6 +55,7 @@ export const PROVIDE_LABEL: Record<ProvideKind, string> = {
   "scene3d.look": "3D 观感",
   "brief.steps": "问诊步骤",
   scene: "场景组件",
+  hooks: "流程钩子",
 };
 
 /**
@@ -64,7 +66,7 @@ export const PROVIDE_LABEL: Record<ProvideKind, string> = {
  * `elements/` 里放图标然后发现面板没变。**能声明但没生效**是插件系统里最伤人的
  * 一类问题（比直接报错伤人，因为不报错）。所以没接的项必须在输出里标出来。
  */
-export const IMPLEMENTED_PROVIDES: ProvideKind[] = ["skill", "style", "brief.steps", "scene"];
+export const IMPLEMENTED_PROVIDES: ProvideKind[] = ["skill", "style", "brief.steps", "scene", "hooks"];
 
 /**
  * 权限。

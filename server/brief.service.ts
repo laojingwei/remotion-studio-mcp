@@ -2,6 +2,7 @@ import fs from "node:fs";
 import { ROOT as PROJECT_ROOT } from "./root";
 import { PROJECTS_ROOT } from "./paths";
 import path from "node:path";
+import { frozenSnapshot, hasHook, runHook } from "./plugin/hooks";
 import { pluginBriefSteps } from "./plugin/brief-steps";
 import {
   deriveDesignLock,
@@ -980,7 +981,7 @@ export function briefCoverage(brief: Brief | null, opts?: { fps?: number }): Bri
 
 /** 由 brief 重新推导设计锁（form/档位/情绪变了就重算） */
 export function recomputeDesignLock(brief: Brief): DesignLock {
-  return deriveDesignLock({
+  const lock = deriveDesignLock({
     form: brief.form,
     density: brief.density,
     motionLevel: brief.motionLevel,
@@ -989,6 +990,25 @@ export function recomputeDesignLock(brief: Brief): DesignLock {
     bgTone: brief.bgTone,
     mood: brief.mood,
   });
+
+  /*
+   * 插件补充规则（brief:derive）。
+   *
+   * 只往 `rules` 里加**说明文字**，不碰任何判定字段（maxTextElements / 白名单 / 字号）。
+   * 这条边界很重要：设计锁是验收依据，如果插件能改 maxTextElements，
+   * 那就等于第三方定义了"什么叫超标"，用户再也不知道该信谁。
+   * 想真正参与判定需要一套更谨慎的机制（带来源标记的覆盖），不在这批。
+   *
+   * 好处是插件终于能让自定义问诊字段"有用"：把 `x.competitor` 这类字段
+   * 翻译成一条验收时能看见的规则，而不是问完就躺在 brief.json 里。
+   */
+  if (!hasHook("brief:derive")) return lock;
+  const v = runHook("brief:derive", {
+    brief: frozenSnapshot(brief) as unknown as Record<string, unknown>,
+    lock: frozenSnapshot(lock) as unknown as Record<string, unknown>,
+  });
+  if (!v.lockRules.length) return lock;
+  return { ...lock, rules: [...lock.rules, ...v.lockRules] };
 }
 
 const ROOT = PROJECTS_ROOT;

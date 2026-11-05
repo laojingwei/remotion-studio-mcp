@@ -3,6 +3,7 @@ import { applyOps, type Op, type OpResult } from "../shared/ops";
 import { deleteProjectDir, listProjectIds, listSnapshots, projectFileTimes, readProject, readSnapshot, writeLastProjectId, writeProject } from "./store";
 import { assertTextureAssets } from "./texture-asset-check";
 import { forgetArchived, pruneArchived, readArchive, setArchived } from "./archive.service";
+import { frozenSnapshot, hasHook, runHook } from "./plugin/hooks";
 
 type Listener = (event: BroadcastEvent) => void;
 
@@ -201,6 +202,26 @@ class ProjectService {
     // 贴图素材校验（存在性/格式/体积/尺寸）在写库前挡——渲染端加载失败只会静默回退，agent 看不到
     assertTextureAssets(ops);
     const result: AppliedResult = applyOps(current, ops);
+
+    /*
+     * 插件复盘（ops:review）：拿到写入前/后两份快照，只能往回调回执里加文字。
+     *
+     * 为什么是"复盘"而不是"拦截"：真实的拦截点应该在写库之前，那意味着插件能改
+     * 一份即将落盘的工程——一个写错的插件会把用户的工程改坏，而且撤销栈里看不出
+     * 是哪一步被谁改的。先给只读的复盘能力，等权限执法那批再谈拦截。
+     *
+     * 快照只在真有钩子时才拷（结构化克隆整份工程不便宜），没装插件时零开销。
+     */
+    if (hasHook("ops:review")) {
+      const v = runHook("ops:review", {
+        before: frozenSnapshot(current) as unknown as Record<string, unknown>,
+        after: frozenSnapshot(result.project) as unknown as Record<string, unknown>,
+        ops: frozenSnapshot(ops) as unknown as Record<string, unknown>[],
+      });
+      // blocking 已经被写进去了，无法回滚，只能降级成警示 —— 不假装它能拦
+      const lines = [...v.blocking.map((x) => `⚠️ ${x}（已写入，需手动修）`), ...v.warnings];
+      if (lines.length) result.summary.push(...lines);
+    }
     if (revMismatch) {
       // 合并且告知：不打断用户，但要让回执里能看见"这笔是基于旧版本算的"
       result.summary.unshift(
