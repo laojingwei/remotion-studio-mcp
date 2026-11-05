@@ -39,7 +39,7 @@ process.env.STUDIO_DATA_ROOT = DATA_DIR;
 // 而删除会撞上 safe-delete 的批量上限（静默失败 → 残留 → 断言指向完全错误的方向）
 process.env.STUDIO_PUBLIC_DIR = path.join(TMP, "public");
 
-const { scanPlugins, setPluginEnabled } = await import("../server/plugin/discovery");
+const { scanPlugins, setPluginEnabled, isPluginEnabled, seedExamplePluginsDisabled } = await import("../server/plugin/discovery");
 const { listSkills } = await import("../server/skills.service");
 const { listStyles, presetOf } = await import("../server/styles.service");
 const { briefSteps, briefStepsSource, coreSteps, stepMissingFields } = await import("../server/brief.service");
@@ -1539,8 +1539,182 @@ await testAsync("reprocess：没装处理器时明确说链是空的（不是静
   assert.ok(r.warnings.some((w) => w.includes("没有装")), `应说明原因：${r.warnings.join("/")}`);
 });
 
+/* ────────────────────────── 安装器：来源识别与目标命名 ────────────────────────── */
+
+const {
+  detectSourceKind,
+  guessTargetName,
+  normalizeGitUrl,
+  splitNpmSpec,
+  safeDirName,
+  startInstall,
+  cleanupPluginStaging,
+} = await import("../server/plugin/installer.service");
+
+test("安装器：git / npm / 本地目录三种来源都能认出来", () => {
+  assert.equal(detectSourceKind("https://github.com/a/b"), "git");
+  assert.equal(detectSourceKind("git@github.com:a/b.git"), "git");
+  assert.equal(detectSourceKind("a/b"), "git");
+  assert.equal(detectSourceKind("ssh://git@host/x.git"), "git");
+  assert.equal(detectSourceKind("@scope/pkg"), "npm");
+  assert.equal(detectSourceKind("pkg@1.2.3"), "npm");
+  assert.equal(detectSourceKind("npm:pkg"), "npm");
+  assert.equal(detectSourceKind(PLUGIN_DIR), "local");
+});
+
+test("安装器：认不出的来源返回 null，而不是硬猜", () => {
+  assert.equal(detectSourceKind(""), null);
+  assert.equal(detectSourceKind("这不是一个来源，还有中文"), null);
+});
+
+test("安装器：git 简写补成完整 URL，完整 URL 原样保留", () => {
+  assert.equal(normalizeGitUrl("a/b"), "https://github.com/a/b.git");
+  assert.equal(normalizeGitUrl("https://x.com/a/b"), "https://x.com/a/b");
+});
+
+test("安装器：npm spec 拆包名与版本（含 scoped）", () => {
+  assert.deepEqual(splitNpmSpec("@scope/pkg@1.2.3"), { name: "@scope/pkg", version: "1.2.3" });
+  assert.deepEqual(splitNpmSpec("pkg@^2"), { name: "pkg", version: "^2" });
+  assert.deepEqual(splitNpmSpec("pkg"), { name: "pkg", version: "" });
+  assert.deepEqual(splitNpmSpec("npm:pkg"), { name: "pkg", version: "" });
+});
+
+test("安装器：目标目录名取包名/仓库名，中文保留、非法字符替换", () => {
+  assert.equal(guessTargetName("npm", "@scope/pkg"), "pkg");
+  assert.equal(guessTargetName("git", "https://github.com/a/my-plugin.git"), "my-plugin");
+  assert.equal(safeDirName("我的插件"), "我的插件");
+  assert.equal(safeDirName("../etc/passwd"), "etc-passwd");
+  assert.equal(safeDirName("a b  c"), "a-b-c");
+});
+
+test("安装器：本地目录优先用 package.json 的 name 当目录名", () => {
+  const dir = path.join(TMP, "pkg-named");
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(path.join(dir, "package.json"), JSON.stringify({ name: "@me/cool-plugin" }));
+  assert.equal(guessTargetName("local", dir), "cool-plugin");
+});
+
+test("安装器：空来源 / 目标已存在都会立刻报错（不会起子进程）", () => {
+  assert.throws(() => startInstall({ source: "   " }), /不能为空/);
+  const dup = path.join(PLUGIN_DIR, "already-there");
+  fs.mkdirSync(dup, { recursive: true });
+  fs.writeFileSync(path.join(dup, "plugin.ts"), "export default {};\n");
+  assert.throws(() => startInstall({ source: dup }), /已存在/);
+});
+
+test("安装器：启动时清掉残留的暂存目录", () => {
+  const staging = path.join(PLUGIN_DIR, ".staging", "job-x");
+  fs.mkdirSync(staging, { recursive: true });
+  fs.writeFileSync(path.join(staging, "junk.txt"), "x");
+  const cleaned = cleanupPluginStaging();
+  assert.ok(cleaned.includes("job-x"), `应报告清理了 job-x：${cleaned.join("/")}`);
+  assert.equal(fs.existsSync(staging), false);
+});
+
+test("预检：registry 清单里没有任何插件标志 → 拒绝下载", async () => {
+  const { manifestRejectsPlugin } = await import("../server/plugin/installer.service");
+  // 三种"明确是插件"的声明，一个都不能误杀
+  assert.equal(manifestRejectsPlugin({ remotionStudio: { provides: ["hooks"] } }, "a"), null);
+  assert.equal(manifestRejectsPlugin({ main: "dist/index.mjs" }, "a"), null);
+  assert.equal(manifestRejectsPlugin({ exports: { ".": "./dist/index.js" } }, "a"), null);
+  assert.equal(manifestRejectsPlugin({ keywords: ["remotion-studio", "plugin"] }, "a"), null);
+  assert.equal(manifestRejectsPlugin({ files: ["skills", "README.md"] }, "a"), null);
+  // 什么都没有 → 给出理由
+  const why = manifestRejectsPlugin({ keywords: ["remotion", "mcp"], files: ["server", "web"] }, "some-app");
+  assert.ok(why && why.includes("没有任何插件标志"), `应拒绝：${why}`);
+});
+
+test("预检：仓库目录树里有 skills/manifest.json 就算插件", async () => {
+  const { treeLooksLikePlugin } = await import("../server/plugin/installer.service");
+  assert.equal(treeLooksLikePlugin(["skills/a.md", "README.md"], null), true);
+  assert.equal(treeLooksLikePlugin(["manifest.json"], null), true);
+  assert.equal(treeLooksLikePlugin(["plugin.ts"], null), true);
+  assert.equal(treeLooksLikePlugin(["src/index.ts", "package.json"], {}), false);
+  assert.equal(treeLooksLikePlugin(["src/index.ts"], { main: "dist/x.js" }), true);
+  assert.equal(treeLooksLikePlugin(["a.ts"], { remotionStudio: {} }), true);
+});
+
+test("未识别目录：装进来的包会列出来（可见），纯碎文件不打扰", async () => {
+  const { scanOrphanDirs } = await import("../server/plugin/installer.service");
+
+  // 有 package.json、没有插件标志 = 一次装错的痕迹
+  const bad = path.join(PLUGIN_DIR, "wrong-pkg");
+  fs.mkdirSync(bad, { recursive: true });
+  fs.writeFileSync(path.join(bad, "package.json"), JSON.stringify({ name: "wrong-pkg", version: "1.0.0" }));
+  fs.writeFileSync(path.join(bad, "index.js"), "module.exports = 1;\n");
+
+  // 只有一个 README 的临时文件夹：不是安装痕迹，不该出现
+  const scratch = path.join(PLUGIN_DIR, "scratch-notes");
+  fs.mkdirSync(scratch, { recursive: true });
+  fs.writeFileSync(path.join(scratch, "README.md"), "# 随手放的\n");
+
+  const list = scanOrphanDirs();
+  const names = list.map((o) => o.name);
+  assert.ok(names.includes("wrong-pkg"), `应列出 wrong-pkg：${names.join("/")}`);
+  assert.ok(!names.includes("scratch-notes"), "只有一个 README 的目录不该出现");
+
+  const one = list.find((o) => o.name === "wrong-pkg")!;
+  assert.ok(one.bytes > 0, "应统计到体积");
+  assert.match(one.reason, /插件标志/);
+});
+
+test("未识别目录：能删（挪进回收站），删完就不在列表里", async () => {
+  const { scanOrphanDirs, removeOrphanDir } = await import("../server/plugin/installer.service");
+  const r = removeOrphanDir(path.join(PLUGIN_DIR, "wrong-pkg"));
+  assert.ok(fs.existsSync(r.trash), `回收站里应有一份：${r.trash}`);
+  assert.equal(fs.existsSync(r.dir), false);
+  assert.ok(!scanOrphanDirs().some((o) => o.name === "wrong-pkg"));
+});
+
+test("未识别目录：拒绝删除插件目录之外的东西", async () => {
+  const { removeOrphanDir } = await import("../server/plugin/installer.service");
+  assert.throws(() => removeOrphanDir(path.join(TMP, "not-a-plugin")), /不在任何插件目录内/);
+});
+
 // 收尾清掉本文件自己造的文件（不删整个目录：safe-delete 会按数量拦）
 rmFiles("shot.png", "a.png", "b.png", "same.png", "plain.png", "old1.png", "old2.png");
+
+/* ────────────────────────── 首次启动：示例插件种子 ────────────────────────── */
+
+/*
+ * 这组用例直接操作 data/plugins.json（种子机制的对象），放在最后跑，
+ * 不与前面"停用状态持久化"的用例互相污染。
+ */
+{
+  const stateFile = path.join(DATA_DIR, "plugins.json");
+  fs.rmSync(stateFile, { force: true });
+  resetPlugins();
+  write("_example-demo/skills/a.md", "# 示例");
+  write("example-other/styles/a.md", "# 示例");
+  write("real-plugin/styles/a.md", "# 真插件");
+}
+
+test("示例种子：全新环境把 _example-* / example-* 停用，真插件不动", () => {
+  const seeded = seedExamplePluginsDisabled();
+  assert.deepEqual(seeded.sort(), ["example-demo", "example-other"].sort());
+  assert.equal(isPluginEnabled("example-demo"), false, "示例应被停用");
+  assert.equal(isPluginEnabled("real-plugin"), true, "普通插件必须照常默认启用");
+});
+
+test("示例种子：文件已存在就不再介入（用户意愿优先）", () => {
+  setPluginEnabled("example-demo", true); // 用户手动启用 → 文件已存在
+  const again = seedExamplePluginsDisabled();
+  assert.deepEqual(again, [], "已有状态文件时不应返回/写入任何东西");
+  assert.equal(isPluginEnabled("example-demo"), true, "用户的启用不能被翻回去");
+});
+
+test("示例种子：停用种子后扫描出来的 enabled 状态正确", () => {
+  setPluginEnabled("example-demo", false);
+  resetPlugins();
+  write("only-example/skills/a.md", "# 只有示例，没有真插件");
+  // 状态文件存在（上一条用例写的），所以这次种子不会再跑 → 只有已记录的停用生效
+  seedExamplePluginsDisabled();
+  const found = scanPlugins().find((p) => p.id === "example-demo");
+  // example-demo 目录已删，但 real-plugin 应该照常启用
+  assert.equal(scanPlugins().every((p) => p.enabled || p.id === "example-demo"), true);
+});
+
+fs.rmSync(path.join(DATA_DIR, "plugins.json"), { force: true });
 
 /* ────────────────────────── 收尾 ────────────────────────── */
 

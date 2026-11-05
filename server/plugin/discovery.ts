@@ -169,6 +169,33 @@ export function setPluginEnabled(id: string, enabled: boolean): void {
   writeState({ disabled: [...set].sort() });
 }
 
+/*
+ * 首次启动种子：示例插件默认停用。
+ *
+ * 黑名单机制天然是"放进来就启用"——对普通插件这是对的行为（「放进去就用」），
+ * 但仓库自带的 `_example-*` 是演示用的：启用状态下示例技能/风格/场景/审计规则
+ * 会混进真实项目，用户还得挨个找出来停用。所以在 data/plugins.json **还不存在**
+ * （全新环境）时，把所有 `_example-*`（含无下划线的 `example-*`）预先写进停用列表。
+ *
+ * 只做一次：文件一旦存在（哪怕用户后来手动清空了停用列表）就不再介入——
+ * "用户表达过意愿"永远优先于"我猜你想怎么样"。想看示例时在面板一键启用。
+ */
+export function seedExamplePluginsDisabled(): string[] {
+  if (fs.existsSync(STATE_FILE)) return [];
+  const disabled = new Set<string>();
+  for (const root of pluginRoots()) {
+    if (!root.exists) continue;
+    for (const entry of safeReadDir(root.dir)) {
+      if (!entry.isDirectory()) continue;
+      if (entry.name.startsWith(".") || entry.name === "node_modules") continue;
+      if (/^_?example-/.test(entry.name)) disabled.add(toPluginId(entry.name));
+    }
+  }
+  const list = [...disabled].sort();
+  if (list.length) writeState({ disabled: list });
+  return list;
+}
+
 function safeReadDir(dir: string): fs.Dirent[] {
   try {
     return fs.readdirSync(dir, { withFileTypes: true });

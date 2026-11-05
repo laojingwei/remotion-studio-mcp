@@ -38,6 +38,12 @@ memory/
 # Remotion 打包产物（bundle() 固定输出到这里，可整目录删掉重建）
 /.remotion-bundle
 
+# 插件场景入口：**构建产物**，由 scripts/gen-plugin-entry.mts 生成。
+# 里面写的是 `import * as comp0 from "../plugins/<某人的插件>/scenes/x"` ——
+# 跟着仓库走，别人 clone 下来就会指向一个不存在的目录，build 直接失败。
+# 生成时机：npm run build 的 prebuild、npm start 的构建前、scripts/gen-plugin-entry.mts。
+/src/_plugins.generated.ts
+
 # 临时提交信息文件
 .git-msg.tmp
 
@@ -74,3 +80,15 @@ memory/
 !/plugins/_example-media/**
 !/plugins/_example-engineering/
 !/plugins/_example-engineering/**
+
+# 放行**不等于什么都要**。
+#
+# gitignore 是"最后一条匹配的规则胜出"，所以上面那个 `!**` 会把示例工程里的
+# node_modules 也一起放行——在示例里跑一次 `npm install`，11MB 的依赖就会冒出来
+# 变成待提交项。这三行必须写在放行之后，才能把它们重新挡住。
+#
+# 同理，`.studio-cache/` 是宿主编译源码模式插件的中间产物（见 server/plugin/entry.ts），
+# 属于本机缓存，任何插件目录下都不该入库。
+/plugins/_example-*/node_modules/
+/plugins/_example-*/.studio-cache/
+/plugins/_example-*/package-lock.json

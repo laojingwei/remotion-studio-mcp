@@ -47,6 +47,24 @@ const sourceTime = Math.max(
 );
 
 if (distTime < sourceTime) {
+  /*
+   * 先生成插件场景入口（src/_plugins.generated.ts）。
+   *
+   * 这个文件是**构建产物**，已被 gitignore：它里面写死了 `plugins/<你的插件>/scenes/x`
+   * 这种 import，跟着仓库走就会出现"clone 下来 build 失败，因为那个插件不在"。
+   * 而 `npx vite build` 不触发 npm 的 prebuild 钩子，所以必须在这里显式跑一次。
+   */
+  console.log("▸ 生成插件场景入口 …");
+  const gen = spawnSync("npx tsx scripts/gen-plugin-entry.mts", {
+    cwd: ROOT,
+    shell: true,
+    stdio: "inherit",
+  });
+  if (gen.status !== 0) {
+    console.error("✗ 生成插件场景入口失败，请检查上面的报错");
+    process.exit(1);
+  }
+
   console.log("▸ 构建编辑器前端 …");
   // DEP0190：args 数组和 shell:true 一起用会按空格拼接、不转义，Node 22+ 弃用。
   // 命令是写死的（没有任何用户输入拼进来），并成一条字符串传最干净。

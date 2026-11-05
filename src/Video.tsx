@@ -305,6 +305,39 @@ export type VideoProps = Project & { formatKey: string };
  * 唯一渲染入口：Project + formatKey → 画面。
  * 与画幅无关，画幅只决定 useVideoConfig() 的 width/height。
  */
+/**
+ * 场景类型没有对应组件时的占位画面。
+ *
+ * 尺寸写字面量 px 是**有意破例**：这不是设计素材，是故障提示，必须在任何画幅、
+ * 任何缩放下都读得出来；用 u()/h() 反而会让它在小画幅里缩成一行看不清的小字。
+ */
+const MissingScene: React.FC<{ type?: string; theme: Theme }> = ({ type, theme }) => (
+  <AbsoluteFill
+    style={{
+      backgroundColor: theme.palette.background,
+      alignItems: "center",
+      justifyContent: "center",
+      gap: 10,
+      padding: "0 8%",
+      textAlign: "center",
+    }}
+  >
+    <div style={{ fontFamily: theme.font.heading, fontSize: 30, color: theme.palette.text }}>
+      场景类型未注册：{type || "未知"}
+    </div>
+    <div
+      style={{
+        fontFamily: theme.font.body,
+        fontSize: 16,
+        lineHeight: 1.6,
+        color: theme.palette.textMuted,
+      }}
+    >
+      对应的插件被停用、卸载，或者没有构建；也可能是编辑器没有重新打包。
+    </div>
+  </AbsoluteFill>
+);
+
 export const Video: React.FC<VideoProps> = ({ scenes, theme, audio, audioTracks, effects, fps }) => {
   const { width, height } = useVideoConfig();
   const spans = sceneSpans(scenes);
@@ -330,8 +363,16 @@ export const Video: React.FC<VideoProps> = ({ scenes, theme, audio, audioTracks,
       ))}
 
       {scenes.map((scene, i) => {
-        const Comp = SCENE_COMPONENTS[scene.type];
-        if (!Comp) return null;
+        /*
+         * 找不到组件时不返回 null（那是"整幕静默消失"，画布上就是一块黑）。
+         *
+         * 这种情况真实存在：插件场景被停用/卸载后，工程里那一幕还在；或者插件没构建、
+         * 编辑器没重新打包。服务端有类型（能选、能存），渲染端没组件，两边状态不一致，
+         * 而用户只能看到"画面空了"，完全没有线索。
+         * 黑屏是最难查的失败，宁可让画面自己把原因写出来——成片里出现这张卡，
+         * 也比一帧黑场更容易被发现。
+         */
+        const Comp = SCENE_COMPONENTS[scene.type] ?? MissingScene;
         const span = spans[i];
         const overlap = overlaps[i] ?? 0;
         const bd = scene.backdrop;

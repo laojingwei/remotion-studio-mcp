@@ -11,6 +11,35 @@ import { metaList } from "../shared/sceneMetas";
 import { ensurePluginScenes, pluginSceneTypes } from "./plugin/scene-meta";
 import { ensurePluginHooks } from "./plugin/hooks";
 import { ensurePluginTools } from "./plugin/plugin-tools";
+import {
+  PROJECT_PLUGIN_DIR,
+  USER_PLUGIN_DIR,
+  PLUGIN_TRASH_DIR,
+  cancelJob,
+  cleanupPluginStaging,
+  detectSourceKind,
+  getJob,
+  guessTargetName,
+  listJobs,
+  hasExampleEntry,
+  hookKindsOf,
+  pluginRoots,
+  readPackageJson,
+  removePlugin,
+  scanOrphanDirs,
+  removeOrphanDir,
+  resolvePluginEntry,
+  scanPlugins,
+  setPluginEnabled,
+  seedExamplePluginsDisabled,
+  startInstall,
+  startRepair,
+  declaresCodeEntry,
+  getRegistry,
+  setRegistry,
+  REGISTRY_PRESETS,
+  DEFAULT_REGISTRY,
+} from "./plugin";
 import type { Op } from "../shared/ops";
 import { createSeedProject } from "../shared/ops";
 import type { Project } from "../shared/schema";
@@ -1119,6 +1148,197 @@ app.post("/api/workspace/reset", async (c) => {
   }
 });
 
+/* ─────────────────────────── 插件管理 ───────────────────────────
+ *
+ * 为什么插件要有 HTTP 接口，而不是"自己把文件夹拷进 plugins/"：
+ * 一个真实插件是「clone → npm install → npm run build」三步，把这三步留给用户，
+ * 等于把装插件变成开发者专属操作。这里收敛成一个动作，前端只负责显示进度。
+ *
+ * 唯一的红线：**只有显式点「安装 / 重建」才会起子进程**。扫描目录时永远不执行任何东西。
+ */
+
+/** 插件清单（编辑器插件面板用）：在 scanPlugins 的结果上补"为什么不能跑" */
+app.get("/api/plugins", async (c) => {
+  try {
+    /*
+     * 面板要说的是"**它真的做了什么**"，不是"它的清单声称做什么"。
+     *
+     * 这六个示例插件里有一半只有 `plugin.ts.example` 模板（还没改名成 plugin.ts），
+     * 清单里却写着 provides:["hooks"]。只读清单的话，界面上它们和真生效的插件长得一模一样——
+     * 用户会以为已经生效，出了问题时永远查不到"其实一个钩子都没注册"。
+     * 所以这里等一次钩子加载（幂等且便宜），把**实际注册到的钩子**一并返回。
+     */
+    await ensurePluginHooks().catch(() => {
+      /* 加载失败会体现在 hookStatus().errors 里，不影响列表本身 */
+    });
+    const plugins = scanPlugins().map((p) => {
+      const entry = resolvePluginEntry(p.dir);
+      const pkg = readPackageJson(p.dir);
+      const depCount =
+        Object.keys(pkg?.dependencies ?? {}).length + Object.keys(pkg?.devDependencies ?? {}).length;
+      return {
+        ...p,
+        entry,
+        hasPackage: !!pkg,
+        /*
+         * 只有「声明了代码入口但产物不在」才算"未构建"。
+         * 纯内容插件（只有 skills/styles，没有 package.json）也会返回 unbuilt ——
+         * 那是正常形态，不是错误，界面上不能给它挂个⚠。
+         */
+        needsBuild: entry.kind === "unbuilt" && !!pkg && declaresCodeEntry(pkg),
+        buildScript: typeof pkg?.scripts?.build === "string" ? pkg.scripts.build : null,
+        depCount,
+        // 有依赖或 build 脚本才值得提供"重建"按钮
+        canRepair: !!pkg?.scripts?.build || depCount > 0,
+        /** 实际注册到的钩子（不是清单声明的） */
+        hooks: hookKindsOf(p.id),
+        /**
+         * 目录里只有 `plugin.ts.example` 这种模板 —— 示例插件的"未启用"形态，
+         * 不是错误，但必须让用户看见"它现在什么都没干"。
+         */
+        templateOnly: hasExampleEntry(p.dir),
+      };
+    });
+    return c.json({ plugins, roots: pluginRoots(), trashDir: PLUGIN_TRASH_DIR, orphans: scanOrphanDirs() });
+  } catch (err) {
+    return fail(c, err);
+  }
+});
+
+/**
+ * 安装设置：目前只有 npm 源。
+ *
+ * 默认给国内镜像，因为插件安装动辄几十个包，连官方源基本等于默认失败；
+ * 需要官方源或私有 registry 的，在这里改一次即可（对所有后续安装生效）。
+ */
+app.get("/api/plugins/settings", (c) =>
+  c.json({ registry: getRegistry(), presets: REGISTRY_PRESETS, defaultRegistry: DEFAULT_REGISTRY }),
+);
+
+app.put("/api/plugins/settings", async (c) => {
+  try {
+    const body = (await c.req.json().catch(() => ({}))) as { registry?: string };
+    return c.json({ registry: setRegistry(String(body.registry ?? "")) });
+  } catch (err) {
+    return fail(c, err);
+  }
+});
+
+/**
+ * 来源预检：用户一边输入一边告诉他会装成什么。
+ * 不下载、不执行，只做字符串判定 + 目录占用检查。
+ */
+app.get("/api/plugins/detect", (c) => {
+  const source = String(c.req.query("source") ?? "");
+  const scope = c.req.query("scope") === "user" ? "user" : "project";
+  if (!source.trim()) return c.json({ kind: null, reason: "还没有输入" });
+  const kind = detectSourceKind(source);
+  if (!kind) {
+    return c.json({
+      kind: null,
+      reason: "认不出这个来源：需要 git 地址（https://… 或 用户/仓库）、npm 包名（@scope/名字），或一个已存在的本地目录",
+    });
+  }
+  const name = guessTargetName(kind, source);
+  const root = scope === "user" ? USER_PLUGIN_DIR : PROJECT_PLUGIN_DIR;
+  const dir = path.join(root, name);
+  return c.json({ kind, name, dir, scope, exists: fs.existsSync(dir) });
+});
+
+/** 安装：git / npm / 本地目录 → 装依赖 → 构建 → 校验。返回 job，前端轮询进度 */
+app.post("/api/plugins/install", async (c) => {
+  try {
+    const body = (await c.req.json().catch(() => ({}))) as {
+      source?: string;
+      name?: string;
+      scope?: "project" | "user";
+      registry?: string;
+      force?: boolean;
+    };
+    const job = startInstall({
+      source: String(body.source ?? ""),
+      name: body.name || undefined,
+      scope: body.scope === "user" ? "user" : "project",
+      registry: body.registry || undefined,
+      force: !!body.force,
+    });
+    return c.json({ job });
+  } catch (err) {
+    return fail(c, err);
+  }
+});
+
+/** 最近的任务（含已完成）：面板重新打开时能接上正在跑的那个 */
+app.get("/api/plugins/jobs", (c) => c.json({ jobs: listJobs() }));
+
+app.get("/api/plugins/jobs/:id", (c) => {
+  const job = getJob(c.req.param("id"));
+  if (!job) return c.json({ error: "没有这个安装任务（服务重启过？）" }, 404);
+  return c.json({ job });
+});
+
+app.post("/api/plugins/jobs/:id/cancel", (c) => {
+  const ok = cancelJob(c.req.param("id"));
+  return ok ? c.json({ ok }) : c.json({ error: "这个任务已经结束了，取消不了" }, 400);
+});
+
+/** 原地重建：作者更新了源码、或当初是手动拷进来还没构建 */
+app.post("/api/plugins/:id/repair", (c) => {
+  try {
+    return c.json({ job: startRepair(c.req.param("id")) });
+  } catch (err) {
+    return fail(c, err);
+  }
+});
+
+/** 启用 / 停用（文件不动） */
+app.post("/api/plugins/:id/toggle", async (c) => {
+  try {
+    const body = (await c.req.json().catch(() => ({}))) as { enabled?: boolean };
+    const id = c.req.param("id");
+    const target = scanPlugins().find((p) => p.id === id);
+    if (!target) return c.json({ error: `没有 id 为「${id}」的插件` }, 404);
+    setPluginEnabled(id, !!body.enabled);
+    // 回读确认：只回"已设置"会在 data/ 只读时给出与事实相反的答复
+    const after = scanPlugins().find((p) => p.id === id);
+    const actual = after?.enabled ?? false;
+    if (actual !== !!body.enabled) {
+      return c.json({ error: `设置没生效（期望 ${!!body.enabled}，实际 ${actual}）。检查 data/plugins.json 是否可写` }, 500);
+    }
+    return c.json({ ok: true, enabled: actual });
+  } catch (err) {
+    return fail(c, err);
+  }
+});
+
+/**
+ * 删除"未识别的目录"：装错了、装坏了留下的残骸。
+ *
+ * 必须排在 `/:id/remove` **前面**，否则 `/api/plugins/orphans/remove` 会被当成
+ * id 为 "orphans" 的插件去卸载。
+ */
+app.post("/api/plugins/orphans/remove", async (c) => {
+  try {
+    const body = (await c.req.json().catch(() => ({}))) as { dir?: string };
+    if (!body.dir) return c.json({ error: "缺少 dir" }, 400);
+    return c.json(removeOrphanDir(String(body.dir)));
+  } catch (err) {
+    return fail(c, err);
+  }
+});
+
+/**
+ * 卸载：**不删文件**，挪到 data/.plugin-trash/。
+ * 插件目录里可能有作者自己积累的配置，一键删除不可逆；挪走既能立刻消失，也能捡回来。
+ */
+app.post("/api/plugins/:id/remove", (c) => {
+  try {
+    return c.json(removePlugin(c.req.param("id")));
+  } catch (err) {
+    return fail(c, err);
+  }
+});
+
 /**
  * 渲染产物：列表 / 锁定 / 按选择删除。
  * `projectId` 只返回那个工程的产物（编辑器顶栏浮框用）——不传是全库（清理弹窗用）。
@@ -2057,12 +2277,30 @@ try {
  * 用户看到的是"刚打开编辑器那一下特别慢"。放到这里，这几十上百毫秒
  * 混在启动过程里，谁也感觉不到。失败也不影响启动——请求中间件还会再试。
  */
+/*
+ * 全新环境（data/plugins.json 还不存在）时，把仓库自带的 _example-* 示例
+ * 预先停用——否则示例技能/风格/场景/审计会混进真实项目。一次性动作：
+ * 用户表达过任何意愿（文件存在）之后就不再介入。
+ */
+try {
+  const seeded = seedExamplePluginsDisabled();
+  if (seeded.length) console.log(`  ▸ 已停用 ${seeded.length} 个示例插件（面板里可一键启用）`);
+} catch {
+  /* 种子失败不影响启动：最坏情况只是示例多启用一次 */
+}
 void ensurePluginHooks().catch(() => {
   /* 中间件里有正式的日志与兜底 */
 });
 void ensurePluginTools().catch(() => {
   /* 同上 */
 });
+// 上次崩溃/断电可能留下半装完的插件暂存目录（plugins/.staging/*），启动清一次
+try {
+  const cleaned = cleanupPluginStaging();
+  if (cleaned.length) console.log(`  ▸ 已清理插件暂存目录 ${cleaned.length} 个`);
+} catch {
+  /* 清理失败不影响启动 */
+}
 
 const httpServer = serve({ fetch: app.fetch, port: PORT, hostname: HOST }, (info) => {
   // 对外展示用 localhost（更好读）；内部探活仍走 127.0.0.1

@@ -29,6 +29,7 @@ export {
   inferProvides,
   isPluginEnabled,
   setPluginEnabled,
+  seedExamplePluginsDisabled,
   type DiscoveredPlugin,
   type PluginFile,
   type PluginScope,
@@ -46,7 +47,9 @@ export {
   HOOK_KINDS,
   HOOK_LABEL,
   ensurePluginHooks,
+  hasExampleEntry,
   hasHook,
+  hookKindsOf,
   hookStatus,
   runHook,
   runTextPipeline,
@@ -78,3 +81,45 @@ export { pluginTools, pluginToolEntries, pluginToolNamesOf, type PluginToolEntry
 export { buildParamShape, PARAM_TYPES, type ParamSpec, type ParamType } from "./tool-params";
 
 export { pluginsToText } from "./summary";
+
+/* 入口解析与工程化诊断：编辑器要显示"这个插件为什么没生效"，直接复用同一套判断 */
+export {
+  SCRIPT_ENTRIES,
+  resolvePluginEntry,
+  readPackageJson,
+  declaresCodeEntry,
+  lintPackage,
+  type ResolvedEntry,
+  type EntryKind,
+  type PackageJson,
+} from "./entry";
+
+/* 安装器：clone / npm / 本地目录 → 装依赖 → 构建 → 校验，全在一个 job 里 */
+export {
+  startInstall,
+  startRepair,
+  getJob,
+  listJobs,
+  cancelJob,
+  removePlugin,
+  scanOrphanDirs,
+  removeOrphanDir,
+  detectSourceKind,
+  guessTargetName,
+  normalizeGitUrl,
+  splitNpmSpec,
+  cleanupPluginStaging,
+  getRegistry,
+  setRegistry,
+  normalizeRegistry,
+  DEFAULT_REGISTRY,
+  REGISTRY_PRESETS,
+  INSTALL_LOG_DIR,
+  PLUGIN_TRASH_DIR,
+  type InstallJob,
+  type InstallInput,
+  type OrphanDir,
+  type InstallSourceKind,
+  type InstallStep,
+  type LogLine,
+} from "./installer.service";
