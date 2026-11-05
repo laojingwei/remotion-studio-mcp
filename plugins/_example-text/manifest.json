@@ -1,0 +1,10 @@
+{
+  "apiVersion": 1,
+  "id": "house-style",
+  "name": "团队口径",
+  "version": "1.0.0",
+  "description": "把公司术语、品牌写法、口头禅统一成一套说法。作用在字幕与稿件写入前，不改结构、不做润色。",
+  "author": "remotion-studio 示例",
+  "provides": ["hooks"],
+  "permissions": []
+}

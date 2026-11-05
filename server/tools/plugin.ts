@@ -1,6 +1,8 @@
 import { z } from "zod";
 import type { ToolDef } from "./_shared";
 import { scanPlugins, setPluginEnabled, pluginsToText } from "../plugin";
+import { hasHook, runTextPipeline } from "../plugin/hooks";
+import { api, resolveProject } from "./_shared";
 
 /**
  * 插件管理工具。
@@ -57,6 +59,71 @@ export const PLUGIN_TOOLS: ToolDef[] = [
       return a.enabled
         ? `已启用「${target.name}」（${target.id}）。${what}现在可用了，不需要重启。`
         : `已停用「${target.name}」（${target.id}）。${what}已从清单移除，文件没动——要恢复就 enabled=true。`;
+    },
+  },
+  {
+    name: "transform_project_text",
+    description:
+      "把插件里注册的**文本处理规则**（术语表统一、品牌名、去口头禅…）套到整片已有字幕上。" +
+      "只处理已经存在的字幕，不改幕结构、不重新断句。\n" +
+      "什么时候用：用户装了文本插件后说「把之前的字幕也按我的规则过一遍」；或者改完术语表想让老工程跟上。\n" +
+      "**默认 dryRun=true 只给预览**——文本改写是不可撤销的（历史能回退整次提交，但看不出改了哪个字），" +
+      "先看一眼再落库。没有装任何文本插件时会直接告诉你。",
+    shape: {
+      projectId: z.string().optional().describe("要处理的工程 id，不传 = 当前默认工程（list_projects 查）"),
+      sceneIds: z.array(z.string()).optional().describe("只处理这些幕；不传 = 全片所有有字幕的幕"),
+      dryRun: z.boolean().optional().describe("只预览不写（默认 true）"),
+    },
+    run: async (a) => {
+      const p = await resolveProject(a.projectId);
+      const nl = String.fromCharCode(10);
+      if (!hasHook("text:transform")) {
+        return (
+          "没有装文本处理插件，这条链是空的。" +
+          `${nl}插件写法见 plugins/README.md 的「文本处理」，示例在 plugins/_example-text/`
+        );
+      }
+
+      const targets = (p.scenes ?? []).filter(
+        (sc: any) => (!a.sceneIds?.length || a.sceneIds.includes(sc.id)) && String(sc.subtitle ?? "").trim(),
+      );
+      if (!targets.length) return "没有需要处理的字幕（这些场景的 subtitle 是空的）";
+
+      const ops: Record<string, unknown>[] = [];
+      const previews: string[] = [];
+      const warns: string[] = [];
+      for (const sc of targets as any[]) {
+        const r = runTextPipeline(String(sc.subtitle ?? ""), {
+          kind: "subtitle",
+          projectId: p.id,
+          sceneId: sc.id,
+        });
+        warns.push(...r.warnings);
+        if (!r.changed) continue;
+        ops.push({ op: "set_subtitle", sceneId: sc.id, text: r.text });
+        if (previews.length < 8) {
+          previews.push(
+            `  · ${sc.name || sc.id}：${r.steps.map((x) => `「${x.pluginId}」${x.before}→${x.after} 字`).join("、")}`,
+          );
+        }
+      }
+
+      const warnBlock = warns.length ? `${nl}⚠️ ${warns.join(`${nl}⚠️ `)}` : "";
+      if (!ops.length) return `插件看过了，${targets.length} 幕字幕都不需要改。${warnBlock}`;
+
+      if (a.dryRun !== false) {
+        return (
+          `预览：${ops.length}/${targets.length} 幕会被插件改写（dryRun=true，没有写入）${nl}${previews.join(nl)}` +
+          `${ops.length > previews.length ? `${nl}  …还有 ${ops.length - previews.length} 幕` : ""}` +
+          `${warnBlock}${nl}确认后传 dryRun=false 执行。`
+        );
+      }
+
+      const res = await api<any>(`/api/projects/${p.id}/ops`, {
+        method: "POST",
+        body: JSON.stringify({ actor: "agent", ops }),
+      });
+      return `已改写 ${ops.length} 幕字幕${nl}${previews.join(nl)}${warnBlock}${nl}${(res.summary ?? []).join(nl)}`;
     },
   },
 ];

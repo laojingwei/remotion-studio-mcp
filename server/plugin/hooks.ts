@@ -58,7 +58,7 @@ import { activePlugins, type DiscoveredPlugin } from "./discovery";
 
 /* ─────────────────────────── 钩子定义 ─────────────────────────── */
 
-export const HOOK_KINDS = ["audit:rules", "ops:review", "brief:derive"] as const;
+export const HOOK_KINDS = ["audit:rules", "ops:review", "brief:derive", "text:transform"] as const;
 export type HookKind = (typeof HOOK_KINDS)[number];
 
 /** 钩子的中文说明（`list_plugins` 与文档共用） */
@@ -66,6 +66,7 @@ export const HOOK_LABEL: Record<HookKind, string> = {
   "audit:rules": "自检补充检查项",
   "ops:review": "写入后复盘",
   "brief:derive": "设计锁补充规则",
+  "text:transform": "文本处理（字幕/稿件）",
 };
 
 export type HookContext = {
@@ -90,7 +91,18 @@ export type HookContext = {
     /** 宿主刚推导出的设计锁（只读，已深冻结） */
     lock: Record<string, unknown>;
   };
+  "text:transform": {
+    /** 当前文本（可能已被前一个插件处理过） */
+    text: string;
+    /** 这段文本是什么：字幕 / 稿件 / 需求契约 */
+    kind: TextKind;
+    projectId: string | null;
+    sceneId: string | null;
+  };
 };
+
+/** 文本处理的作用对象（决定插件该不该动手：术语表对字幕和稿件都适用，但对 brief 未必） */
+export type TextKind = "subtitle" | "script" | "brief";
 
 /** 插件返回值：全部可选，都是给人/给 agent 看的文字 */
 export type HookVerdict = {
@@ -148,6 +160,15 @@ export function pluginEntryFile(dir: string): string | null {
     }
   }
   return null;
+}
+
+/** 目录里有没有"待启用的示例入口"（`plugin.ts.example` 这类） */
+function hasExampleEntry(dir: string): boolean {
+  try {
+    return fs.readdirSync(dir).some((f) => /\.(ts|mts|mjs|js|cjs)\.example$/.test(f));
+  } catch {
+    return false;
+  }
 }
 
 /** FNV-1a → base36：够短、稳定、不需要引入依赖（和 manifest 里的 id 哈希同一个做法） */
@@ -339,7 +360,14 @@ export async function ensurePluginHooks(): Promise<HookStatus> {
       if (!p.provides.includes("hooks")) continue;
       const file = pluginEntryFile(p.dir);
       if (!file) {
-        errs.push({ pluginId: p.id, message: `声明了钩子但没找到入口文件（应有一个 ${ENTRY_FILES.join(" / ")}）` });
+        /*
+         * 带 `.example` 后缀的入口是"示例还没启用"，不是错误。
+         * 仓库里自带的示例默认都是这个状态，把它们报成加载失败会让
+         * `list_plugins` 一打开就是一片红——真正的错误就没人看了。
+         */
+        if (!hasExampleEntry(p.dir)) {
+          errs.push({ pluginId: p.id, message: `声明了钩子但没找到入口文件（应有一个 ${ENTRY_FILES.join(" / ")}）` });
+        }
         continue;
       }
       let mod: Record<string, unknown>;
@@ -424,6 +452,24 @@ function hookList(kind: HookKind): LoadedHook[] {
 }
 
 /**
+ * 记一次钩子运行失败；连续失败到阈值就把它摘掉。
+ *
+ * 为什么要摘：一个坏插件会在用户每次保存工程时打印一次堆栈，日志很快没法看，
+ * 而且它还占着同步路径的时间。摘掉之后 `list_plugins` 里仍能看到原因。
+ */
+function noteHookFailure(h: LoadedHook, kind: HookKind, err: unknown): void {
+  const n = (failures.get(h) ?? 0) + 1;
+  failures.set(h, n);
+  if (n >= MAX_FAILURES) {
+    loaded = loaded.filter((x) => x !== h);
+    errors.push({ pluginId: h.pluginId, message: `${kind} 连续失败 ${n} 次，已停用：${errText(err)}` });
+  } else {
+    errors.push({ pluginId: h.pluginId, message: `${kind} 报错（第 ${n} 次）：${errText(err)}` });
+  }
+  errors = errors.slice(-20);
+}
+
+/**
  * 跑一类钩子，把所有人的意见合起来。
  *
  * **ctx 必须是快照**（`frozenSnapshot` 过的）。这里刻意不替调用方冻结：
@@ -449,15 +495,7 @@ export function runHook<K extends HookKind>(kind: K, ctx: HookContext[K]): HookV
       out.passed.push(...v.passed.map((x) => `[${h.pluginId}] ${x}`));
       out.lockRules.push(...v.lockRules.map((x) => `[${h.pluginId}] ${x}`));
     } catch (err) {
-      const n = (failures.get(h) ?? 0) + 1;
-      failures.set(h, n);
-      if (n >= MAX_FAILURES) {
-        loaded = loaded.filter((x) => x !== h);
-        errors.push({ pluginId: h.pluginId, message: `${kind} 连续失败 ${n} 次，已停用：${errText(err)}` });
-      } else {
-        errors.push({ pluginId: h.pluginId, message: `${kind} 报错（第 ${n} 次）：${errText(err)}` });
-      }
-      errors = errors.slice(-20);
+      noteHookFailure(h, kind, err);
     }
     const cost = Date.now() - started;
     if (cost > SLOW_MS) {
@@ -469,6 +507,102 @@ export function runHook<K extends HookKind>(kind: K, ctx: HookContext[K]): HookV
   }
 
   return out;
+}
+
+/* ─────────────────────────── 文本处理链 ─────────────────────────── */
+
+/** 单次处理的文本上限。文本链跑在保存路径上，两万字以上该走批处理而不是每次保存都过一遍 */
+const MAX_TEXT = 20000;
+/** 输出长度上限：比输入大太多基本是插件写错了（比如把整段替换成一段模板） */
+const MAX_GROWTH = 3;
+
+export type TextStep = { pluginId: string; before: number; after: number };
+
+export type TextPipelineResult = {
+  text: string;
+  changed: boolean;
+  /** 每一步实际改动的插件（按执行顺序） */
+  steps: TextStep[];
+  /** 被跳过的原因（超长、返回空、抛错）——要能回到用户眼前，不能静默 */
+  warnings: string[];
+};
+
+/**
+ * 跑一遍文本处理链（字幕 / 稿件）。
+ *
+ * 与 `runHook` 的区别：那条是"收集意见"，这条是**流水线**——上一个插件的输出是
+ * 下一个的输入，顺序有意义。所以单独一个函数，而不是复用 verdict 合并。
+ *
+ * 三道保险，每一道都对应一个真实会发生的坏情况：
+ *  1. **返回空字符串** → 整条链把用户的字幕清空了。拒收，保留上一版。
+ *  2. **输出暴涨** → 插件把一句话替换成一整段模板。拒收。
+ *  3. **抛错** → 跳过这一个，其余继续（和 `runHook` 同一套失败计数）。
+ *
+ * 还有一条**不**在这里做、但必须写进文档：**幂等**。链上的每个插件都得保证
+ * 处理两次和处理一次结果一样，否则 agent 反复保存同一句话会把字幕越改越远。
+ */
+export function runTextPipeline(
+  text: string,
+  meta: { kind: TextKind; projectId?: string | null; sceneId?: string | null },
+): TextPipelineResult {
+  const list = hookList("text:transform");
+  const base: TextPipelineResult = { text, changed: false, steps: [], warnings: [] };
+  if (!list.length) return base;
+
+  if (text.length > MAX_TEXT) {
+    return { ...base, warnings: [`文本 ${text.length} 字，超过处理上限 ${MAX_TEXT}，已跳过插件处理（太长会拖慢保存）`] };
+  }
+
+  let cur = text;
+  const steps: TextStep[] = [];
+  const warnings: string[] = [];
+
+  for (const h of list) {
+    const started = Date.now();
+    let out: unknown;
+    try {
+      out = h.fn({ text: cur, kind: meta.kind, projectId: meta.projectId ?? null, sceneId: meta.sceneId ?? null });
+    } catch (err) {
+      noteHookFailure(h, "text:transform", err);
+      warnings.push(`插件「${h.pluginId}」处理出错，已跳过：${errText(err)}`);
+      continue;
+    }
+
+    // 允许直接返回字符串，也允许 { text }
+    const next = typeof out === "string" ? out : (out as { text?: unknown } | null)?.text;
+    if (typeof next !== "string") {
+      if (out !== undefined && out !== null) warnings.push(`插件「${h.pluginId}」没返回文本（要返回 string 或 { text }），已跳过`);
+      continue;
+    }
+    if (next === cur) continue;
+
+    if (!next.trim()) {
+      warnings.push(`插件「${h.pluginId}」返回了空文本，已忽略（否则一句话就能把字幕清空）`);
+      continue;
+    }
+    if (next.length > cur.length * MAX_GROWTH + 200) {
+      warnings.push(
+        `插件「${h.pluginId}」输出长度异常（${cur.length} → ${next.length} 字），已忽略 —— 检查是不是把整段替换成了模板`,
+      );
+      continue;
+    }
+
+    steps.push({ pluginId: h.pluginId, before: cur.length, after: next.length });
+    cur = next;
+
+    const cost = Date.now() - started;
+    if (cost > SLOW_MS) {
+      warnings.push(`插件「${h.pluginId}」处理耗时 ${cost}ms（应 < ${SLOW_MS}ms）—— 它在保存路径上`);
+    }
+  }
+
+  return { text: cur, changed: cur !== text, steps, warnings };
+}
+
+/** 一步处理结果的一句话说明（工具回执用；不写的话用户不知道自己的字被谁改了） */
+export function textStepsToNote(r: TextPipelineResult): string {
+  if (!r.changed) return "";
+  return r.steps.map((s) => `「${s.pluginId}」${s.before}→${s.after} 字`).join("、");
 }
 
 /** 当前钩子状态（`list_plugins` 展示 + 测试断言） */

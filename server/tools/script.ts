@@ -19,6 +19,7 @@ import { readBrief, saveBrief, type Brief } from "../brief.service";
 import { readScript, saveScript, confirmScript, scriptToText, estimateSeconds, scriptChars, SCRIPT_TYPES, type Script } from "../script.service";
 
 import { detectFlavor } from "../../shared/aiFlavor";
+import { runTextPipeline } from "../plugin/hooks";
 import { lintScriptLines } from "../../shared/copyLint";
 
 export const SCRIPT_TOOLS: ToolDef[] = [
@@ -53,9 +54,25 @@ export const SCRIPT_TOOLS: ToolDef[] = [
       if (!brief?.confirmedAt) {
         throw new Error("brief 还没请用户确认：先走完 9 步问诊 + confirm_brief，再写稿（稿子要照着确认过的需求写）");
       }
+      /*
+       * 插件文本处理链（术语表 / 品牌名 / 口头禅…）。
+       *
+       * 只处理 segments[].text，**不动 sourceText**：那个字段的语义是"用户原话，
+       * 保留原样便于对照改了哪里"，改写它就等于把证据也改了。
+       */
+      const tpSteps: string[] = [];
+      const tpWarns: string[] = [];
+      const segments = ((a.segments ?? []) as Script["segments"]).map((seg) => {
+        const r = runTextPipeline(seg.text, { kind: "script", projectId: p.id });
+        tpWarns.push(...r.warnings);
+        if (!r.changed) return seg;
+        tpSteps.push(...r.steps.map((x) => `「${x.pluginId}」第 ${tpSteps.length + 1} 段 ${x.before}→${x.after} 字`));
+        return { ...seg, text: r.text };
+      });
+
       const script = saveScript(p.id, {
         type: a.type ?? brief.scriptType,
-        segments: (a.segments ?? []) as Script["segments"],
+        segments,
         sourceText: a.sourceText,
       });
       // 类型以稿件为准回写 brief，避免两处说法不一致
@@ -77,6 +94,8 @@ export const SCRIPT_TOOLS: ToolDef[] = [
           `${nl}（规则见 get_guide("content")；去 AI 味的词表与改写对照：get_guide("content","AI 味")）`
         : "";
       return (
+        (tpSteps.length ? `插件处理：${tpSteps.join("；")}${nl}` : "") +
+        (tpWarns.length ? `⚠️ ${tpWarns.join(`${nl}⚠️ `)}${nl}` : "") +
         `已保存稿件${nl}${scriptToText(script, brief.durationSec)}${lintNote}${nl}` +
         `下一步：把稿子整段发给用户过目（尤其口播语气、幕数、有没有事实要核），点头后 confirm_script`
       );

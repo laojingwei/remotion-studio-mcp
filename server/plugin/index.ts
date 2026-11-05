@@ -49,6 +49,8 @@ export {
   hasHook,
   hookStatus,
   runHook,
+  runTextPipeline,
+  textStepsToNote,
   frozenSnapshot,
   resetHookCache,
   type HookKind,
@@ -56,6 +58,9 @@ export {
   type HookVerdict,
   type HookStatus,
   type HookError,
+  type TextKind,
+  type TextStep,
+  type TextPipelineResult,
 } from "./hooks";
 
 export {

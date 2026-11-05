@@ -934,6 +934,150 @@ await testAsync("加载失败的工具插件：不抛、不连累别人，错误
   );
 });
 
+/* ────────────────────────── 文本处理链（字幕/稿件） ────────────────────────── */
+
+const { runTextPipeline, textStepsToNote } = await import("../server/plugin/hooks");
+
+/** 写一个只做文本处理的插件 */
+const writeTextPlugin = (dir: string, body: string) => {
+  write(`${dir}/plugin.ts`, `export default { "text:transform": ${body} };`);
+};
+
+const runText = (text: string, kind: "subtitle" | "script" | "brief" = "subtitle") =>
+  runTextPipeline(text, { kind, projectId: "t", sceneId: "s1" });
+
+await testAsync("文本链：没有插件时原样返回（changed=false）", async () => {
+  resetPlugins();
+  resetHookCache();
+  await ensurePluginHooks();
+  const r = runText("然后我们的产品很好用");
+  assert.equal(r.changed, false);
+  assert.equal(r.text, "然后我们的产品很好用");
+  assert.deepEqual(r.steps, []);
+});
+
+await testAsync("文本链：单个插件能改字，并记下改了哪一步", async () => {
+  resetPlugins();
+  writeTextPlugin("t1", '(ctx) => ctx.text.replace("我们的产品", "星河 OS")');
+  resetHookCache();
+  await ensurePluginHooks();
+  const r = runText("我们的产品上线了");
+  assert.equal(r.text, "星河 OS上线了");
+  assert.equal(r.changed, true);
+  assert.equal(r.steps.length, 1);
+  assert.equal(r.steps[0].pluginId, "t1");
+  assert.match(textStepsToNote(r), /t1/);
+});
+
+await testAsync("文本链：多插件按顺序串（上一个的输出是下一个的输入）", async () => {
+  resetPlugins();
+  writeTextPlugin("aa", '(ctx) => ctx.text.replace("甲", "乙")');
+  writeTextPlugin("bb", '(ctx) => ctx.text.replace("乙", "丙")');
+  resetHookCache();
+  await ensurePluginHooks();
+  const r = runText("甲方案");
+  assert.equal(r.text, "丙方案", "两段替换都该生效");
+  assert.deepEqual(
+    r.steps.map((s) => s.pluginId),
+    ["aa", "bb"],
+    "顺序要按插件 id 稳定（否则每次结果可能不一样）",
+  );
+});
+
+await testAsync("文本链：返回 { text } 也认", async () => {
+  resetPlugins();
+  writeTextPlugin("obj", '(ctx) => ({ text: ctx.text + "！" })');
+  resetHookCache();
+  await ensurePluginHooks();
+  assert.equal(runText("好").text, "好！");
+});
+
+await testAsync("文本链：返回空字符串 → 拒收（不能一句话把字幕清空）", async () => {
+  resetPlugins();
+  writeTextPlugin("wipe", '() => ""');
+  resetHookCache();
+  await ensurePluginHooks();
+  const r = runText("这句话不能没");
+  assert.equal(r.text, "这句话不能没");
+  assert.equal(r.changed, false);
+  assert.ok(r.warnings.some((w) => w.includes("空文本")), JSON.stringify(r.warnings));
+});
+
+await testAsync("文本链：输出暴涨 → 拒收（多半是把整句换成了模板）", async () => {
+  resetPlugins();
+  writeTextPlugin("boom", '() => "很长".repeat(500)');
+  resetHookCache();
+  await ensurePluginHooks();
+  const r = runText("短句");
+  assert.equal(r.text, "短句");
+  assert.ok(r.warnings.some((w) => w.includes("输出长度异常")), JSON.stringify(r.warnings));
+});
+
+await testAsync("文本链：一个插件抛错，其余照常，警告里说清是谁", async () => {
+  resetPlugins();
+  writeTextPlugin("bad", '() => { throw new Error("我坏了"); }');
+  writeTextPlugin("good", '(ctx) => ctx.text + "。"');
+  resetHookCache();
+  await ensurePluginHooks();
+  const r = runText("句子");
+  assert.equal(r.text, "句子。");
+  assert.ok(r.warnings.some((w) => w.includes("bad") && w.includes("出错")), JSON.stringify(r.warnings));
+});
+
+await testAsync("文本链：返回非文本（数字）→ 跳过，不崩", async () => {
+  resetPlugins();
+  writeTextPlugin("num", "() => 42");
+  resetHookCache();
+  await ensurePluginHooks();
+  const r = runText("原样");
+  assert.equal(r.text, "原样");
+  assert.ok(r.warnings.some((w) => w.includes("没返回文本")), JSON.stringify(r.warnings));
+});
+
+await testAsync("文本链：超长文本整条跳过（它跑在保存路径上）", async () => {
+  resetPlugins();
+  writeTextPlugin("slow", '(ctx) => ctx.text + "x"');
+  resetHookCache();
+  await ensurePluginHooks();
+  const huge = "字".repeat(20001);
+  const r = runText(huge);
+  assert.equal(r.changed, false);
+  assert.equal(r.text.length, 20001);
+  assert.ok(r.warnings.some((w) => w.includes("超过处理上限")), JSON.stringify(r.warnings));
+});
+
+await testAsync("文本链：kind 会传给插件（brief 可以自己决定不动手）", async () => {
+  resetPlugins();
+  writeTextPlugin("kinder", '(ctx) => (ctx.kind === "brief" ? ctx.text : ctx.text + "[改]")');
+  resetHookCache();
+  await ensurePluginHooks();
+  assert.equal(runText("x", "brief").text, "x");
+  assert.equal(runText("x", "script").text, "x[改]");
+});
+
+await testAsync("文本链：幂等（跑两次和跑一次一样）", async () => {
+  resetPlugins();
+  // 这是示例插件的核心写法：替换后不再命中、口头禅删到删不动
+  writeTextPlugin(
+    "idem",
+    `(ctx) => {
+      let s = ctx.text.replace(/我们的产品/g, "星河 OS");
+      s = s.split("\\n").map((line) => {
+        let prev = line, cur = line.replace(/^(然后|就是说)[，,]?/, "");
+        while (cur !== prev) { prev = cur; cur = cur.replace(/^(然后|就是说)[，,]?/, ""); }
+        return cur;
+      }).join("\\n");
+      return s;
+    }`,
+  );
+  resetHookCache();
+  await ensurePluginHooks();
+  const once = runText("然后就是说我们的产品上线了");
+  const twice = runText(once.text);
+  assert.equal(twice.text, once.text, `非幂等会让 agent 反复保存越改越远：${once.text} → ${twice.text}`);
+  assert.equal(twice.changed, false, "第二次不该再有改动");
+});
+
 /* ────────────────────────── 收尾 ────────────────────────── */
 
 fs.rmSync(TMP, { recursive: true, force: true });

@@ -132,7 +132,7 @@ import { CLEANUP_TOOLS } from "./tools/cleanup";
 import { RESOURCE_TOOLS } from "./tools/resources";
 import { PLUGIN_TOOLS } from "./tools/plugin";
 import { ensurePluginScenes } from "./plugin/scene-meta";
-import { ensurePluginHooks } from "./plugin/hooks";
+import { ensurePluginHooks, runTextPipeline, textStepsToNote } from "./plugin/hooks";
 import { ensurePluginTools } from "./plugin/plugin-tools";
 import { pluginTools } from "./plugin/tool-registry";
 
@@ -3746,8 +3746,13 @@ const TOOLS: ToolDef[] = [
         return `已清空「${scene.name}」的字幕${nl}${res.summary.join(nl)}`;
       }
 
+      /*
+       * 插件文本处理链，**在拆分之前**跑：拆完再改会破坏每屏字数，
+       * 前面 normalizeSubtitle 算的分配就白算了。
+       */
+      const tp = runTextPipeline(a.text, { kind: "subtitle", projectId: p.id, sceneId: a.sceneId });
       const max = subtitleMaxChars(scene as any);
-      const norm = normalizeSubtitle(a.text, { maxChars: max });
+      const norm = normalizeSubtitle(tp.text, { maxChars: max });
       const res = await api<any>(`/api/projects/${p.id}/ops`, {
         method: "POST",
         body: JSON.stringify({
@@ -3760,6 +3765,9 @@ const TOOLS: ToolDef[] = [
         .join(nl);
       return (
         `「${scene.name}」字幕已写入：${norm.lines.length} 屏（每屏 ≤ ${max} 字，${norm.before} 字→${norm.after} 字）${nl}${preview}` +
+        // 字被插件改过就必须说：不说的话用户会以为自己的原话原样上屏了
+        (tp.changed ? `${nl}插件处理：${textStepsToNote(tp)}` : "") +
+        (tp.warnings.length ? `${nl}⚠️ ${tp.warnings.join(`${nl}⚠️ `)}` : "") +
         (norm.warnings.length ? `${nl}⚠️ ${norm.warnings.join(`${nl}⚠️ `)}` : "") +
         `${nl}${res.summary.join(nl)}${nl}下一步：preview_frames 抽这一帧看一眼字幕有没有压主体/出安全区`
       );

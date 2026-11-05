@@ -21,7 +21,7 @@ plugins/我的插件/
   styles/presets.json    风格预设      → apply_style 一键落字段
   brief/steps.json       问诊步骤      → intake / save_brief 按你的流程走
   scenes/*.json + *.tsx  场景组件      → 选择器里多一种画面（必须放项目内）
-  plugin.ts              钩子 / 工具   → 自检·写入·设计锁里说话，或加一个 MCP 工具
+  plugin.ts              钩子 / 工具   → 说意见、改字、或加一个 MCP 工具
   manifest.json          可选——需要声明权限/版本时才写
 ```
 
@@ -39,6 +39,7 @@ plugins/我的插件/
 | **场景组件** | `scenes/<type>.json` + `scenes/<type>.tsx`，给编辑器加一种新画面 |
 | **流程钩子** | `plugin.ts`，在自检/写入/设计锁三个环节说一句话；不改数据，只给意见 |
 | **工具** | `plugin.ts` 的 `tools`，给 agent 加一个 MCP 工具；能读工程、改工程（要声明权限，配合 `dryRun`） |
+| **文本处理** | `plugin.ts` 的 `text:transform`，在字幕/稿件写进工程之前改字（术语表、品牌名、口头禅） |
 
 元素库、整片模板、3D 配方、转场、特效属于后续批次，
 现在放进去会被识别但**明确标注不生效**（见 `list_plugins`）。
@@ -186,6 +187,34 @@ schema 会静默失效。只声明数据（`string` / `number` / `boolean` / `en
 
 可运行示例：`plugins/_example-tool/`（语速体检 + 批量编号）。
 
+## 文本处理：在字进工程之前改它
+
+字幕和稿件不是文件，是字段。所以"用我的插件处理字幕"= 在文本**写进工程之前**改写它：
+
+```ts
+export default {
+  "text:transform": (ctx) => ctx.text.replace(/我们的产品/g, "星河 OS"),
+};
+```
+
+| ctx.kind | 什么时候 |
+|---|---|
+| `subtitle` | `set_subtitle` 写字幕时（**拆分之前**，拆完再改会让每屏字数算错） |
+| `script` | `save_script` 写稿件时（`sourceText` 用户原话不动） |
+| `brief` | 需求契约（多数插件应该像示例那样跳过） |
+
+多个插件按 id 顺序串成一条链：上一个的输出是下一个的输入。
+
+**必须幂等**——处理两次要和处理一次一样，否则 agent 反复保存会让字幕越改越远。
+示例里那句「循环删到删不动」就是为这个。
+
+宿主的三道护栏：返回空字符串**拒收**、输出暴涨**拒收**、抛错**跳过并继续**。
+超过 20000 字整条跳过（它跑在保存路径上）。被改动时回执里会写「插件处理：「x」22→16 字」。
+
+已有工程想补处理：调 `transform_project_text`（默认只预览）。
+
+可运行示例：`plugins/_example-text/`（术语表 + 口头禅 + 全角数字）。
+
 ## 写坏了会怎样
 
 不会拖垮服务。`list_plugins` 会把这个插件单独标成"加载失败"并给原因，
@@ -197,5 +226,6 @@ schema 会静默失效。只声明数据（`string` / `number` / `boolean` / `en
 - **改问诊**：看 `plugins/_example-brief/`，把 `steps.json.example` 改名成 `steps.json` 就生效
 - **加规则**（画质守门员那类）：看 `plugins/_example-audit/`，把 `plugin.ts.example` 改名成 `plugin.ts`
 - **加工具**（给 agent 用）：看 `plugins/_example-tool/`，同样改名；它示范了只读 + 写入两种工具和权限声明
+- **改字**（术语表/品牌名）：看 `plugins/_example-text/`，同样改名；它示范了幂等的写法与宿主护栏
 
-四份示例都可以整个删掉，不影响任何东西。
+五份示例都可以整个删掉，不影响任何东西。
