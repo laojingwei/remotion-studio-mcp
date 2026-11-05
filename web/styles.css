@@ -7157,7 +7157,10 @@ select.tts-input {
   display: inline-flex;
 }
 
-.outputs-toggle.is-on {
+/* 顶栏右侧的成对开关（资源库 / 产物）共用一份状态样式；
+   按钮各留自己的类名，别再共用 .outputs-toggle —— 那样选择器会一次命中两个按钮
+   （e2e 的 strict mode 直接失败，实测过）。 */
+.rail-toggle.is-on {
   border-color: var(--accent-dim);
   color: var(--text);
 }

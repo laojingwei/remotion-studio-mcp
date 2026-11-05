@@ -1234,7 +1234,7 @@ export default function App() {
         </div>
         <div className="topbar-outputs" ref={resourcesAnchorRef}>
           <button
-            className={`ghost outputs-toggle ${resourcesOpen ? "is-on" : ""}`}
+            className={`ghost rail-toggle resources-toggle ${resourcesOpen ? "is-on" : ""}`}
             onClick={() => setResourcesOpen((v) => !v)}
             title="本地素材库：按类别登记文件夹，agent 自己搜自己引用（文件不复制）"
             aria-haspopup="dialog"
@@ -1246,7 +1246,7 @@ export default function App() {
         </div>
         <div className="topbar-outputs" ref={outputsAnchorRef}>
           <button
-            className={`ghost outputs-toggle ${outputsOpen ? "is-on" : ""}`}
+            className={`ghost rail-toggle outputs-toggle ${outputsOpen ? "is-on" : ""}`}
             onClick={() => setOutputsOpen((v) => !v)}
             title="这个工程的产物：成片 / 预览片段 / 关键帧 / 封面 / 字幕"
             aria-haspopup="dialog"
