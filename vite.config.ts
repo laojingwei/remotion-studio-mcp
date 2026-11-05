@@ -45,8 +45,12 @@ export default defineConfig({
           // three 必须在 react 之前判断：@react-three 也含 "react" 字样
           if (id.includes("three")) return "three";
           if (id.includes("@remotion") || id.includes("remotion")) return "remotion";
-          if (id.includes("react") || id.includes("scheduler")) return "react";
-          return "vendor";
+          // vendor 不能单独拆：它和 react 互相引用会成环（vendor -> react -> vendor）。
+          // 环上的模块初始化顺序不定，实测 React 直接抛
+          // "Cannot set properties of undefined (setting 'Activity')"，整页黑屏 ——
+          // 1.1.1 发出去的包就是这么挂的（vite 构建时也会打 Circular chunk 警告）。
+          // 并进 react 这一块，环就没了；three/remotion 只单向依赖 react，拆出去是安全的。
+          return "react";
         },
       },
     },
