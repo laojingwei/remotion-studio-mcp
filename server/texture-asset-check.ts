@@ -69,9 +69,17 @@ export function assertTextureAssets(ops: Op[]): void {
       const obj = v as Record<string, unknown>;
       const map = obj["map"];
       if (map && typeof map === "object" && !Array.isArray(map)) {
-        const src = (map as Record<string, unknown>)["src"];
+        const m = map as Record<string, unknown>;
+        const src = m["src"];
         if (typeof src === "string" && src.startsWith("/assets/")) {
-          checkLocalAsset(src);
+          if (src.includes("{frame}")) {
+            // 序列帧模式：校验首帧那个具体文件（后面的帧大概率同目录同规律）
+            const digits = Number(m["frameDigits"] ?? 4);
+            const seqFrom = Number(m["seqFrom"] ?? 1);
+            checkLocalAsset(src.replace(/\{frame\}/g, String(seqFrom).padStart(Math.max(1, digits), "0")));
+          } else {
+            checkLocalAsset(src);
+          }
         }
       }
       Object.values(obj).forEach(visit);

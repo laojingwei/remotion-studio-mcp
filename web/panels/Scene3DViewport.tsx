@@ -1122,7 +1122,14 @@ const CameraTrack: React.FC<{
   const { line, frames: sampleFrames, basePos, last, keyPoints, keyFrames, pathDots } = useMemo(() => {
     const frames = camKeyFrames(graph.camera);
     const last = Math.max(1, durationInFrames - 1);
-    const step = Math.max(1, Math.round(last / 200));
+    /**
+     * 采样密度：全片约 480 个点（≈4 帧一个）。
+     *
+     * 原来是 last/200（≈11 帧一个）—— 在整条轨迹缩到屏幕里看时，弧线被折线"抄近路"，
+     * 再加上关键帧小球也是等距的，整条线看起来就是一串直线段（用户截图报过）。
+     * 加密到 4 帧，肉眼就是连续曲线；计算量是 480 次采样 × 段数，仍是每帧几毫秒级。
+     */
+    const step = Math.max(1, Math.round(last / 480));
     /**
      * 采样帧 = 等距采样 **∪ 每个关键帧帧号**。
      *
@@ -1221,7 +1228,11 @@ const CameraTrack: React.FC<{
         objects={objects}
         color={color}
         opacity={active ? 0.95 : 0.62}
-        radiusPx={4.5}
+        /**
+         * 逐帧烘焙的运镜有 200+ 个关键帧：4.5px 的球会把轨迹糊成一条"毛毛虫"，
+         * 反而看不出曲线本身。点多了就自动收小，线才是主角。
+         */
+        radiusPx={keyPoints.length > 120 ? 1.8 : 4.5}
         renderOrder={991}
         segments={10}
         depthTest={false}
@@ -1972,7 +1983,17 @@ export const Scene3DViewport: React.FC<{
         const o = round3(out);
         const i = round3(inn);
         const flat = [...o, ...i].every((x) => Math.abs(x) < 1e-4);
-        return { ...a, ...(flat ? { curve: undefined } : { curve: { out: o, in: i } }) };
+        /**
+         * 看向点自己的切线要**原样带回来**：拖机位手柄只该改机位的弯度。
+         * 丢掉它，镜头方向的段间切线就断了 —— 画面立刻回到"一抖一抖"。
+         */
+        const keepT = { targetOut: a.curve?.targetOut, targetIn: a.curve?.targetIn };
+        return {
+          ...a,
+          ...(flat
+            ? { curve: keepT.targetOut || keepT.targetIn ? { ...keepT } : undefined }
+            : { curve: { out: o, in: i, ...keepT } }),
+        };
       });
       void apply([{ op: "set_graph_camera", sceneId: scene.id, camera: { anim: next } } as Op]);
     },
@@ -1988,7 +2009,18 @@ export const Scene3DViewport: React.FC<{
       const out = side === "out" ? [0, 0, 0] : (seg.curve?.out ?? [0, 0, 0]);
       const inn = side === "in" ? [0, 0, 0] : (seg.curve?.in ?? [0, 0, 0]);
       const flat = [...out, ...inn].every((x) => Math.abs(x) < 1e-4);
-      const next = anims.map((a, k) => (k === segIdx ? { ...a, ...(flat ? { curve: undefined } : { curve: { out, in: inn } }) } : a));
+      // 同上：只拉直机位这一侧，看向点的切线保持不变
+      const keepT = { targetOut: seg.curve?.targetOut, targetIn: seg.curve?.targetIn };
+      const next = anims.map((a, k) =>
+        k === segIdx
+          ? {
+              ...a,
+              ...(flat
+                ? { curve: keepT.targetOut || keepT.targetIn ? { ...keepT } : undefined }
+                : { curve: { out, in: inn, ...keepT } }),
+            }
+          : a,
+      );
       void apply([{ op: "set_graph_camera", sceneId: scene.id, camera: { anim: next } } as Op]);
       notify(side === "out" ? "运镜出手柄已拉直" : "运镜入手柄已拉直");
     },
@@ -2465,6 +2497,7 @@ export const Scene3DViewport: React.FC<{
           spec={graph}
           frame={frame}
           t={frame / fps}
+          fps={fps}
           theme={theme}
           camera={IDENTITY_CAMERA}
           selectedId={selectedId}

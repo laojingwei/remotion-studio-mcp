@@ -44,6 +44,16 @@ export function hostnameOf(hostOrUrl: string): string {
 
 export const isLoopbackHostname = (h: string): boolean => LOOPBACK.has(h);
 
+/**
+ * 连接**来源 IP** 是否本机（IPv4 / IPv6 / IPv4-mapped IPv6）。
+ * 与 hostnameOf 的区别：这个看的是 socket 的 remoteAddress，客户端伪造不了；
+ * Host 头可以随手 -H 改，所以资源库管理面用它，不用 Host。
+ */
+export const isLoopbackAddress = (addr: string): boolean =>
+  /^(127\.\d+\.\d+\.\d+|::1|::ffff:127\.\d+\.\d+\.\d+|0:0:0:0:0:0:0:1|localhost)$/i.test(
+    (addr ?? "").trim(),
+  );
+
 /** 是否为写请求（需要过安全校验） */
 const isMutation = (method: string): boolean =>
   method !== "GET" && method !== "HEAD" && method !== "OPTIONS";

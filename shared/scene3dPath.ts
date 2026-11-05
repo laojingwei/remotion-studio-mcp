@@ -19,7 +19,20 @@
  */
 export type Vec3 = [number, number, number];
 
-export type PathCurve = { out?: readonly number[]; in?: readonly number[] };
+export type PathCurve = {
+  out?: readonly number[];
+  in?: readonly number[];
+  /**
+   * 看向点自己的切线（只有相机的 curve 会用到）。
+   *
+   * 为什么必须分开：位置和看向点是**两条不同的曲线**。以前看向点硬套位置的
+   * out/in，等于让镜头方向跟着机位的弯度走 —— 段边界上两条曲线的切线对不上，
+   * 逐帧看就是"每隔 0.3 秒抖一下"。给了这两个字段就用它们，没给才回落到
+   * 老行为（兼容既有数据）。
+   */
+  targetOut?: readonly number[];
+  targetIn?: readonly number[];
+};
 
 /**
  * 小于这个量级的偏移按 0 处理：拖手柄时手抖会产生 1e-5 级别的残差，
@@ -31,6 +44,10 @@ const nz = (v?: readonly number[]) => !!v && (Math.abs(v[0] ?? 0) > EPS || Math.
 
 /** 这一段是否真的被拉弯了。全零 = 直线，调用方走原来的插值路径（零回归） */
 export const hasCurve = (c?: PathCurve | null): boolean => Boolean(c) && (nz(c?.out) || nz(c?.in));
+
+/** 看向点是否给了**自己的**切线。没给时调用方沿用位置曲线（历史行为） */
+export const hasTargetCurve = (c?: PathCurve | null): boolean =>
+  Boolean(c) && (nz(c?.targetOut) || nz(c?.targetIn));
 
 const v3 = (v?: readonly number[]): Vec3 => [v?.[0] ?? 0, v?.[1] ?? 0, v?.[2] ?? 0];
 

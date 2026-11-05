@@ -256,7 +256,7 @@ export type Transform = z.infer<typeof transformSchema>;
  */
 export const elementSchema = z.object({
   id: z.string(),
-  kind: z.enum(["svg", "text", "image", "video", "audio"]),
+  kind: z.enum(["svg", "text", "image", "video", "audio", "imageSeq"]),
   name: z.string().describe("图层名，方便人和 agent 指认"),
   /** 中心点位置，按画面宽高百分比 */
   x: z.number().default(50),
@@ -307,7 +307,16 @@ export const elementSchema = z.object({
     .describe("自定义内联样式（camelCase），如 { textShadow: '0 0 20px #0ff', transform: 'skew(-8deg)' }"),
 
   /* image / video */
-  src: z.string().optional(),
+  src: z.string().optional().describe(
+    '图片/视频/音频地址；**imageSeq 是带 {frame} 占位符的模式串**，' +
+      '如 http://127.0.0.1:4380/resources/fx/爆炸/seq/{frame}.png',
+  ),
+
+  /* imageSeq（序列帧） */
+  frameDigits: z.number().int().min(1).max(8).default(4).describe("帧编号补零位数：xxx_0001.png 是 4"),
+  seqFrom: z.number().int().min(0).default(1).describe("序列起始帧编号（文件名里的数字，含）"),
+  seqTo: z.number().int().min(0).default(1).describe("序列结束帧编号（含）。search_local_assets 的序列帧结果直接给了首末帧"),
+  seqFps: z.number().min(1).max(120).default(30).describe("序列播放速率（帧/秒）：工程 30fps + 序列 30fps = 1:1 逐帧"),
   /* video */
   /**
    * 是否静音。**按类型给默认值**（见 ops.withElementDefaults）：
@@ -352,6 +361,35 @@ export const elementSchema = z.object({
     .describe("场景内时长（帧）；-1 = 撑到场景结尾"),
 });
 export type OverlayElement = z.infer<typeof elementSchema>;
+
+/**
+ * imageSeq 的跨字段校验（zod 表达不了，parse 之外再过一道）。
+ *
+ * 「src 忘写 {frame}」「忘给 seqTo（默认 1）」都会让序列静默变成一张静止图：
+ * 接口报成功、画面纹丝不动，agent 完全看不出配置错了。3D 侧 dslIssues 早有同款拦截，
+ * 2D 这里补齐——add_element 与 update_element 两条写路径都会调用（见 ops.ts 的 parseElement）。
+ */
+export const imageSeqIssues = (raw: {
+  kind?: string;
+  src?: string;
+  seqFrom?: number;
+  seqTo?: number;
+}): string[] => {
+  if (raw.kind !== "imageSeq") return [];
+  const issues: string[] = [];
+  const src = raw.src ?? "";
+  if (!src.includes("{frame}")) {
+    issues.push("src 必须带 {frame} 占位符（如 .../seq/{frame}.png），否则序列不会动");
+  }
+  const from = raw.seqFrom ?? 1;
+  const to = raw.seqTo ?? 1;
+  if (to <= from) {
+    issues.push(
+      `seqTo(${to}) 必须 > seqFrom(${from})——首末帧编号在 search_local_assets(fx) 的序列帧结果里直接给了`,
+    );
+  }
+  return issues;
+};
 
 /** 字幕样式（单拎出来：ops 写入时要按它校验，导出前也要能单独验） */
 export const subtitleStyleSchema = z.object({

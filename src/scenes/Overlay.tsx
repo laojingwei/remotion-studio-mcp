@@ -1,6 +1,7 @@
 import React from "react";
 import { AbsoluteFill, Audio, Img, Sequence, staticFile, useCurrentFrame, useVideoConfig, Video } from "remotion";
 import { transitionStyle } from "../../shared/transitions";
+import { seqFrameSrc, seqFrameIndex } from "../../shared/seqFrame";
 import type { OverlayElement } from "../../shared/schema";
 import { editRegistry } from "./ui";
 
@@ -44,9 +45,27 @@ export const OverlayLayer: React.FC<{ elements?: OverlayElement[] }> = ({ elemen
 };
 
 const OneElement: React.FC<{ el: OverlayElement }> = ({ el }) => {
-  const { width, height } = useVideoConfig();
+  const { width, height, fps } = useVideoConfig();
   const frame = useCurrentFrame();
   const ref = React.useRef<HTMLDivElement>(null);
+
+  /**
+   * 序列帧：按元素本地帧算出该显示第几张图。
+   * 放在 render 阶段算（不能放 effect/），每一帧一个确定的 src ——
+   * <Img> 自带 delayRender，图片没加载完 Remotion 不会截帧，不会漏帧。
+   */
+  const seqSrc =
+    el.kind === "imageSeq" && el.src
+      ? seqFrameSrc(
+          el.src,
+          seqFrameIndex(
+            { seqFrom: el.seqFrom ?? 1, seqTo: el.seqTo ?? 1, seqFps: el.seqFps ?? 30, loop: el.loop },
+            frame,
+            fps,
+          ),
+          el.frameDigits ?? 4,
+        )
+      : "";
 
   // 入场 / 出场特效：入场在元素开头正向播放，出场在结束前反向播放
   const totalDur = el.durationInFrames ?? 9999;
@@ -152,6 +171,12 @@ const OneElement: React.FC<{ el: OverlayElement }> = ({ el }) => {
         <Img
           src={resolveSrc(el.src ?? "")}
           style={{ width: "100%", display: "block", objectFit: el.fit ?? "cover" }}
+        />
+      ) : el.kind === "imageSeq" ? (
+        // 序列帧当一张图渲染：src 每帧不同，<Img> 负责等加载；透明 PNG 直接叠在画面上
+        <Img
+          src={resolveSrc(seqSrc)}
+          style={{ width: "100%", display: "block", objectFit: el.fit ?? "contain" }}
         />
       ) : el.kind === "video" ? (
         // 用 <Video> 而不是 OffthreadVideo：贴纸视频需要 loop，OffthreadVideo 不支持循环

@@ -4,10 +4,11 @@ import type { Theme } from "../../../shared/schema";
 import type { DslNode, Scene3DDsl } from "../../../shared/scene3dDsl";
 import { ease, evalNode } from "../../../shared/scene3dAnim";
 import { indexNodes, worldPointOf } from "../../../shared/scene3dTransform";
-import { hasCurve, pathAt, type Vec3 } from "../../../shared/scene3dPath";
+import { hasCurve, hasTargetCurve, pathAt, type Vec3 } from "../../../shared/scene3dPath";
 import { explicitBody, glowTexture, hash01, metalBody, resolveColor, shade } from "./color";
 import { Ground } from "./World";
 import { useDslTexture } from "./texture";
+import { seqSrcAt } from "../../../shared/seqFrame";
 
 /**
  * 场景图 DSL 的渲染器（M2）。
@@ -81,7 +82,7 @@ export const dslCamera = (spec: Scene3DDsl, t: number, fps = 30): DslCamera => {
           follow?: string;
           lookAt?: string;
           lookAtOffset?: [number, number, number];
-          curve?: { out?: number[]; in?: number[] };
+          curve?: { out?: number[]; in?: number[]; targetOut?: number[]; targetIn?: number[] };
         }>;
       }
     | undefined)?.anim;
@@ -163,7 +164,42 @@ export const dslCamera = (spec: Scene3DDsl, t: number, fps = 30): DslCamera => {
       } else {
         P.set(lv("posX", P.x), lv("posY", P.y), lv("posZ", P.z));
       }
-      T.set(lv("targetX", T.x), lv("targetY", T.y), lv("targetZ", T.z));
+      /**
+       * 看向点走**同一条曲线的切线**，不是线性插值。
+       *
+       * 只给位置加曲线时，机位是光滑的、镜头方向却在每段边界上折一下 ——
+       * 逐帧看就是「一抖一抖」（段长 12 帧 = 每 0.4 秒抖一次）。
+       * pathAt 的 out/in 描述的是"轨迹怎么弯"，看向点跟着同一条弯才是一台机器拍的。
+       */
+      const curveSpec = a.curve;
+      if (curveSpec && (hasCurve(curveSpec) || hasTargetCurve(curveSpec))) {
+        const t0: Vec3 = [
+          typeof a.from?.targetX === "number" ? a.from.targetX : T.x,
+          typeof a.from?.targetY === "number" ? a.from.targetY : T.y,
+          typeof a.from?.targetZ === "number" ? a.from.targetZ : T.z,
+        ];
+        const t1: Vec3 = [
+          typeof a.to?.targetX === "number" ? a.to.targetX : T.x,
+          typeof a.to?.targetY === "number" ? a.to.targetY : T.y,
+          typeof a.to?.targetZ === "number" ? a.to.targetZ : T.z,
+        ];
+        /**
+         * 看向点优先用**自己的**切线。只有老数据（没写 targetOut/targetIn）
+         * 才回落到位置曲线 —— 那份回落是历史行为，保留是为了别让既有工程变形。
+         */
+        const tOut = (hasTargetCurve(curveSpec) ? curveSpec.targetOut : curveSpec.out) ?? [0, 0, 0];
+        const tIn = (hasTargetCurve(curveSpec) ? curveSpec.targetIn : curveSpec.in) ?? [0, 0, 0];
+        const tq = pathAt(
+          t0,
+          t1,
+          [tOut[0] ?? 0, tOut[1] ?? 0, tOut[2] ?? 0],
+          [tIn[0] ?? 0, tIn[1] ?? 0, tIn[2] ?? 0],
+          p,
+        );
+        T.set(tq[0], tq[1], tq[2]);
+      } else {
+        T.set(lv("targetX", T.x), lv("targetY", T.y), lv("targetZ", T.z));
+      }
       fov = lv("fov", fov);
       // 每段都覆盖：system 段没有 follow，必须把上一段的跟随清掉，
       // 否则绝对坐标会被再叠加一次节点位置，镜头直接飞走
@@ -319,9 +355,9 @@ const geometryOf = (g: DslNode["geometry"]): React.ReactElement | null => {
  * **贴图规则**：map 存在时 color 强制白色、body 失效。three 里 map 与 color 是
  * 相乘关系，body 的降饱和压暗会把整张贴图染成脏色——这是果冻球问题的翻版。
  * metalness/roughness 照常生效（贴图金属是合理需求）。
- * transparent 在有 map 时放宽为 true：带 alpha 通道的 PNG（镂空 Logo、剪影）
- * 必须开 transparent 才不渲成实心块；对不透明的 JPG 无视觉影响，只是进了
- * 透明渲染队列——节点数 ≤48 的场景里排序开销可忽略。
+ * transparent 按「实际不透明度」判断，静态贴图默认不进透明队列（曾因 `op<1 || hasMap`
+ * 把土星塞进透明列表、被环的深度剔掉半张脸）。只有两种例外才开：序列帧贴图
+ * （src 带 {frame}，PNG 的 alpha 必须生效）和显式 `material.transparent:true`（镂空 Logo）。
  */
 const materialOf = (
   node: DslNode,
@@ -353,9 +389,12 @@ const materialOf = (
    * 贴图本身不透明（行星纹理），op=1 时走 opaque 列表先画、写深度；
    * 曾经写成 `op < 1 || hasMap`，土星因此被塞进透明列表、排在不透明的环之后，
    * 被环写下的深度剔掉半张脸——背半环整个"透"过球体显示（太阳系示例实测）。
-   * 真带 alpha 通道的镂空贴图将来要单独开 transparent，别在这里顺手指望。
+   *
+   * 例外就是当年的"将来"：**序列帧贴图 = 特效叠层**（src 带 {frame}），alpha 必须生效，
+   * 否则 PNG 的透明区域渲成黑块；agent 也可以用 material.transparent 显式开（静态镂空 Logo）。
    */
-  const transparent = op < 1;
+  const transparent =
+    m?.transparent ?? (op < 1 || Boolean(hasMap && node.material?.map?.src?.includes("{frame}")));
   /**
    * 自发光也吃同一张贴图（three 的 emissiveMap）：自发光是**直接叠加**的纯色，
    * 有 map 却不给 emissiveMap 时，太阳这种"贴图 + 高强度自发光"的球会被那层纯色
@@ -375,7 +414,7 @@ const materialOf = (
         side={side}
         transparent={transparent}
         opacity={op}
-        depthWrite={op >= 1}
+        depthWrite={op >= 1 && !transparent}
       />
     );
   }
@@ -417,12 +456,12 @@ const materialOf = (
       transparent={transparent}
       opacity={op}
       /**
-       * depthWrite 按**实际不透明度**判断，不能按 transparent 标记：
-       * 带贴图的行星 transparent 恒为 true（map 分支自动开透明），但 opacity=1 时
-       * 它必须写深度——否则土星环的背半会整个透过球体显示出来（实测踩过）。
-       * 真正的半透明（op<1）才不写，让环能透出后面的行星。
+       * depthWrite 看「实际不透明度 + 是否真透明材质」：
+       * 不透明的贴图行星（transparent=false）必须写深度，否则土星环的背半会整个透出来；
+       * 序列帧特效 / 镂空 Logo 虽然 transparent=true，透明像素却不该写深度挡住后面的物体，
+       * 所以也关掉 depthWrite。depthTest 仍开着，前方物体照常遮挡它。
        */
-      depthWrite={op >= 1}
+      depthWrite={op >= 1 && !transparent}
       flatShading={m?.flatShading ?? false}
     />
   );
@@ -434,6 +473,8 @@ const NodeView: React.FC<{
   node: DslNode;
   childrenOf: Map<string, DslNode[]>;
   frame: number;
+  /** 工程 fps：序列帧贴图按 seqFps / fps 换算进度（不传按 30） */
+  fps?: number;
   theme: Theme;
   /** 编辑器交互（成片渲染时全都不传，行为与之前一致） */
   onPick?: (id: string) => void;
@@ -443,10 +484,32 @@ const NodeView: React.FC<{
   /** 相机当前锁定的节点：罩一层区别于选中色的线框（成片不传） */
   lockedId?: string | null;
   onNodeObject?: (id: string, obj: THREE.Object3D | null) => void;
-}> = ({ node, childrenOf, frame, theme, onPick, selectedId, lockedId, onNodeObject, onNodeDoubleClick }) => {
+}> = ({ node, childrenOf, frame, fps = 30, theme, onPick, selectedId, lockedId, onNodeObject, onNodeDoubleClick }) => {
   const tr = evalNode(node, frame);
   // hook 必须无条件调用（不能挂在 if 上）：没配 map 时返回 null，材质走纯色
-  const map = useDslTexture(node.material?.map);
+  /**
+   * 序列帧贴图：src 带 {frame} 时按当前帧算出具体地址，每帧换一张贴图。
+   * 帧号计算在 shared/seqFrame.ts（2D imageSeq 同一份逻辑）；
+   * loop 默认 false —— 与 2D 一致，爆炸/破碎这类一次性特效播完停末帧，
+   * 循环烟雾/流动岩浆才由 agent 显式设 map.loop:true（过去硬编码 true 会把特效反复重播）。
+   */
+  const mapSpec = node.material?.map;
+  const mapSrc =
+    mapSpec?.src?.includes("{frame}")
+      ? seqSrcAt(
+          mapSpec.src,
+          {
+            seqFrom: mapSpec.seqFrom ?? 1,
+            seqTo: mapSpec.seqTo ?? 1,
+            seqFps: mapSpec.seqFps ?? 30,
+            loop: mapSpec.loop ?? false,
+          },
+          frame,
+          fps,
+          mapSpec.frameDigits ?? 4,
+        )
+      : mapSpec?.src;
+  const map = useDslTexture(mapSpec && mapSrc ? { ...mapSpec, src: mapSrc } : undefined);
   const kids = childrenOf.get(node.id) ?? [];
   /*
    * **弧度**：schema 里 rotX/rotY/rotZ 写的是度（人写"23.5 度"而不是"0.41 弧度"），
@@ -588,6 +651,7 @@ const NodeView: React.FC<{
           node={c}
           childrenOf={childrenOf}
           frame={frame}
+          fps={fps}
           theme={theme}
           onPick={onPick}
           selectedId={selectedId}
@@ -762,6 +826,8 @@ export const DslScene: React.FC<{
   spec: Scene3DDsl;
   frame: number;
   t: number;
+  /** 工程 fps：序列帧贴图换算进度用（不传按 30） */
+  fps?: number;
   theme: Theme;
   camera: DslCamera;
   /** 背景交给 Scene3D 画（它要区分"自己当底"和"叠在内容上"两种情况） */
@@ -778,6 +844,7 @@ export const DslScene: React.FC<{
   spec,
   frame,
   t,
+  fps = 30,
   theme,
   camera,
   onPick,
@@ -818,6 +885,7 @@ export const DslScene: React.FC<{
             node={n}
             childrenOf={childrenOf}
             frame={frame}
+            fps={fps}
             theme={theme}
             onPick={onPick}
             selectedId={selectedId}

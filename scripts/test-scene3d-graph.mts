@@ -145,15 +145,35 @@ test("交叠帧数被幕长夹住时，窗口跟着变短（不报出画面里�
   assert.equal(wins[0].end, 19);
 });
 /* ── ④ 世界 / 地面 / 后期（2026-11-04 晚，真实感改造） ── */
-test("world:省略时各字段有默认值（haze/vignette 不为 0）", () => {
+test("world:省略时各字段有默认值（vignette 落盘，haze 交给渲染层按模式兜底）", () => {
   const spec = parse({ nodes: [{ id: "a", geometry: { type: "box" } }], world: { mode: "auto" } });
   assert.equal(spec.world!.mode, "auto");
-  assert.equal(spec.world!.haze, 0.35);
+  /**
+   * haze 刻意**不给 schema 默认值**：默认值会在解析时把 0.35 填进数据，
+   * 深空（mode=space）不写 haze 也会吃到一层雾，把远处星点整片吃掉。
+   * 兜底在渲染层：space=0，其余 0.35（见 Scene3D 的 haze 计算）。
+   */
+  assert.equal(spec.world!.haze, undefined);
   assert.equal(spec.world!.vignette, 0.32);
 });
 
-test("world:mode=gradient 缺 top/bottom 不报错（渲染端有 auto 兜底）", () => {
-  const spec = parse({ nodes: [{ id: "a" }], world: { mode: "gradient", bottom: "#2B3342" } });
+test("world:mode=space 被接受，星点/银河/星云参数原样保留", () => {
+  const spec = parse({
+    nodes: [{ id: "a" }],
+    world: { mode: "space", stars: 1.4, milkyWay: 0.8, nebula: 0.2, spaceTint: "#7A5C93" },
+  });
+  assert.equal(spec.world!.mode, "space");
+  assert.equal(spec.world!.stars, 1.4);
+  assert.equal(spec.world!.milkyWay, 0.8);
+  assert.equal(spec.world!.nebula, 0.2);
+  assert.equal(spec.world!.spaceTint, "#7A5C93");
+});
+
+test("world:mode=space 时 stars 超范围被拒（0–2）", () => {
+  assert.throws(() => parse({ nodes: [{ id: "a" }], world: { mode: "space", stars: 5 } }));
+});
+
+test("world:mode=gradient 缺 top/bottom 不报错（渲染端有 auto 兜底）", () => {  const spec = parse({ nodes: [{ id: "a" }], world: { mode: "gradient", bottom: "#2B3342" } });
   assert.equal(spec.world!.bottom, "#2B3342");
 });
 
@@ -307,6 +327,39 @@ test("findWorldSky 认 id / Poly Haven 资产名 / 文件名", async () => {
     assert.ok(s.world.envIntensity > 0 && s.world.imageIntensity > 0, s.id);
     assert.ok(s.note.length > 4, s.id);
   }
+});
+
+
+test("dslIssues:序列帧贴图的参数校验", () => {
+  // 缺 seqTo/seqTo<=seqFrom → 报
+  const bad = dslIssues({
+    nodes: [
+      { id: "a", geometry: { type: "box" }, material: { map: { src: "http://x/{frame}.png" } } },
+      { id: "b", geometry: { type: "box" }, material: { map: { src: "http://x/{frame}.png", seqFrom: 10, seqTo: 5 } } },
+    ],
+  } as never);
+  assert.ok(bad.some((x) => x.includes("a") && x.includes("seqTo")));
+  assert.ok(bad.some((x) => x.includes("b") && x.includes("seqTo")));
+
+  // 给了 seqFrom/seqTo 但 src 没写 {frame} → 提醒序列不会动
+  const noPattern = dslIssues({
+    nodes: [
+      { id: "c", geometry: { type: "box" }, material: { map: { src: "http://x/t.png", seqFrom: 1, seqTo: 10 } } },
+    ],
+  } as never);
+  assert.ok(noPattern.some((x) => x.includes("c") && x.includes("{frame}")));
+
+  // 参数齐全 → 不报
+  const ok = dslIssues({
+    nodes: [
+      {
+        id: "d",
+        geometry: { type: "box" },
+        material: { map: { src: "http://x/{frame}.png", seqFrom: 1, seqTo: 240, frameDigits: 4, seqFps: 30 } },
+      },
+    ],
+  } as never);
+  assert.ok(!ok.some((x) => x.includes("d")));
 });
 
 console.log("");

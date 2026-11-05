@@ -35,6 +35,36 @@ const resolveSrc = (src: string): string =>
 /** 加载失败也进缓存（null 哨兵），否则每一帧都会重新请求一个必然 404 的地址 */
 const cache = new Map<string, THREE.Texture | null>();
 
+/**
+ * 缓存上限（LRU）：序列帧贴图每一帧一个纹理实例，240 帧的序列全留在显存里
+ * 一场戏就能吃掉几百 MB。超限逐出最旧的并 dispose——dispose 后 three 会在
+ * 该纹理下次被用到时拿内存里的 image 重新上传，代价是重新传输，不是重新下载。
+ */
+const CACHE_CAP = 96;
+
+const cachePut = (key: string, t: THREE.Texture | null): void => {
+  cache.delete(key); // 重置插入顺序（重复 set 同 key 时按最新算）
+  cache.set(key, t);
+  while (cache.size > CACHE_CAP) {
+    const oldest = cache.keys().next().value;
+    if (oldest === undefined) break;
+    const evicted = cache.get(oldest);
+    cache.delete(oldest);
+    try {
+      evicted?.dispose();
+    } catch {
+      // 已 dispose 的纹理重复 dispose 也无害；包一层防三方实现抛错
+    }
+  }
+};
+
+/** 命中也要刷新插入顺序，否则 LRU 会逐出「最常用」的那张，反复 dispose/重传 */
+const cacheTouch = (key: string): void => {
+  const t = cache.get(key);
+  cache.delete(key);
+  cache.set(key, t ?? null);
+};
+
 const cacheKey = (src: string, sig: string) => `${src}?${sig}`;
 
 const uvSig = (m: DslTextureSpec): string =>
@@ -91,6 +121,7 @@ export const useDslTexture = (map: DslTextureSpec | undefined): THREE.Texture | 
     }
     const key = cacheKey(src, sig);
     if (cache.has(key)) {
+      cacheTouch(key);
       setTex(cache.get(key) ?? null);
       return;
     }
@@ -109,14 +140,14 @@ export const useDslTexture = (map: DslTextureSpec | undefined): THREE.Texture | 
         if (alive) {
           t.colorSpace = THREE.SRGBColorSpace;
           applyUv(t, map);
-          cache.set(key, t);
+          cachePut(key, t);
           setTex(t);
         }
       },
       undefined,
       () => {
         if (alive) {
-          cache.set(key, null);
+          cachePut(key, null);
           setTex(null);
         }
       },

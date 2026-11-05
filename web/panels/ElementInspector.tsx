@@ -15,6 +15,7 @@ const KIND_LABEL: Record<OverlayElement["kind"], string> = {
   image: "图片",
   video: "视频",
   audio: "音频",
+  imageSeq: "序列帧",
 };
 
 const Num: React.FC<{

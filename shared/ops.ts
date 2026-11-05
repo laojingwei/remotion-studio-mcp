@@ -3,6 +3,7 @@ import {
   DEFAULT_THEME,
   effectClipSchema,
   elementSchema,
+  imageSeqIssues,
   sceneSpans,
   subtitleStyleSchema,
   beatGridSchema,
@@ -359,11 +360,13 @@ function clampDurationWithNote(type: string, n: number, summary: string[]): numb
  * 早先 schema 里 `muted` 一律 default(true)，结果音频元素不显式传 `muted:false`
  * 就被静音成 0 —— 渲染出来连音轨都不生成，而且零报错（实测 mean_volume -90dB）。
  */
-export const withElementDefaults = <T extends { kind: OverlayElement["kind"]; muted?: boolean }>(
+export const withElementDefaults = <T extends { kind: OverlayElement["kind"]; muted?: boolean; loop?: boolean }>(
   raw: T,
-): T & { muted: boolean } => ({
+): T & { muted: boolean; loop?: boolean } => ({
   ...raw,
   muted: raw.muted ?? raw.kind === "video",
+  // 序列帧默认播一次停末帧（爆炸/破碎这类一次性特效循环回第一帧很怪）；视频默认不循环由 schema 管着
+  ...(raw.kind === "imageSeq" && raw.loop === undefined ? { loop: false } : {}),
 });
 
 /* ────────────────────────────── Reducer（纯函数）────────────────────────────── */
@@ -661,6 +664,18 @@ const AUDIO_KEYS = [
 
 /** 叠加层元素的字段清单（从 schema 现取，加字段不用改这里） */
 const ELEMENT_KEYS = Object.keys(elementSchema.shape);
+
+/** 元素落库前统一过一遍：schema 归一化 + imageSeq 跨字段防呆（两条写路径都走这里） */
+const parseElement = (raw: unknown): OverlayElement => {
+  const obj = (raw ?? {}) as Record<string, unknown>;
+  const issues = imageSeqIssues(obj as Parameters<typeof imageSeqIssues>[0]);
+  if (issues.length) throw new Error(`imageSeq 配置有问题：\n- ${issues.join("\n- ")}`);
+  // loop 默认下沉到 ops 层：withElementDefaults 只在 MCP 工具层跑，
+  // 直接构造 add_element op 的路径会漏掉，序列帧就变成循环重播（schema 默认 loop:true）
+  return elementSchema.parse(
+    obj.kind === "imageSeq" && obj.loop === undefined ? { ...obj, loop: false } : obj,
+  );
+};
 
 /** 逐条检查 op 的字段是否都在白名单里；未知 op 名放行（由 switch 的 default 报错） */
 function assertKnownOpFields(ops: Op[]): void {
@@ -1371,7 +1386,7 @@ export function applyOps(project: Project, ops: Op[]): OpResult {
           typeof rawEl.text === "string" && rawEl.text.trim()
             ? String(rawEl.text).trim().slice(0, 16)
             : "元素";
-        const el = elementSchema.parse(
+        const el = parseElement(
           withElementDefaults({
             from: 0,
             durationInFrames: scene.durationInFrames,
@@ -1407,7 +1422,7 @@ export function applyOps(project: Project, ops: Op[]): OpResult {
         const idx = list.findIndex((e) => e.id === op.elementId);
         if (idx < 0) throw new Error(`找不到元素: ${op.elementId}`);
         // 逐字段合并后再过一遍 schema，保证范围（opacity 0-1、z 非负）不会越界
-        const merged = elementSchema.parse({ ...list[idx], ...op.patch, id: list[idx].id });
+        const merged = parseElement({ ...list[idx], ...op.patch, id: list[idx].id });
         // 场景内时间：起点/时长不能超出场景边界
         const from = Math.min(Math.max(0, merged.from), Math.max(0, scene.durationInFrames - 1));
         const wantDur =
@@ -2152,7 +2167,10 @@ export function applyOps(project: Project, ops: Op[]): OpResult {
             (savedWorld.mode === "gradient"
               ? `（${savedWorld.top ?? "auto"} → ${savedWorld.bottom ?? "auto"}）`
               : "") +
-            `，雾 ${savedWorld.haze}，暗角 ${savedWorld.vignette}`,
+            (savedWorld.mode === "space"
+              ? `（星点 ${savedWorld.stars ?? 1}× / 银河 ${savedWorld.milkyWay ?? 0.5} / 星云 ${savedWorld.nebula ?? 0.35}）`
+              : "") +
+            `，雾 ${savedWorld.haze ?? (savedWorld.mode === "space" ? 0 : 0.35)}，暗角 ${savedWorld.vignette}`,
         );
         break;
       }

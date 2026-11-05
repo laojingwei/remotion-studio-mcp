@@ -1,4 +1,4 @@
-# Agent 使用全书（123 个工具 = 4 常驻 + 119 按需 + 能力地图 + 铁律）
+# Agent 使用全书（124 个工具 = 4 常驻 + 120 按需 + 能力地图 + 铁律）
 
 给 agent 的完整说明书。**你不需要读源码、不需要试探参数**：这台机器能做什么、怎么组合、
 为什么没生效，全部在这页和另外 17 篇指南里（全 18 篇的索引见本文最后一节）。
@@ -116,6 +116,9 @@
 **字幕**：`set_subtitle`（自动拆段：清标点 + 一屏一句，返回拆分预览）· `fix_subtitles`（旧工程/长字幕批量重拆，`dryRun` 预演）· `set_subtitle_style` · `export_subtitles`（SRT / VTT）
 
 **素材**：`upload_asset`（`registerToLibrary` 决定进库还是进本工程目录）· `list_assets`（**只列共用库**）· `list_project_assets`（本工程目录）· `delete_project_asset` · `organize_assets`（把旧版散在 assets 根下的文件归位，默认 dryRun）· `rename_asset` · `delete_asset`（被工程引用的文件只删条目、保留文件）· `get_asset_info`（纯 Node 读文件头，不依赖外部工具）
+
+**本地资源库**（文件不复制）：用户在编辑器「资源库」面板按类别登记自己的素材文件夹，`search_local_assets` 在里面按名搜索并直接给出可引用的 URL（图片 → `material.map` / `world.image`，音频 → `add_audio_track`）。
+fx 类的序列帧文件夹会整体成一个结果，直接给带 `{frame}` 的 `pattern` + `seqFrom`/`seqTo`/`frameDigits`，原样粘进 `add_element{imageSeqSrc}` 或 `material.map.src` 即可，不用从首末帧名反推。引用只在 server 正在运行的那台机器上有效。
 
 > **文件落在哪**：`public/assets/library/` 是「我的素材」（跨工程、删工程不动）；
 > `public/assets/projects/<工程id>/` 只属于那个工程，**删工程时连带清**（被别的工程/素材库引用的会留下并写进回执）。

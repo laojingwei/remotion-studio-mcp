@@ -7157,7 +7157,10 @@ select.tts-input {
   display: inline-flex;
 }
 
-.outputs-toggle.is-on {
+/* 顶栏右侧的成对开关（资源库 / 产物）共用一份状态样式；
+   按钮各留自己的类名，别再共用 .outputs-toggle —— 那样选择器会一次命中两个按钮
+   （e2e 的 strict mode 直接失败，实测过）。 */
+.rail-toggle.is-on {
   border-color: var(--accent-dim);
   color: var(--text);
 }
@@ -7911,4 +7914,206 @@ select.tts-input {
 .log-foot code {
   font-size: 10px;
   color: var(--text);
+}
+
+/* ───────────── 资源库浮框（复用产物浮框的定位与配色） ───────────── */
+.res-pop {
+  position: absolute;
+  top: calc(100% + 8px);
+  right: 0;
+  width: 620px;
+  max-height: 74vh;
+  display: flex;
+  flex-direction: column;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  box-shadow: 0 18px 44px rgba(0, 0, 0, 0.55);
+  z-index: 80;
+  overflow: hidden;
+}
+
+.res-tabs {
+  display: flex;
+  gap: 4px;
+  padding: 8px 12px 0;
+  border-bottom: 1px solid var(--line);
+  overflow-x: auto;
+}
+
+.res-tab {
+  font-size: 12px;
+  padding: 6px 12px;
+  border: none;
+  background: transparent;
+  color: var(--muted);
+  border-radius: 8px 8px 0 0;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.res-tab.is-on {
+  background: rgba(255, 255, 255, 0.06);
+  color: var(--text);
+  font-weight: 600;
+}
+
+.res-path-row {
+  display: flex;
+  gap: 8px;
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--line);
+}
+
+.res-path-row input {
+  flex: 1;
+  min-width: 0;
+  font-size: 12px;
+}
+
+.res-error {
+  padding: 8px 12px;
+  font-size: 12px;
+  color: #ff8b8b;
+  background: rgba(255, 90, 90, 0.08);
+  border-bottom: 1px solid var(--line);
+}
+
+.res-body {
+  flex: 1;
+  overflow: auto;
+  padding: 10px 12px;
+  min-height: 180px;
+}
+
+.res-hint {
+  font-size: 12px;
+  color: var(--muted);
+  padding: 16px 4px;
+  line-height: 1.6;
+}
+
+.res-crumb {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  margin-bottom: 8px;
+  font-size: 12px;
+  color: var(--muted);
+  flex-wrap: wrap;
+}
+
+.res-crumb-root {
+  font-family: monospace;
+  font-size: 11px;
+}
+
+.res-crumb-sub {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.res-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(122px, 1fr));
+  gap: 8px;
+}
+
+.res-cell {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 8px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: transparent;
+  cursor: pointer;
+  text-align: left;
+  min-width: 0;
+}
+
+.res-cell.is-on,
+.res-cell:hover {
+  border-color: var(--accent-dim);
+}
+
+.res-cell-dir {
+  flex-direction: row;
+  align-items: center;
+  gap: 6px;
+  min-height: 44px;
+}
+
+.res-dir-icon {
+  color: var(--muted);
+}
+
+.res-thumb {
+  height: 64px;
+  border-radius: calc(var(--radius) - 2px);
+  background: rgba(255, 255, 255, 0.04);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+}
+
+.res-thumb img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.res-ext {
+  font-size: 11px;
+  color: var(--muted);
+  text-transform: uppercase;
+}
+
+.res-name {
+  font-size: 12px;
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.res-size {
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.res-foot {
+  display: flex;
+  gap: 8px;
+  padding: 10px 12px;
+  border-top: 1px solid var(--line);
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.res-url {
+  flex: 1;
+  min-width: 0;
+  font-size: 11px;
+  font-family: monospace;
+}
+
+.res-pick-use {
+  margin-left: auto;
+  color: var(--accent, #7fb2ff);
+  font-weight: 600;
+}
+
+/* 名称溢出卡片：flex 子项默认 min-width:auto 不肯缩，名字长就把卡片撑破。
+   统一掐住宽度，让省略号生效 */
+.res-cell > .res-name,
+.res-cell > .res-size,
+.res-cell > .res-ext {
+  max-width: 100%;
+  min-width: 0;
+}
+
+.res-cell {
+  overflow: hidden;
 }

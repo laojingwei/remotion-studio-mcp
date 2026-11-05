@@ -3,7 +3,7 @@
 一份 `Project JSON`，三个消费方：**Agent 改它、用户在 Web 上拖它、Remotion 渲染它**。
 因为共用同一个数据源，agent 和用户的编辑天然互通 —— 不是后期加的功能，是架构的结果。
 
-> **版本** 1.1.0（开发线 v1.01）· **MCP 工具** 123 个（4 个常驻 + 119 个按需发现）·
+> **版本** 1.1.1（开发线 v1.01）· **MCP 工具** 124 个（4 个常驻 + 120 个按需发现）·
 > **变更** 每一版改了什么见 [CHANGELOG.md](CHANGELOG.md)
 > **许可** 本仓库代码 MIT，依赖里有两个非宽松（Remotion License / AGPL），见 [开源协议](#开源协议)
 
@@ -139,9 +139,9 @@ http://127.0.0.1:4380/mcp
 
 > 注意地址要带 `/mcp`：`/` 是编辑器本身的 HTTP API（REST + SSE），不是 MCP 端点。
 
-### 工具清单（123 个 = 4 常驻 + 119 按需）
+### 工具清单（124 个 = 4 常驻 + 120 按需）
 
-**门面模式**：宿主只看到 4 个常驻工具，其余 119 个用 `tool_search` 按意图现找、用 `tool_call` 执行。
+**门面模式**：宿主只看到 4 个常驻工具，其余 120 个用 `tool_search` 按意图现找、用 `tool_call` 执行。
 这样工具描述不占常驻上下文（否则光工具说明就要几万 token）。
 
 ```
@@ -629,7 +629,7 @@ screen = stageCenter + pan + zoom * localPoint
 三条实现约定值得知道：
 
 - **一次手势 = 一条 `update_graph_node` = 一步撤销**，和自由画布拖拽一致；写请求走 store 的串行队列，不会互相覆盖。
-- **agent 和人是同一批 op**：`get_graph` 看大纲，`update_graph_node` 改单个节点，`set_graph_scene` 改相机/世界/灯光/地面/粒子/辉光。整份 `update_scene({props:{graph}})` 会把面板上的改动一起抹掉，所以文档里明确要求改节点别整份覆盖。
+- **agent 和人是同一批 op**：`get_graph` 看大纲，`update_graph_node` 改单个节点，`set_graph_scene` 改相机/世界/灯光/地面/粒子/辉光；`search_local_assets` 在用户配置的本地素材目录里搜文件并给引用地址。整份 `update_scene({props:{graph}})` 会把面板上的改动一起抹掉，所以文档里明确要求改节点别整份覆盖。
 - **换父级保持世界变换**：把行星拖到另一个枢轴下，位置/角度/大小都不变（矩阵换算在 `shared/scene3dTransform.ts`，不依赖 three，有单测）。
 - 预置场景（没有 `graph`）的面板里有一个「换成可编辑场景图」入口 —— 它**不是**把预设翻译成节点树，而是新建一张最小可编辑的图，文案里写清了。
 
@@ -982,7 +982,7 @@ server/              唯一写入口 + 渲染队列 + MCP 代理
   bundle.service    工程包导入导出（project.json + assets + manifest）
   zip.ts            最小 zip 读写（写 stored，读兼容 deflate）
   render.service    bundle 缓存 + 素材同步 + 渲染队列
-  mcp-tools.ts      工具聚合与门面（123 个 = 4 常驻 + 119 按需）
+  mcp-tools.ts      工具聚合与门面（124 个 = 4 常驻 + 120 按需）
   mcp-proxy.ts      stdio 代理（工具调用转发给 HTTP 服务）
   skills/           18 篇技能指南（list_guides / get_guide 读）
 web/                 编辑器：预览 / 属性面板 / 时间轴 / 素材面板 / 详情浮窗
