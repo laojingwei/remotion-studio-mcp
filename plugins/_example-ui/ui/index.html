@@ -152,7 +152,9 @@
   $("check").addEventListener("click", check);
   $("taller").addEventListener("click", taller);
 
-  /* 宿主加载完成后会发一次主题变量，照着用就能和编辑器观感一致 */
+  /* 宿主加载完成后会发一次主题变量，照着用就能和编辑器观感一致。
+     如果你的页面用异步框架初始化（监听建得晚），建好监听后发一条
+     parent.postMessage({ type: "studio:hello" }, "*")，宿主会立刻补发一次。 */
   window.addEventListener("message", (ev) => {
     const msg = ev.data;
     if (!msg || msg.type !== "studio:init") return;

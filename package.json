@@ -43,7 +43,7 @@
   "scripts": {
     "dev": "concurrently -n server,web -c cyan,magenta \"npm:dev:server\" \"npm:dev:web\"",
     "dev:server": "tsx server/index.ts",
-    "dev:web": "vite",
+    "dev:web": "tsx scripts/gen-plugin-entry.mts && vite",
     "studio": "remotion studio src/index.ts",
     "render": "node scripts/render.mjs",
     "mcp": "tsx server/mcp-proxy.ts",

@@ -130,6 +130,8 @@ export const LIBRARY_CATS: ElementCategory[] = ["标记", "箭头", "形状", "�
  *  - 编辑器/渲染：`src/_plugins.generated.ts`（web 是独立 bundle，只能靠生成文件）
  */
 const EXTRA_LIBRARY: LibraryItem[] = [];
+/** id → 来源（插件 id）。插件间重名冲突检查用；同源重注册（文件改了）允许替换 */
+const EL_SOURCE = new Map<string, string>();
 
 const ITEM_ID_RE = /^[a-z0-9][a-z0-9-]*$/;
 /** svg 标记里出现这些就当坏数据：不是安全边界（插件本来就是任意代码），是"渲染会崩"的护栏 */
@@ -140,7 +142,7 @@ const BAD_SVG = /<script|onload=|onclick=/i;
  *
  * 只卡"放上去会出问题"的字段。分类不限制——作者自己定，面板会把新分类自动加成筛选项。
  */
-export function registerLibraryItem(item: unknown): { ok: boolean; reason?: string } {
+export function registerLibraryItem(item: unknown, source = ""): { ok: boolean; reason?: string } {
   if (!item || typeof item !== "object" || Array.isArray(item)) {
     return { ok: false, reason: "元素要是一个对象" };
   }
@@ -151,6 +153,13 @@ export function registerLibraryItem(item: unknown): { ok: boolean; reason?: stri
   }
   if (ELEMENT_LIBRARY.some((x) => x.id === id)) {
     return { ok: false, reason: `id「${id}」与内置元素重名（内置优先，换个 id）` };
+  }
+  // 插件之间不许静默顶掉：同 id 先到先得，后来者必须换（与 passes 同一语义）
+  {
+    const owner = EL_SOURCE.get(id);
+    if (owner && source && owner !== source) {
+      return { ok: false, reason: `id「${id}」已被插件 ${owner} 占用，换个 id` };
+    }
   }
   if (!it.name || typeof it.name !== "string") return { ok: false, reason: `「${id}」缺 name` };
   if (!it.cat || typeof it.cat !== "string") return { ok: false, reason: `「${id}」缺 cat（分类，可自定义）` };
@@ -183,6 +192,7 @@ export function registerLibraryItem(item: unknown): { ok: boolean; reason?: stri
   const at = EXTRA_LIBRARY.findIndex((x) => x.id === id);
   if (at >= 0) EXTRA_LIBRARY[at] = clean;
   else EXTRA_LIBRARY.push(clean);
+  if (source) EL_SOURCE.set(id, source);
   return { ok: true };
 }
 
@@ -191,6 +201,7 @@ export function unregisterLibraryItem(id: string): boolean {
   const at = EXTRA_LIBRARY.findIndex((x) => x.id === id);
   if (at < 0) return false;
   EXTRA_LIBRARY.splice(at, 1);
+  EL_SOURCE.delete(id);
   return true;
 }
 

@@ -42,6 +42,8 @@ import { pathToFileURL } from "node:url";
 export const SCRIPT_ENTRIES = ["plugin.ts", "plugin.mts", "plugin.mjs", "plugin.js", "index.ts", "index.mjs"];
 
 const JS_EXT = new Set([".mjs", ".js", ".cjs"]);
+/** script 模式的源码扩展名：单文件插件被鼓励拆 helper（.ts），这些都要进指纹 */
+const SCRIPT_SRC_EXT = new Set([".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs", ".json"]);
 const TS_EXT = new Set([".ts", ".mts", ".cts"]);
 
 /** 打包产物落这里。放系统临时目录：不该混进用户的 plugins/ 或 data/ */
@@ -309,6 +311,61 @@ function moduleFingerprint(entry: string): string {
   return `${Math.round(fs.statSync(entry).mtimeMs)}-${shortHash(parts.join("|"))}`;
 }
 
+/**
+ * script 模式的缓存标签：入口 + **入口同目录两层内的全部源码文件**。
+ *
+ * 只看入口文件不够：文档鼓励单文件插件拆 helper（`import "./helper"`），
+ * esbuild 会把 helper 一起打进产物——但 helper 改了入口的 mtime/size 不变，
+ * 产物文件名不变，`fs.existsSync(out)` 命中旧缓存，改了等于没改。
+ * 所以 script 模式也要像 moduleFingerprint 那样扫同目录（含 .ts/.tsx/.json）。
+ */
+function scriptFingerprint(entry: string): string {
+  const parts: string[] = [];
+  const push = (f: string) => {
+    try {
+      const st = fs.statSync(f);
+      parts.push(`${path.basename(f)}:${Math.round(st.mtimeMs)}:${st.size}`);
+    } catch {
+      parts.push(`${path.basename(f)}:gone`);
+    }
+  };
+
+  push(entry);
+  const walk = (d: string, depth: number) => {
+    if (depth > 2 || parts.length > 300) return;
+    let list: fs.Dirent[];
+    try {
+      list = fs.readdirSync(d, { withFileTypes: true });
+    } catch {
+      return;
+    }
+    for (const e of list) {
+      if (parts.length > 300) return;
+      const abs = path.join(d, e.name);
+      if (e.isDirectory()) {
+        if (e.name === "node_modules" || e.name.startsWith(".") || e.name === "dist") continue;
+        walk(abs, depth + 1);
+      } else if (SCRIPT_SRC_EXT.has(path.extname(e.name).toLowerCase())) {
+        push(abs);
+      }
+    }
+  };
+  walk(path.dirname(entry), 0);
+
+  return `${Math.round(fs.statSync(entry).mtimeMs)}-${shortHash(parts.join("|"))}`;
+}
+
+/**
+ * 统一的入口缓存标签：module 模式扫 dist 两层，script 模式扫同目录源码。
+ * hooks.ts / tts-providers.ts 的热更新指纹也用它——三处口径必须一致，
+ * 否则"这条链热更新、那条链要重启"会成为最迷惑人的不一致。
+ */
+export function entryCacheTag(kind: string, file: string | undefined, fallbackDetail: string): string {
+  if (kind === "module" && file) return moduleFingerprint(file);
+  if (kind === "script" && file) return scriptFingerprint(file);
+  return `${kind}:${fallbackDetail}`;
+}
+
 /* ─────────────────────────── 加载 ─────────────────────────── */
 
 type Esbuild = { buildSync: (o: Record<string, unknown>) => unknown };
@@ -371,16 +428,16 @@ export async function loadPluginEntry(
   }
 
   /* script 模式：老路径，esbuild 打成单文件 */
-  const st = fs.statSync(file);
   const eb = await esbuildOf();
   if (!eb) {
     // 没有 esbuild 就直接 import 源码（Node 22 能剥类型；跑不了会给出它自己的错）
-    const tag = `${Math.round(st.mtimeMs)}-${st.size}`;
+    const tag = scriptFingerprint(file);
     return { mod: (await import(importUrl(file, tag))) as Record<string, unknown>, artifact: file, entry };
   }
 
   fs.mkdirSync(CACHE_DIR, { recursive: true });
-  const out = path.join(CACHE_DIR, `${safeName(id)}-${shortHash(`${file}|${Math.round(st.mtimeMs)}-${st.size}`)}.mjs`);
+  // 产物名必须用 scriptFingerprint：helper 改了也要换新产物，否则 existsSync 命中旧缓存
+  const out = path.join(CACHE_DIR, `${safeName(id)}-${shortHash(`${file}|${scriptFingerprint(file)}`)}.mjs`);
   if (!fs.existsSync(out)) {
     try {
       eb.buildSync({

@@ -112,6 +112,15 @@ export function buildParamShape(params: unknown): {
     // `.strict()` 由宿主注册时统一加（见 mcp-tools 的 z.object(def.shape).strict()）
     if (spec.desc) base = base.describe(spec.desc);
     if (spec.default !== undefined) {
+      /*
+       * zod 的 .default() 不校验默认值本身：number 参数给 default: "1"、enum 给候选之外的
+       * 默认值都能注册通过，运行时 args.x 静默拿到错误类型——注册时就验一次。
+       */
+      const chk = base.safeParse(spec.default);
+      if (!chk.success) {
+        issues.push(`参数「${key}」的 default 与 type 不匹配（type=${spec.type}，default=${JSON.stringify(spec.default)}）`);
+        continue;
+      }
       base = base.default(spec.default as never);
     } else if (!spec.required) {
       base = base.optional();

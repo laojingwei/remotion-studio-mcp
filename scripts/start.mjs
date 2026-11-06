@@ -32,18 +32,22 @@ function newestMtime(dir) {
 }
 
 /*
- * 三个目录都必须进检查：
- *   web/     面板 UI
- *   shared/  schema / 转场定义等两端共用代码
- *   src/     场景组件 —— 编辑器预览用 @remotion/player，场景代码**也打进 web bundle**。
+ * 四个目录都必须进检查：
+ *   web/       面板 UI
+ *   shared/    schema / 转场定义等两端共用代码
+ *   src/       场景组件 —— 编辑器预览用 @remotion/player，场景代码**也打进 web bundle**。
+ *   plugins/   插件的场景组件 / 转场源码 —— 经 src/_plugins.generated.ts 同样打进 web bundle。
  * 漏了 src/ 的后果：改场景（比如修雨幕方向）后 npm start 认为"没变化"不重建，
  * 用户看到的永远是旧组件 —— 雨幕方向修复当晚就因为漏了这个目录踩过一次。
+ * plugins/ 是同一个坑：只改 plugins/<x>/scenes/foo.tsx 时 src/ 的 mtime 不变，
+ * 之前"重启 npm start 也不重建"，与文档 §12.3 的承诺矛盾。
  */
 const distTime = fs.existsSync(DIST) ? fs.statSync(DIST).mtimeMs : 0;
 const sourceTime = Math.max(
   newestMtime(path.join(ROOT, "web")),
   newestMtime(path.join(ROOT, "shared")),
   newestMtime(path.join(ROOT, "src")),
+  fs.existsSync(path.join(ROOT, "plugins")) ? newestMtime(path.join(ROOT, "plugins")) : 0,
 );
 
 if (distTime < sourceTime) {

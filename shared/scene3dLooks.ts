@@ -100,6 +100,8 @@ export const BUILTIN_LOOKS: Record<string, LookSpec> = {
  * 被插件顶掉就是"文档说的和画出来的不是一个东西"。
  */
 const EXTRA_LOOKS = new Map<string, LookSpec>();
+/** id → 来源（插件 id）。插件间重名冲突检查用；同源重注册（文件改了）允许替换 */
+const LOOK_SOURCE = new Map<string, string>();
 
 /** `auto` 是"按预设挑"，不是一种风格，插件不能占用 */
 const RESERVED = new Set(["auto"]);
@@ -126,11 +128,18 @@ function lightOk(v: unknown, where: string): string | null {
  * 范围卡得比内置宽，但卡的都是"会渲染成黑屏/过曝"的：强度为负、bloom 超 1 之外的
  * 离谱值、灯位不是三元组。**风格好不好看不管**——那是抽帧看的事，代码管不了。
  */
-export function registerLook(id: string, spec: unknown): { ok: boolean; reason?: string } {
+export function registerLook(id: string, spec: unknown, source = ""): { ok: boolean; reason?: string } {
   const key = String(id ?? "").trim();
   if (!LOOK_ID_RE.test(key)) return { ok: false, reason: `id「${key || "(空)"}」不合法：只能小写字母、数字、短横线` };
   if (RESERVED.has(key)) return { ok: false, reason: `「auto」是保留字（表示按预设自动挑），换一个 id` };
   if (BUILTIN_LOOKS[key]) return { ok: false, reason: `id「${key}」与内置风格重名（内置优先，换个 id）` };
+  // 插件之间不许静默顶掉：同 id 先到先得，后来者必须换（与 passes 同一语义）
+  {
+    const owner = LOOK_SOURCE.get(key);
+    if (owner && source && owner !== source) {
+      return { ok: false, reason: `id「${key}」已被插件 ${owner} 占用，换个 id` };
+    }
+  }
   if (!spec || typeof spec !== "object" || Array.isArray(spec)) return { ok: false, reason: `「${key}」的 spec 要是对象` };
 
   const s = spec as Partial<LookSpec>;
@@ -169,12 +178,16 @@ export function registerLook(id: string, spec: unknown): { ok: boolean; reason?:
     bloom: { strength: b.strength as number, radius: b.radius as number, threshold: b.threshold as number },
     summary: typeof s.summary === "string" ? s.summary : "",
   });
+  if (source) LOOK_SOURCE.set(key, source);
   return { ok: true };
 }
 
 /** 注销一套插件风格（插件停用/删除时用）；内置的删不掉 */
 export function unregisterLook(id: string): boolean {
-  return EXTRA_LOOKS.delete(String(id ?? "").trim());
+  const k = String(id ?? "").trim();
+  if (!EXTRA_LOOKS.delete(k)) return false;
+  LOOK_SOURCE.delete(k);
+  return true;
 }
 
 /** 按 id 取风格：插件 > 内置。取不到返回 undefined（调用方自己决定怎么降级） */

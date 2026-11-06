@@ -44,6 +44,8 @@ export type PluginToolStatus = {
   /** 贡献了工具的插件 */
   plugins: string[];
   errors: PluginToolError[];
+  /** 建议类提示（如写入类工具没声明 dryRun）——不挡注册，list_plugins 单独一档 */
+  warnings: PluginToolError[];
   active: boolean;
 };
 
@@ -131,7 +133,15 @@ async function builtinToolNames(): Promise<Set<string>> {
 
 let fingerprint = "";
 let errors: PluginToolError[] = [];
+let warnings: PluginToolError[] = [];
 let loading: Promise<PluginToolStatus> | null = null;
+
+/** 工具 run 的超时护栏：与媒体/TTS 管线同量级 */
+const TOOL_TIMEOUT_MS = 120_000;
+/** run 返回文本的上限：agent 回执超长只会把上下文灌爆 */
+const TOOL_OUTPUT_MAX = 20_000;
+/** 当前在跑的 race 计时器（成功路径也要清掉，不然每次调用泄漏一个 120s 定时器） */
+const toolTimers: ReturnType<typeof setTimeout>[] = [];
 
 export function pluginToolStatus(): PluginToolStatus {
   const list = pluginToolEntries();
@@ -139,6 +149,7 @@ export function pluginToolStatus(): PluginToolStatus {
     count: list.length,
     plugins: [...new Set(list.map((e) => e.pluginId))].sort(),
     errors: [...errors],
+    warnings: [...warnings],
     active: list.length > 0,
   };
 }
@@ -153,6 +164,7 @@ export async function ensurePluginTools(): Promise<PluginToolStatus> {
   loading = (async () => {
     const acc: PluginToolEntry[] = [];
     const errs: PluginToolError[] = [];
+    const warns: PluginToolError[] = [];
     const builtin = await builtinToolNames();
     const taken = new Set<string>(builtin);
 
@@ -213,16 +225,55 @@ export async function ensurePluginTools(): Promise<PluginToolStatus> {
           continue;
         }
 
+        /*
+         * dryRun 软执法：文档硬规矩"写入类工具必须有 dryRun 且默认 true"。
+         * 不硬拒（宿主管不了插件内部改没改数据），但必须喊出来——
+         * agent 看到没有 dryRun 的写入工具，就该默认这工具一调就动真格。
+         */
+        if (((p.manifest as PluginManifest | null)?.permissions ?? []).includes("project:write")) {
+          const hasDryRun = Object.entries((t.params ?? {}) as Record<string, { type?: string }>).some(
+            ([k, s]) => k === "dryRun" && s?.type === "boolean",
+          );
+          if (!hasDryRun) {
+            warns.push({
+              pluginId: p.id,
+              message: `工具「${name}」声明了 project:write 但参数里没有 dryRun（boolean）——建议加一个并默认 true，让 agent 能先预览`,
+            });
+          }
+        }
+
         const run = t.run as (args: Record<string, unknown>, ctx: PluginToolCtx) => unknown;
         const def: ToolDef = {
           name,
-          description,
+          // description 直接进 tools/list 与 tool_search：超长会持续污染每次搜索结果
+          description: description.length > 1000 ? `${description.slice(0, 1000)}…（截断，共 ${description.length} 字）` : description,
           shape,
           run: async (args) => {
-            const out = await run(args, ctx);
-            if (typeof out === "string") return out;
+            let out: unknown;
+            try {
+              /*
+               * 超时护栏：媒体管线 60s、TTS 60s、check 15s，工具 run 也得有——
+               * 插件里 await 一个不返回的 fetch，tool_call 就永久挂起。
+               */
+              out = await Promise.race([
+                Promise.resolve(run(args, ctx)),
+                new Promise<never>((_, rej) => {
+                  const t = setTimeout(() => rej(new Error(`超过 ${TOOL_TIMEOUT_MS / 1000} 秒没有返回`)), TOOL_TIMEOUT_MS);
+                  (t as unknown as { unref?: () => void }).unref?.();
+                  toolTimers.push(t);
+                }),
+              ]);
+            } catch (err) {
+              const msg = err instanceof Error ? err.message : String(err);
+              throw new Error(`插件「${p.id}」工具「${name}」执行失败：${msg}`);
+            } finally {
+              for (const t of toolTimers.splice(0)) clearTimeout(t);
+            }
+            if (typeof out === "string") return out.length > TOOL_OUTPUT_MAX ? `${out.slice(0, TOOL_OUTPUT_MAX)}…（已截断，共 ${out.length} 字）` : out;
             // 返回对象就序列化：agent 读的是文本，undefined 会变成"工具没输出"这种莫名其妙的空回执
-            return out === undefined ? "（插件工具没有返回内容）" : JSON.stringify(out, null, 2);
+            if (out === undefined) return "（插件工具没有返回内容）";
+            const text = JSON.stringify(out, null, 2);
+            return text.length > TOOL_OUTPUT_MAX ? `${text.slice(0, TOOL_OUTPUT_MAX)}…（已截断，共 ${text.length} 字）` : text;
           },
         };
         acc.push({ pluginId: p.id, def });
@@ -232,6 +283,7 @@ export async function ensurePluginTools(): Promise<PluginToolStatus> {
 
     replacePluginTools(acc);
     errors = errs;
+    warnings = warns;
     fingerprint = next;
     return pluginToolStatus();
   })();
@@ -247,5 +299,6 @@ export async function ensurePluginTools(): Promise<PluginToolStatus> {
 export function resetPluginToolCache(): void {
   replacePluginTools([]);
   errors = [];
+  warnings = [];
   fingerprint = "";
 }

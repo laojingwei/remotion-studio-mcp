@@ -287,6 +287,13 @@ export function registerWorldSky(preset: unknown, source = ""): { ok: boolean; r
   if (WORLD_SKIES.some((s) => s.id === id)) {
     return { ok: false, reason: `id「${id}」与内置配方重名（内置优先，换个 id）` };
   }
+  // 插件之间也不许静默顶掉：谁先注册谁持有，后来者必须换 id（与 passes 同一语义）
+  {
+    const owner = SKY_SOURCE.get(id);
+    if (owner && source && owner !== source) {
+      return { ok: false, reason: `id「${id}」已被插件 ${owner} 占用，换个 id` };
+    }
+  }
   if (!p.label || typeof p.label !== "string") return { ok: false, reason: `「${id}」缺 label（中文名）` };
   if (!p.asset || typeof p.asset !== "string") {
     return { ok: false, reason: `「${id}」缺 asset（全景图资产 id，文件名与下载地址都由它拼）` };

@@ -39,9 +39,8 @@
  *    变成最难查的坑。
  */
 
-import fs from "node:fs";
 import { activePlugins } from "./discovery";
-import { loadPluginEntry, resolvePluginEntry } from "./entry";
+import { entryCacheTag, loadPluginEntry, resolvePluginEntry } from "./entry";
 
 export type TtsConfigField = {
   key: string;
@@ -124,22 +123,17 @@ let fp = "";
 let loading: Promise<void> | null = null;
 
 /**
- * 指纹：插件集合 + 入口文件 mtime。
+ * 指纹：插件集合 + 入口缓存标签。
  *
- * 用入口文件的 mtime 而不是"加载过一次就算"——作者改一行 provider 代码，
- * 不该要求重启整个服务（TTS 最容易边调边改）。
+ * 必须与 hooks.ts / plugin-tools 的口径一致（都用 entryCacheTag）：
+ * script 模式扫同目录源码（helper 改了也要重载）、module 模式扫 dist 两层。
+ * 曾经只看入口 mtime：同一时间片连存两次 mtime 可能一样会漏改，size 也得算。
  */
 function fingerprintOf(list: ReturnType<typeof activePlugins>): string {
   return list
     .map((p) => {
       const r = resolvePluginEntry(p.dir);
-      let m = "";
-      try {
-        if (r.file) m = String(fs.statSync(r.file).mtimeMs);
-      } catch {
-        /* 文件刚好被删：当没变，下次扫会重新处理 */
-      }
-      return `${p.id}:${p.enabled}:${r.kind}:${r.file ?? ""}:${m}`;
+      return `${p.id}:${p.enabled}:${entryCacheTag(r.kind, r.file, r.detail)}`;
     })
     .join("|");
 }

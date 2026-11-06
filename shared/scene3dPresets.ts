@@ -57,6 +57,13 @@ export function registerGraphPreset(item: unknown, source = ""): { ok: boolean; 
   if (!p.graph || typeof p.graph !== "object" || Array.isArray(p.graph)) {
     return { ok: false, reason: `「${id}」缺 graph（场景图 DSL）` };
   }
+  // 插件之间不许静默顶掉：同 id 先到先得，后来者必须换（与 passes 同一语义）
+  {
+    const owner = EXTRA.get(id)?.from;
+    if (owner && source && owner !== source) {
+      return { ok: false, reason: `id「${id}」已被插件 ${owner} 占用，换个 id` };
+    }
+  }
 
   const parsed = dslSchema.safeParse(p.graph);
   if (!parsed.success) {

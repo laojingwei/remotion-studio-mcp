@@ -175,7 +175,8 @@ const app = new Hono();
 
 /** 插件问题只报一次，避免每个请求刷屏 */
 let ensuredOnce = false;
-let ensuredContentOnce = false;
+/** 已上报过的 content-sync issue：改坏 → 修好 → 再改坏，每一轮**新增**都要能看见 */
+let reportedContentIssues = new Set<string>();
 let hooksReported = false;
 let toolsReported = false;
 
@@ -220,9 +221,16 @@ app.use("*", async (_c, next) => {
       ...gpreset.issues,
       ...entry.issues,
     ];
-    if (contentIssues.length && !ensuredContentOnce) {
-      ensuredContentOnce = true;
-      for (const i of contentIssues) console.warn(`[plugin] ${i}`);
+    /*
+     * 按 diff 上报：以前是"整个进程只报一次"——作者修好再改坏，第二轮的新 issue
+     * 永远沉默，表现就是"天空/元素突然消失，日志一个字没有"。现在只报没报过的新条目。
+     */
+    const fresh = contentIssues.filter((i) => !reportedContentIssues.has(i));
+    if (fresh.length) {
+      for (const i of fresh) {
+        reportedContentIssues.add(i);
+        console.warn(`[plugin] ${i}`);
+      }
     }
     if (res.issues.length && !ensuredOnce) {
       // 只在第一次报，避免每个请求刷屏
@@ -453,10 +461,28 @@ app.get("/api/tts/speakers", async (c) => {
       if (typeof plugin.mod.voices !== "function") {
         return c.json({ error: `插件 provider「${providerId}」没有声明音色列表（voices）` }, 400);
       }
-      const voices = await plugin.mod.voices(cfg.providers?.[providerId] ?? {});
-      return c.json({
-        speakers: Object.fromEntries((voices ?? []).map((v) => [v.id, v.label ?? v.language ?? ""])),
-      });
+      /*
+       * voices 契约允许 async（插件在 voices 里 fetch 厂商接口很常见）——
+       * 没有护栏的话它挂死，挂死的是整个 /api/tts/speakers。check 15s、synthesize 60s
+       * 都有兜底，voices 也得有；抛错带上插件名，报错才有归属。
+       */
+      let raceTimer: ReturnType<typeof setTimeout> | undefined;
+      try {
+        const voices = await Promise.race([
+          Promise.resolve(plugin.mod.voices(cfg.providers?.[providerId] ?? {})),
+          new Promise<never>((_, rej) => {
+            raceTimer = setTimeout(() => rej(new Error(`voices 超过 15 秒没有返回（插件「${plugin.pluginId}」）`)), 15_000);
+          }),
+        ]);
+        return c.json({
+          speakers: Object.fromEntries((voices ?? []).map((v) => [v.id, v.label ?? v.language ?? ""])),
+        });
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        return c.json({ error: `读取插件「${plugin.pluginId}」的音色列表失败：${msg}` }, 400);
+      } finally {
+        if (raceTimer) clearTimeout(raceTimer);
+      }
     }
     const openai = /\/v1\/audio\/speech\/?$/.test(cfg.endpoint);
     const base = cfg.endpoint

@@ -238,7 +238,7 @@ export function parseManifest(raw: unknown, opts: { dirId: string }): ManifestPa
   const apiVersion = typeof o.apiVersion === "number" ? o.apiVersion : PLUGIN_API_VERSION;
   if (apiVersion > PLUGIN_API_VERSION) {
     errors.push(
-      `apiVersion ${apiVersion} 高于宿主支持的 ${PLUGIN_API_VERSION}——这个插件是为更新的版本写的，请升级宿主或换用旧版插件`,
+      `apiVersion ${apiVersion} 高于宿主支持的 ${PLUGIN_API_VERSION}——这个插件是为更新的版本写的，请升级宿主或换用旧版插件（各版本字段差异见 docs/PLUGIN-GUIDE.md）`,
     );
   } else if (apiVersion < PLUGIN_API_VERSION) {
     warnings.push(`apiVersion ${apiVersion} 低于当前 ${PLUGIN_API_VERSION}，部分接口可能已变`);

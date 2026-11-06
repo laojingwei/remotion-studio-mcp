@@ -78,6 +78,14 @@ export const PluginUiWindow: React.FC<{
    */
   const [ready, setReady] = useState(false);
 
+  /** 把主题变量送进插件页。onLoad 发一次；插件页随时可 postMessage studio:hello 要重发 */
+  const sendInit = () => {
+    const cs = getComputedStyle(document.documentElement);
+    const tokens: Record<string, string> = {};
+    for (const k of THEME_KEYS) tokens[k] = cs.getPropertyValue(k).trim();
+    frame.current?.contentWindow?.postMessage({ type: "studio:init", pluginId: id, theme: "dark", tokens }, "*");
+  };
+
   /*
    * 消息监听用 ref 取最新的回调与几何：否则每次父组件重渲染都要重绑一次监听，
    * 而拖动时父组件每帧都在重渲染。
@@ -93,6 +101,15 @@ export const PluginUiWindow: React.FC<{
       if (!d || typeof d !== "object") return;
       if (d.type === "studio:close") {
         live.current.onClose();
+        return;
+      }
+      /*
+       * studio:hello：插件页请求（重）发主题变量。
+       * studio:init 只在页面 load 后发一次——异步框架初始化晚于 onLoad 的页面
+       * 会错过它。约定：插件页监听建好后随手发一条 studio:hello，宿主立刻补发。
+       */
+      if (d.type === "studio:hello") {
+        sendInit();
         return;
       }
       /*
@@ -214,12 +231,9 @@ export const PluginUiWindow: React.FC<{
             setReady(true);
             /*
              * 把宿主的主题变量送进去：插件可以照着用（想要统一观感时），
-             * 也可以完全无视。只发一次，之后由插件自己决定要不要再问。
+             * 也可以完全无视。load 时发一次；晚初始化的页面可用 studio:hello 要重发。
              */
-            const cs = getComputedStyle(document.documentElement);
-            const tokens: Record<string, string> = {};
-            for (const k of THEME_KEYS) tokens[k] = cs.getPropertyValue(k).trim();
-            frame.current?.contentWindow?.postMessage({ type: "studio:init", pluginId: id, theme: "dark", tokens }, "*");
+            sendInit();
           }}
         />
       </div>

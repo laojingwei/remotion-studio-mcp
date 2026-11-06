@@ -60,26 +60,67 @@ function presetsSignature(files: string[]): string {
  * **以前这里是"读一次就永远不读"的模块级缓存**，后果是改了 presets.json
  * 必须重启进程才生效——在一个"插件放进去就用"的系统里，这一条足以毁掉
  * 全部体验。现在改成按 (路径 + mtime) 失效：没变就是一次 stat，变了就重读。
+ *
+ * 坏文件不再静默消失：解析失败 / 结构不对都记进 presetIssues（list_styles 回显）。
  */
+let presetIssues: string[] = [];
+
+function presetOk(slug: string, file: string, p: unknown): p is StylePreset {
+  const o = p as StylePreset;
+  if (!o || typeof o !== "object" || Array.isArray(o)) return false;
+  if (typeof o.name !== "string" || !o.name.trim()) return false;
+  if (!o.palette || typeof o.palette !== "object" || Array.isArray(o.palette)) return false;
+  if (!o.font || typeof o.font.heading !== "string" || typeof o.font.body !== "string") return false;
+  if (typeof o.radius !== "number" || !Number.isFinite(o.radius)) return false;
+  return true;
+}
+
 function presets(): Record<string, StylePreset> {
   const files = presetFiles();
   const sig = presetsSignature(files);
   if (presetsCache && presetsCache.sig === sig) return presetsCache.data;
 
   const data: Record<string, StylePreset> = {};
+  const issues: string[] = [];
   for (const file of files) {
+    const isPlugin = file !== PRESETS_FILE;
+    let parsed: unknown;
     try {
-      const parsed = JSON.parse(fs.readFileSync(file, "utf8")) as Record<string, StylePreset>;
-      for (const [slug, preset] of Object.entries(parsed)) {
-        // 先读到的赢：内置在前，所以内置永远不被插件顶掉
-        if (!(slug in data)) data[slug] = preset;
+      parsed = JSON.parse(fs.readFileSync(file, "utf8"));
+    } catch (err) {
+      if (isPlugin) {
+        issues.push(
+          `${path.relative(PROJECT_ROOT, file)} 解析失败（这份预设整个没进来）：${err instanceof Error ? err.message : String(err)}`,
+        );
       }
-    } catch {
-      /* 单个文件坏掉不影响其余（插件的 presets.json 写错是常事） */
+      continue;
+    }
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+      if (isPlugin) issues.push(`${path.relative(PROJECT_ROOT, file)} 的形态不对：要 { "slug": { 预设 }, ... }`);
+      continue;
+    }
+    for (const [slug, preset] of Object.entries(parsed as Record<string, unknown>)) {
+      if (!presetOk(slug, file, preset)) {
+        if (isPlugin) {
+          issues.push(
+            `${path.relative(PROJECT_ROOT, file)} 的「${slug}」结构不对：要 { name, palette{色值表}, font{heading,body}, radius }`,
+          );
+        }
+        continue;
+      }
+      // 先读到的赢：内置在前，所以内置永远不被插件顶掉
+      if (!(slug in data)) data[slug] = preset;
     }
   }
+  presetIssues = issues;
   presetsCache = { sig, data };
   return data;
+}
+
+/** 最近一次预设读取的问题（`list_styles` 回显；内置文件的问题不报——那是要提 issue 修宿主的） */
+export function stylePresetIssues(): string[] {
+  presets(); // 触发一次（带缓存，没变就是几次 stat）
+  return [...presetIssues];
 }
 
 export type StyleInfo = { slug: string; name: string; hasPreset: boolean; source: "builtin" | "plugin" };

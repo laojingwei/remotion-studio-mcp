@@ -170,7 +170,7 @@ function discoverDataEntries(
       try {
         raw = JSON.parse(fs.readFileSync(file, "utf8"));
       } catch (err) {
-        issues.push(`${plugin.name}/elements/${f.name} 解析失败：${err instanceof Error ? err.message : String(err)}`);
+        issues.push(`${plugin.name}/${relDir}/${f.name} 解析失败：${err instanceof Error ? err.message : String(err)}`);
         continue;
       }
       const items = Array.isArray(raw)

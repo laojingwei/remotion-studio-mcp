@@ -279,8 +279,23 @@ async function synthesizeWithPlugin(
     );
   }
 
+  /*
+   * format 与声明对账：meta.formats 是 provider 自己声明的输出集合，全局 cfg.format
+   * 是用户上一家选的——切 provider 后带着 mp3 去问只出 wav 的插件，每次合成都会失败。
+   * 与其让作者在插件里报一句干巴巴的错，宿主先对账并给出可执行的指引。
+   */
+  const declared = provider.meta.formats ?? [];
+  const wanted = String(req.format ?? "").trim();
+  if (declared.length && wanted && !declared.includes(wanted)) {
+    throw new Error(
+      `provider「${provider.label}」只支持输出 ${declared.join("/")}，当前配置是 ${wanted}。` +
+        `在语音面板「输出格式」里改一下，或 set_tts_config { format: "${declared[0]}" }`,
+    );
+  }
+
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), PLUGIN_TIMEOUT_MS);
+  let raceTimer: ReturnType<typeof setTimeout> | undefined;
   let out: Awaited<ReturnType<typeof provider.mod.synthesize>>;
   try {
     out = await Promise.race([
@@ -300,16 +315,24 @@ async function synthesizeWithPlugin(
        * 第二道闸：插件没透传 signal（很常见），只有 AbortController 杀不掉它。
        * 这里再 race 一个计时器，保证"插件永远不返回"不会把整个合成请求挂住。
        */
-      new Promise<never>((_, reject) =>
-        setTimeout(() => reject(new Error(`超过 ${PLUGIN_TIMEOUT_MS / 1000} 秒没有返回`)), PLUGIN_TIMEOUT_MS + 3_000),
-      ),
+      new Promise<never>((_, reject) => {
+        raceTimer = setTimeout(() => reject(new Error(`超过 ${PLUGIN_TIMEOUT_MS / 1000} 秒没有返回`)), PLUGIN_TIMEOUT_MS + 3_000);
+      }),
     ]);
   } catch (err) {
     // 不静默回退内置：悄悄换 provider 会让"配错了但出片了"变成最难查的坑
-    const msg = err instanceof Error ? err.message : String(err);
+    let msg = err instanceof Error ? err.message : String(err);
+    /*
+     * 语义翻译：插件**乖乖透传了 signal** 时超时抛的是 AbortError——不含"超时"二字，
+     * 越守规矩的插件报错越难懂。这里统一翻成人话。
+     */
+    if (err instanceof Error && err.name === "AbortError") {
+      msg = `宿主超时中断（${PLUGIN_TIMEOUT_MS / 1000} 秒没有返回）——如果插件里做了长轮询，检查 signal 是否透传给 fetch`;
+    }
     throw new Error(`provider「${provider.label}」（插件 ${provider.pluginId}）合成失败：${msg}`);
   } finally {
     clearTimeout(timer);
+    if (raceTimer) clearTimeout(raceTimer);
   }
 
   let buf: Buffer;
@@ -332,12 +355,23 @@ async function synthesizeWithPlugin(
     );
   }
 
-  const ext = sniffAudio(buf);
+  let ext = sniffAudio(buf);
   if (!ext) {
-    throw new Error(
-      `provider「${provider.label}」返回的不是音频（前 64 字节：${JSON.stringify(buf.subarray(0, 64).toString("utf8").slice(0, 80))}）。` +
-        `多半是接口返回了错误页，检查它的鉴权与参数`,
-    );
+    /*
+     * magic bytes 没认出来。契约里的 contentType 此前宿主完全不消费——插件认真声明了
+     * "audio/mpeg" 却还是被判"不是音频"。折中：插件**显式**声明了 audio/* 且是常见容器时
+     * 信它一次（厂商报错页不会带 audio/* 的 contentType，原来防的误判仍在）。
+     */
+    const ct = (out as { contentType?: string }).contentType?.toLowerCase() ?? "";
+    const byCt: Record<string, string> = { "audio/wav": "wav", "audio/x-wav": "wav", "audio/mpeg": "mp3", "audio/mp3": "mp3", "audio/ogg": "ogg", "audio/mp4": "m4a", "audio/aac": "aac", "audio/flac": "flac" };
+    if (ct.startsWith("audio/") && byCt[ct]) {
+      ext = byCt[ct];
+    } else {
+      throw new Error(
+        `provider「${provider.label}」返回的不是音频（前 64 字节：${JSON.stringify(buf.subarray(0, 64).toString("utf8").slice(0, 80))}）。` +
+          `多半是接口返回了错误页，检查它的鉴权与参数；如果确实是冷门音频容器，在返回值里带上 contentType: "audio/..."`,
+      );
+    }
   }
 
   return persistAudio(buf, ext, { projectId: req.projectId });

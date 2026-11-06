@@ -57,7 +57,7 @@ import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { activePlugins, type DiscoveredPlugin } from "./discovery";
-import { CACHE_DIR, SCRIPT_ENTRIES, loadPluginEntry, resolvePluginEntry } from "./entry";
+import { CACHE_DIR, SCRIPT_ENTRIES, entryCacheTag, loadPluginEntry, resolvePluginEntry } from "./entry";
 import { ffmpegPath } from "../ffmpeg";
 
 /* ─────────────────────────── 钩子定义 ─────────────────────────── */
@@ -256,6 +256,7 @@ export async function runMediaPipeline(input: {
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "studio-media-"));
   const steps: MediaStep[] = [];
   const warnings: string[] = [];
+  const timers: ReturnType<typeof setTimeout>[] = [];
   let fileName = input.fileName;
 
   try {
@@ -285,7 +286,12 @@ export async function runMediaPipeline(input: {
          */
         raw = await Promise.race([
           Promise.resolve(h.fn(ctx)),
-          new Promise((_, rej) => setTimeout(() => rej(new Error(`超过 ${budget}ms 未返回`)), left)),
+          new Promise((_, rej) => {
+            const t = setTimeout(() => rej(new Error(`超过 ${budget}ms 未返回`)), left);
+            // 成功路径也要清掉计时器：不然每次处理泄漏一个最长 60s 的定时器
+            (t as unknown as { unref?: () => void }).unref?.();
+            timers.push(t);
+          }),
         ]);
       } catch (err) {
         noteHookFailure(h, "media:process", err);
@@ -315,6 +321,7 @@ export async function runMediaPipeline(input: {
       steps.push({ pluginId: h.pluginId, note: taken.note, before, after: cur.length });
     }
   } finally {
+    for (const t of timers) clearTimeout(t);
     try {
       fs.rmSync(tmpDir, { recursive: true, force: true });
     } catch {
@@ -375,18 +382,26 @@ export type HookStatus = {
   plugins: string[];
   /** 加载或运行时的错误（`list_plugins` 会展示） */
   errors: HookError[];
+  /** 性能类提示（慢钩子等）——不是错误，list_plugins 里单独一档，不标红 */
+  warnings: HookError[];
   /** 是否至少有一个钩子（消费点据此跳过整段逻辑） */
   active: boolean;
 };
 
 let loaded: LoadedHook[] = [];
 let errors: HookError[] = [];
+let warnings: HookError[] = [];
 let fingerprint = "";
 let loading: Promise<HookStatus> | null = null;
 /** 运行期失败计数：连续失败的钩子会被摘掉，否则坏插件会污染每一次写入 */
 const failures = new Map<LoadedHook, number>();
 const MAX_FAILURES = 3;
-const SLOW_MS = 30;
+/**
+ * 慢钩子阈值。曾经 30ms：在保存同步路径上 JSON 序列化一下就可能偶发超掉，
+ * 提示会常态化刷屏——提示一旦常态化就没人看了。100ms 依然是"必须改"的信号，
+ * 但不会把正常波动当问题报。
+ */
+const SLOW_MS = 100;
 
 /**
  * 目录里有没有"待启用的示例入口"（`plugin.ts.example` 这类）。
@@ -444,12 +459,8 @@ export function entryFingerprint(list: DiscoveredPlugin[]): string {
       parts.push(`${p.id}@${entry.kind}@${entry.detail}`);
       continue;
     }
-    try {
-      const st = fs.statSync(entry.file);
-      parts.push(`${p.id}:${entry.kind}:${Math.round(st.mtimeMs)}:${st.size}`);
-    } catch {
-      parts.push(`${p.id}@gone`);
-    }
+    // 与加载产物同一口径：script 模式扫同目录源码（helper 改了也要重载），module 模式扫 dist
+    parts.push(`${p.id}:${entryCacheTag(entry.kind, entry.file, entry.detail)}`);
   }
   return parts.join("|");
 }
@@ -665,7 +676,19 @@ export function runHook<K extends HookKind>(kind: K, ctx: HookContext[K]): HookV
   for (const h of list) {
     const started = Date.now();
     try {
-      const v = normalize(h.fn(ctx));
+      const raw = h.fn(ctx);
+      /*
+       * thenable 检测：作者最自然的写法是把钩子写成 async（返回 Promise）。
+       * Promise 是 object，normalize 会把它收成"什么都没说"的空 verdict——
+       * 不报错、不生效、极难自查。这里当场记一笔失败，把话说明白。
+       */
+      if (raw && typeof (raw as { then?: unknown }).then === "function") {
+        throw new Error(
+          `${kind} 必须同步返回 verdict，但你的钩子返回了 Promise（是不是写成 async 了？）。` +
+            `同步钩子不许 await；确有异步需求见文档「异步钩子」一节（目前只有 media:process）`,
+        );
+      }
+      const v = normalize(raw);
       // 归属清楚：插件报的问题必须看得出是插件报的，否则用户会以为是宿主的判断
       out.blocking.push(...v.blocking.map((x) => `[${h.pluginId}] ${x}`));
       out.warnings.push(...v.warnings.map((x) => `[${h.pluginId}] ${x}`));
@@ -676,8 +699,13 @@ export function runHook<K extends HookKind>(kind: K, ctx: HookContext[K]): HookV
     }
     const cost = Date.now() - started;
     if (cost > SLOW_MS) {
-      errors = [
-        ...errors.slice(-19),
+      /*
+       * 慢钩子是**性能提示**不是错误：30ms 在保存同步路径上很容易偶尔超掉，
+       * 记进 errors 会让 list_plugins 长期挂着"假错误"——真错误就没人看了。
+       * 与 text 管线（记 warnings）的口径保持一致。
+       */
+      warnings = [
+        ...warnings.slice(-19),
         { pluginId: h.pluginId, message: `${kind} 耗时 ${cost}ms（应 < ${SLOW_MS}ms）—— 钩子在保存/自检的同步路径上，别做重活` },
       ];
     }
@@ -788,6 +816,7 @@ export function hookStatus(): HookStatus {
     count: loaded.length,
     plugins: [...new Set(loaded.map((h) => h.pluginId))].sort(),
     errors: [...errors],
+    warnings: [...warnings],
     active: loaded.length > 0,
   };
 }
@@ -801,6 +830,7 @@ export function hookKindsOf(pluginId: string): HookKind[] {
 export function resetHookCache(): void {
   loaded = [];
   errors = [];
+  warnings = [];
   fingerprint = "";
   failures.clear();
 }

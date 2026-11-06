@@ -17,6 +17,7 @@
  * 而改插件之后第一次调用就能看到新内容。
  */
 
+import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { discoverSceneEntries } from "./gen-entry";
@@ -26,6 +27,8 @@ import { registerSceneMeta, unregisterSceneMeta } from "../../shared/sceneMetas"
 
 /** 本模块注册过的 type（只有这些才允许注销，避免误删内置场景） */
 const owned = new Set<string>();
+/** type → json 内容哈希。变了就要注销重注册——否则服务端 schema 是陈旧快照 */
+const ownedHash = new Map<string, string>();
 
 let lastKey = "";
 let lastResult: { total: number; issues: string[] } = { total: 0, issues: [] };
@@ -93,11 +96,27 @@ export function ensurePluginScenes(): { total: number; issues: string[] } {
     if (!meta) continue;
 
     stillValid.add(meta.type);
-    if (owned.has(meta.type)) continue; // 已经注册过，且内容变化不影响 schema 的注册（meta 是快照）
+    /*
+     * "已经注册过就跳过"是曾经的坑：meta 是注册那一刻的快照，作者改了 json
+     * （改默认值 / 收紧 min-max / 新增字段）后，编辑器与渲染端拿的都是新版
+     * （走 _plugins.generated.ts，会重新生成），唯独服务端（agent 工具描述、
+     * add_scene 校验）永远是旧版——文件头写的"三端一致"就此被打破。
+     * 现在按内容哈希判断：变了就注销重注册。
+     */
+    const hash = createHash("sha1").update(JSON.stringify(raw)).digest("hex");
+    if (owned.has(meta.type)) {
+      if (ownedHash.get(meta.type) === hash) continue; // 内容没变，快照即最新
+      unregisterSceneMeta(meta.type);
+      owned.delete(meta.type);
+    }
 
     const reg = registerSceneMeta(meta);
-    if (reg.ok) owned.add(meta.type);
-    else issues.push(reg.reason ?? `${meta.type} 注册失败`);
+    if (reg.ok) {
+      owned.add(meta.type);
+      ownedHash.set(meta.type, hash);
+    } else {
+      issues.push(reg.reason ?? `${meta.type} 注册失败`);
+    }
   }
 
   // 撤销：不再有效（被停用 / 文件被删）且是我们注册的
@@ -105,6 +124,7 @@ export function ensurePluginScenes(): { total: number; issues: string[] } {
     if (stillValid.has(type)) continue;
     if (unregisterSceneMeta(type)) {
       owned.delete(type);
+      ownedHash.delete(type);
     }
   }
 

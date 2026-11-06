@@ -281,7 +281,7 @@ export function syncPluginElements(): { count: number; issues: string[] } {
       continue;
     }
     for (const item of list) {
-      const reg = registerLibraryItem(item);
+      const reg = registerLibraryItem(item, pluginId);
       if (!reg.ok) {
         issues.push(`${where}：${reg.reason}`);
         continue;
@@ -347,7 +347,7 @@ export function syncPluginLooks(): { count: number; issues: string[] } {
     }
     for (const item of list) {
       const id = String((item as { id?: string })?.id ?? "").trim();
-      const reg = registerLook(id, item);
+      const reg = registerLook(id, item, pluginId);
       if (!reg.ok) {
         issues.push(`${where}：${reg.reason}`);
         continue;
@@ -531,6 +531,12 @@ export function syncPluginTransitions(): { count: number; issues: string[] } {
     const id = path.basename(file, path.extname(file));
     if (!/^[a-z0-9][a-z0-9-]*$/.test(id)) {
       issues.push(`${pluginId}/transitions/${path.basename(file)}：文件名就是转场 id，只能小写字母、数字、短横线`);
+      continue;
+    }
+    // 与渲染端 registerPluginTransition 同一条长度规矩：服务端放行、渲染时才拒的话，
+    // 现象是 list_transitions 里能选、出片时静默退回淡入——错误离写错的地方太远
+    if (id.length > 40) {
+      issues.push(`${pluginId}/transitions/${path.basename(file)}：转场 id 超过 40 字符（当前 ${id.length}），换个短名字`);
       continue;
     }
     registerTransitionId(id);

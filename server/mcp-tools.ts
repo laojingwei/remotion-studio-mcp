@@ -31,7 +31,7 @@ import { pickPreviewRange } from "../shared/previewWindow";
 import { densitySummary, projectDensity, rhythmIssues } from "../shared/density";
 import { readScript, saveScript, confirmScript, scriptToText, estimateSeconds, scriptChars, SCRIPT_TYPES, type Script } from "./script.service";
 import { readReview, markReviewRequested, markReviewConfirmed, markNeedsWork, markSelfRender, markProbe, markChosenStyle, reviewToText } from "./review.service";
-import { listStyles, presetOf, readStyle, styleSummary } from "./styles.service";
+import { listStyles, presetOf, readStyle, stylePresetIssues, styleSummary } from "./styles.service";
 import { readStoryboard, saveStoryboard, storyboardToText, type Storyboard } from "./storyboard.service";
 import { readTiming, saveTiming } from "./narration-timing.service";
 import {
@@ -644,13 +644,16 @@ const TOOLS: ToolDef[] = [
       const list = listStyles();
       const nl = String.fromCharCode(10);
       const ready = list.filter((x) => x.hasPreset).length;
+      // 插件的 styles/presets.json 写坏不再静默消失：把问题带出来，作者才能修
+      const issues = stylePresetIssues();
       return (
         `共 ${list.length} 种风格（${ready} 种可一键套用）：` +
         nl +
         list
           // 全都有预设时不再逐行打「可一键套用」——43 个一样的标记只是噪音，只标例外
           .map((x) => `- ${x.slug}：${x.name}${x.hasPreset ? "" : "（仅规则，套不上）"}`)
-          .join(nl)
+          .join(nl) +
+        (issues.length ? `${nl}${nl}⚠ 插件预设问题：${nl}${issues.map((i) => `- ${i}`).join(nl)}` : "")
       );
     },
   },

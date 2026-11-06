@@ -15,6 +15,15 @@ import { resolvePluginEntry } from "./entry";
 import { HOOK_KINDS, HOOK_LABEL, hasExampleEntry, hookKindsOf, hookStatus } from "./hooks";
 import { pluginToolStatus } from "./plugin-tools";
 import { pluginToolNamesOf } from "./tool-registry";
+import {
+  syncPluginWorldSkies,
+  syncPluginTemplates,
+  syncPluginElements,
+  syncPluginLooks,
+  syncPluginPasses,
+  syncPluginTransitions,
+  syncPluginGraphPresets,
+} from "./content-sync";
 
 const NL = String.fromCharCode(10);
 
@@ -93,6 +102,7 @@ function pluginBlock(p: DiscoveredPlugin): string[] {
   if (p.provides.includes("hooks")) {
     const st = hookStatus();
     const mine = st.errors.filter((e) => e.pluginId === p.id);
+    const mineWarn = st.warnings.filter((e) => e.pluginId === p.id);
     const kinds = hookKindsOf(p.id);
     if (kinds.length) {
       out.push(`   钩子：${kinds.map((k) => HOOK_LABEL[k] ?? k).join("、")}`);
@@ -108,6 +118,8 @@ function pluginBlock(p: DiscoveredPlugin): string[] {
      * 这里再打一遍就是同一句话出现两次——用户会以为是两个不同的问题。
      */
     if (entry?.kind !== "unbuilt") for (const e of mine) out.push(`   ✗ ${e.message}`);
+    // 性能类提示单独一档（⏱）：不是错误，别和 ✗ 混在一起
+    for (const w of mineWarn) out.push(`   ⏱ ${w.message}`);
   }
 
   for (const w of p.warnings) out.push(`   ⚠ ${w}`);
@@ -128,6 +140,7 @@ const HOW_TO = [
   "  scene3d/looks.json   3D 光线风格   → 3D 场景的 look 下拉里多几套（灯位/色温/辉光）",
   "  scene3d/presets.json 3D 图形配方   → list_graph_presets 多几套起手图，set_graph_scene 一套换上",
   "  scene3d/passes.json  3D 后期效果   → list_plugin_passes 多几个（受控 GLSL），写进 post.passes 才上镜",
+  "  transitions/<id>.ts  插件转场     → set_transitions 能选；只写一个方向，出场自动反向",
   "  plugin.ts 的 ttsProviders → 语音 provider（适配任意厂商，list_tts_providers 查）",
   "  ui/index.html        自带界面      → 「插件」对话框里多一个「打开界面」，页面里可调 /api/* 与 /api/plugin-config/<id>",
   "  scenes/<type>.json + <type>.tsx  场景组件 → 选择器里多一种画面（改了要重新打包）",
@@ -136,10 +149,10 @@ const HOW_TO = [
   "     · ops:before       写入前把关：返回 blocking 就整批拒掉（工程不动）",
   "     · text:transform   字幕/稿件写进工程前改字（术语表、品牌名、口头禅）",
   "     · media:process    新上传的图/音/视频先过一遍（压缩、剥元数据、统一响度）",
-  "放好就生效，不用重启。技能/风格/问诊/3D 天空/整片模板/钩子/文本/文件处理改完立刻生效；场景组件要等一次自动重新打包（几十秒）。",
+  "放好就生效，不用重启。技能/风格/问诊/3D 天空/整片模板/3D 图形配方/3D 后期/转场/钩子/文本/文件处理改完立刻生效；场景组件要等一次自动重新打包（几十秒，编辑器画布还要等一次前端构建）。",
   "文件处理只对**新上传**生效；要补已有的素材用 reprocess_assets（默认只预览）。",
   "需要更细的控制（版本、作者、权限）时再加 manifest.json；规则与示例见 plugins/README.md。",
-  "内容类贡献项已全部接通；转场/特效/几何体（scene3d/presets.json）不打算做（见计划文档 9.3）。",
+  "内容类贡献项与代码能力已全部接通（含转场与 3D 图形配方）；格式与校验规则见 docs/PLUGIN-GUIDE.md。",
 ].join(NL);
 
 /** 一个插件都没有时的引导（首次使用最可能看到的就是这个） */
@@ -184,6 +197,30 @@ export function pluginsToText(): string {
         "## 加载失败（服务没坏，只是这些插件没进来）",
         ...bad.flatMap(pluginBlock),
         "修好后不用重启，再调一次 list_plugins 就会重新扫描。",
+      ].join(NL),
+    );
+  }
+
+  /*
+   * 内容同步问题单独成节：元素/模板/looks/skies/passes/转场/graph 配方的校验失败
+   * 不进插件自身的 errors（清单层是好的，是内容文件坏了）——不摆在这里，
+   * 作者看到的就是"提供：元素库"但元素面板里什么都没有，无从定位。
+   */
+  const contentIssues = [
+    ...syncPluginWorldSkies().issues,
+    ...syncPluginTemplates().issues,
+    ...syncPluginElements().issues,
+    ...syncPluginLooks().issues,
+    ...syncPluginPasses().issues,
+    ...syncPluginTransitions().issues,
+    ...syncPluginGraphPresets().issues,
+  ];
+  if (contentIssues.length) {
+    sections.push(
+      [
+        "",
+        "## 内容问题（这些文件存在，但没注册上——修好后不用重启）",
+        ...contentIssues.map((i) => `✗ ${i}`),
       ].join(NL),
     );
   }

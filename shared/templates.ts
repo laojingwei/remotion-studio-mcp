@@ -451,6 +451,8 @@ export const getTemplate = (key: string): ProjectTemplate | undefined =>
  * 被插件顶掉就是"点进去出来的不是那一套"，排查成本远高于收益。
  */
 const EXTRA_TEMPLATES: ProjectTemplate[] = [];
+/** key → 来源（插件 id）。插件间重名冲突检查用；同源重注册（文件改了）允许替换 */
+const TPL_SOURCE = new Map<string, string>();
 
 const TPL_KEY_RE = /^[a-z0-9][a-z0-9_-]*$/;
 
@@ -475,6 +477,13 @@ export function registerTemplate(tpl: unknown, source = ""): { ok: boolean; reas
   if (PROJECT_TEMPLATES.some((x) => x.key === key)) {
     return { ok: false, reason: `key「${key}」与内置模板重名（内置优先，换个 key）` };
   }
+  // 插件之间不许静默顶掉：同 key 先到先得，后来者必须换（与 passes 同一语义）
+  {
+    const owner = TPL_SOURCE.get(key);
+    if (owner && source && owner !== source) {
+      return { ok: false, reason: `key「${key}」已被插件 ${owner} 占用，换个 key` };
+    }
+  }
   if (!t.name || typeof t.name !== "string") return { ok: false, reason: `「${key}」缺 name` };
   if (!Array.isArray(t.scenes) || !t.scenes.length) {
     return { ok: false, reason: `「${key}」的 scenes 要是非空数组（一个场景都没有的模板建出来是空片）` };
@@ -495,7 +504,7 @@ export function registerTemplate(tpl: unknown, source = ""): { ok: boolean; reas
   const at = EXTRA_TEMPLATES.findIndex((x) => x.key === key);
   if (at >= 0) EXTRA_TEMPLATES[at] = clean;
   else EXTRA_TEMPLATES.push(clean);
-  void source; // 来源目前只用于日志，模板卡片形态里没有"来源"这个字段
+  if (source) TPL_SOURCE.set(key, source);
   return { ok: true };
 }
 
@@ -504,6 +513,7 @@ export function unregisterTemplate(key: string): boolean {
   const at = EXTRA_TEMPLATES.findIndex((t) => t.key === key);
   if (at < 0) return false;
   EXTRA_TEMPLATES.splice(at, 1);
+  TPL_SOURCE.delete(key);
   return true;
 }
 

@@ -195,7 +195,22 @@ export function seedExamplePluginsDisabled(): string[] {
     for (const entry of safeReadDir(root.dir)) {
       if (!entry.isDirectory()) continue;
       if (entry.name.startsWith(".") || entry.name === "node_modules") continue;
-      if (/^_?example-/.test(entry.name)) disabled.add(toPluginId(entry.name));
+      if (/^_?example-/.test(entry.name)) {
+        /*
+         * 生效 id 是 manifest.id（缺了才是目录名归一）——停用列表必须用同一个 id，
+         * 否则 manifest 写了自定义 id 的示例（如 _example-audit → quality-gatekeeper）
+         * 永远匹配不上，"示例默认停用"的承诺对它失效。
+         */
+        const dir = path.join(root.dir, entry.name);
+        let seedId = toPluginId(entry.name);
+        try {
+          const raw = JSON.parse(fs.readFileSync(path.join(dir, "manifest.json"), "utf8")) as { id?: unknown };
+          if (typeof raw?.id === "string" && raw.id.trim()) seedId = raw.id.trim();
+        } catch {
+          /* 没有 manifest 或坏了：按目录名兜底 */
+        }
+        disabled.add(seedId);
+      }
     }
   }
   const list = [...disabled].sort();
