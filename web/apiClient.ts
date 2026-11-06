@@ -910,6 +910,13 @@ export async function resetDemoProject(projectId = "demo"): Promise<Project> {
 /* ───────────── 文本转语音（TTS） ───────────── */
 
 export type TtsConfig = {
+  /**
+   * 用哪个语音来源：`openai` = 内置实现（endpoint/... 那些字段都是它的），
+   * 其它 = 插件提供的 provider id。**装了插件不会自动切过来**——这是显式选择。
+   */
+  provider: string;
+  /** 各插件 provider 的配置（由插件界面写，宿主合成时原样递给插件） */
+  providers?: Record<string, Record<string, string>>;
   endpoint: string;
   apiKey: string;
   model: string;
@@ -920,6 +927,24 @@ export type TtsConfig = {
   language: string;
   customBody: string;
 };
+
+/** 插件提供的语音 provider（/api/tts/providers，供「语音来源」下拉用） */
+export type TtsProviderInfo = {
+  id: string;
+  label: string;
+  hint?: string;
+  /** 来自哪个插件（打开它的界面填配置用） */
+  pluginId: string;
+  configFields: { key: string; label?: string; secret?: boolean; required?: boolean }[];
+  hasVoices: boolean;
+};
+
+export async function fetchTtsProviders(): Promise<{ providers: TtsProviderInfo[]; errors: string[] }> {
+  const res = await fetch("/api/tts/providers");
+  const data = await res.json();
+  if (!res.ok) throw new Error(data.error ?? "读取语音来源失败");
+  return { providers: data.providers ?? [], errors: data.errors ?? [] };
+}
 
 export async function fetchTtsConfig(): Promise<TtsConfig> {
   const res = await fetch("/api/tts/config");

@@ -6017,6 +6017,23 @@ select.tts-input {
   color: var(--muted);
 }
 
+/* 语音来源：切到插件 provider 后，内置那组字段「闲着」但保留可见可编辑——
+   用户切回内置时不用重填。灰化是提醒，不是禁用。 */
+.tts-builtin.is-idle {
+  opacity: 0.55;
+}
+
+.tts-source-note {
+  margin-top: 6px;
+  font-size: 11px;
+  line-height: 1.5;
+  color: var(--muted);
+}
+
+.tts-source-note.is-warn {
+  color: var(--danger);
+}
+
 /* 音色列表 */
 .tts-speakers {
   display: flex;

@@ -1,19 +1,28 @@
 import React, { useEffect, useRef, useState } from "react";
 import {
   fetchTtsConfig,
+  fetchTtsProviders,
   fetchTtsSpeakers,
   saveTtsConfig,
   ttsSynthesize,
   ttsTest,
   type TtsConfig,
+  type TtsProviderInfo,
 } from "../apiClient";
 import { useDoc } from "../store";
 import { escapeTtsText, TTS_ESCAPE_TOOLS } from "@shared/ttsText";
+import { PluginUiWindows, usePluginUiWindows } from "./PluginUiWindow";
+
+const BUILTIN_PROVIDER = "openai";
 
 /**
  * 语音（TTS）弹窗：
  *  - 生成：输入文本 → 调本地服务 → 试听 → 加入音效轨 / 设为背景音乐
- *  - 配置：服务地址、鉴权、模型、音色、格式、语速、自定义 body 模板
+ *  - 配置：**语音来源**（内置实现 / 插件 provider）+ 内置实现的地址、鉴权、模型、音色等
+ *
+ * 为什么配置页要有「语音来源」：provider 是宿主的一项单选配置，装了插件不会自动切——
+ * 没有这个入口的话，用户装好插件、在插件界面填完密钥，合成却还在走内置，
+ * 而且没有任何地方能看出「当前用的是谁」。
  */
 export const TtsDialog: React.FC<{ open: boolean; onClose: () => void }> = ({
   open,
@@ -33,6 +42,10 @@ export const TtsDialog: React.FC<{ open: boolean; onClose: () => void }> = ({
   const [result, setResult] = useState<{ url: string; bytes: number } | null>(null);
   const [msg, setMsg] = useState("");
   const [speakers, setSpeakers] = useState<Record<string, string> | null>(null);
+  /** 插件提供的语音来源（下拉选项）；null = 还没读到 */
+  const [providerList, setProviderList] = useState<TtsProviderInfo[] | null>(null);
+  /** 插件界面的浮窗：切到某个插件 provider 时，点一下就能去它自己的界面填密钥 */
+  const ui = usePluginUiWindows();
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
   const [previewSeq, setPreviewSeq] = useState(0);
   const audioRef = useRef<HTMLAudioElement>(null);
@@ -72,6 +85,10 @@ export const TtsDialog: React.FC<{ open: boolean; onClose: () => void }> = ({
     void fetchTtsSpeakers()
       .then(setSpeakers)
       .catch(() => setSpeakers(null));
+    // 来源列表读不到不挡配置页：下拉里至少还有内置
+    void fetchTtsProviders()
+      .then((r) => setProviderList(r.providers))
+      .catch(() => setProviderList([]));
   }, [open]);
 
   // 只有点了「试听」才播放；弹窗重新打开时 previewUrl 没变，不会再自动播
@@ -218,6 +235,7 @@ export const TtsDialog: React.FC<{ open: boolean; onClose: () => void }> = ({
   };
 
   return (
+    <>
     <div className="modal-mask" onClick={onClose}>
       <div className="outputs-dialog tts-dialog" onClick={(e) => e.stopPropagation()}>
         <div className="outputs-head">
@@ -388,6 +406,55 @@ export const TtsDialog: React.FC<{ open: boolean; onClose: () => void }> = ({
           <div className="render-body">
             {config ? (
               <>
+                {(() => {
+                  const cur = config.provider || BUILTIN_PROVIDER;
+                  const curProvider = (providerList ?? []).find((p) => p.id === cur) ?? null;
+                  const curCfg = config.providers?.[cur] ?? {};
+                  const missing = (curProvider?.configFields ?? [])
+                    .filter((f) => f.required && !String(curCfg[f.key] ?? "").trim())
+                    .map((f) => f.label || f.key);
+                  return (
+                    <div className="render-section">
+                      <div className="render-label">语音来源</div>
+                      <div className="row-inline">
+                        <select
+                          className="tts-input"
+                          value={cur}
+                          onChange={(e) => void persist({ provider: e.target.value })}
+                          title="合成走哪一家：装了插件不会自动切过来，这里显式选"
+                        >
+                          <option value={BUILTIN_PROVIDER}>内置（OpenAI 兼容协议）</option>
+                          {(providerList ?? []).map((p) => (
+                            <option key={p.id} value={p.id}>
+                              {p.label}（插件 {p.pluginId}）
+                            </option>
+                          ))}
+                          {/*
+                            provider 指着的插件已经停用/卸载时，select 若没有这个 option
+                            会显示成第一项（内置），看起来像"切回去了"其实没有——
+                            合成仍然会报「没有这个语音 provider」。把它显式摆出来。
+                          */}
+                          {cur !== BUILTIN_PROVIDER && !(providerList ?? []).some((p) => p.id === cur) ? (
+                            <option value={cur}>{cur}（已不可用：插件停用或已卸载）</option>
+                          ) : null}
+                        </select>
+                        {curProvider ? (
+                          <button className="ghost" onClick={() => ui.open(curProvider.pluginId, curProvider.label)}>
+                            打开它的界面
+                          </button>
+                        ) : null}
+                      </div>
+                      {curProvider ? (
+                        <div className={`tts-source-note ${missing.length ? "is-warn" : ""}`}>
+                          {missing.length
+                            ? `还缺配置：${missing.join("、")}——点「打开它的界面」去填。`
+                            : "它的配置由它自己的界面管理；下面的地址/密钥等字段只在内置来源下生效。"}
+                        </div>
+                      ) : null}
+                    </div>
+                  );
+                })()}
+                <div className={`tts-builtin ${config.provider && config.provider !== BUILTIN_PROVIDER ? "is-idle" : ""}`}>
                 <div className="render-section">
                   <div className="render-label">服务地址（完整 URL）</div>
                   <input
@@ -499,6 +566,7 @@ export const TtsDialog: React.FC<{ open: boolean; onClose: () => void }> = ({
                     placeholder='{"text": "{{text}}", "speaker": "{{voice}}"}'
                   />
                 </div>
+                </div>
                 <div className="row-inline">
                   <button className="primary" onClick={() => void persist(config)}>
                     保存
@@ -517,5 +585,9 @@ export const TtsDialog: React.FC<{ open: boolean; onClose: () => void }> = ({
         {msg ? <div className="tts-msg">{msg}</div> : null}
       </div>
     </div>
+
+    {/* 插件界面浮窗（切到插件来源后「打开它的界面」用的就是它），同样要压在遮罩之上 */}
+    <PluginUiWindows wins={ui.wins} onPatch={ui.patch} onClose={ui.close} onFocus={ui.focus} />
+    </>
   );
 };

@@ -92,6 +92,7 @@ import {
 } from "./annotation.service";
 import { readToolCalls, toolStats } from "./tool-log.service";
 import { getTtsConfig, saveTtsConfig, synthesize } from "./tts.service";
+import { BUILTIN_TTS_PROVIDER_ID } from "./plugin/tts-providers";
 import { z } from "zod";
 import { zodToJsonSchema } from "zod-to-json-schema";
 import { TOOLS, CORE_TOOL_NAMES, exposeAllTools, validateToolArgs } from "./mcp-tools";
@@ -471,49 +472,72 @@ app.post("/api/tts/test", async (c) => {
  * ① 连通性（HEAD 源站）——快，能把「服务没启动」和「配置写错」区分开；
  * ② deep=true 时再真合成一句极短文本，验证 key/model/voice/format 全对。
  * 预检产物是垃圾文件，合成完立刻删。
+ *
+ * 注意①只对**内置** provider 有意义：endpoint 是内置实现的字段，插件 provider 自己
+ * 直连厂商（可能根本没有 endpoint）。以前这里不分情况一律拿 endpoint 探测，插件
+ * provider 明明可用、只要本地那个服务没起，预检就报「连不上」——然后人跑去查本机端口。
  */
 app.post("/api/tts/check", async (c) => {
   const body = (await c.req.json().catch(() => ({}))) as { deep?: boolean };
   const cfg = getTtsConfig();
-  if (!cfg.endpoint) {
+  const providerId = String(cfg.provider ?? "").trim() || BUILTIN_TTS_PROVIDER_ID;
+  const byPlugin = providerId !== BUILTIN_TTS_PROVIDER_ID;
+
+  if (!byPlugin && !cfg.endpoint) {
     return c.json({ ok: false, stage: "config", error: "还没配置语音服务地址（工具 set_tts_config 或编辑器「语音」→ 配置）" }, 400);
   }
 
-  let origin: string;
-  try {
-    origin = new URL(cfg.endpoint).origin;
-  } catch {
-    return c.json({ ok: false, stage: "config", error: `语音服务地址不是合法 URL：${cfg.endpoint}` }, 400);
-  }
+  // 只有内置 provider 才有这两项；插件 provider 直连厂商，宿主不知道也不该假装知道
+  let origin = "";
+  let reachMs = 0;
 
-  const t0 = Date.now();
-  let reachStatus = 0;
-  try {
-    const res = await fetch(origin, { method: "HEAD", redirect: "manual", signal: AbortSignal.timeout(3000) });
-    reachStatus = res.status;
-  } catch (err: any) {
-    const code = err?.cause?.code ?? err?.code ?? "";
-    const why =
-      err?.name === "TimeoutError" || code === "UND_ERR_CONNECT_TIMEOUT"
-        ? "3 秒无响应"
-        : code === "ECONNREFUSED"
-          ? "连接被拒绝（端口没在监听）"
-          : code === "ENOTFOUND"
-            ? "域名解析失败"
-            : (err?.message ?? "连接失败");
-    return c.json({ ok: false, stage: "reach", origin, ms: Date.now() - t0, error: `${origin} 连不上：${why}` }, 400);
-  }
-  const reachMs = Date.now() - t0;
+  if (byPlugin) {
+    if (!body?.deep) {
+      return c.json({
+        ok: true,
+        stage: "provider",
+        provider: providerId,
+        detail:
+          `当前用的是插件 provider「${providerId}」，它直连厂商、不走本机地址探测。` +
+          `要确认整条链路就加 deep=true 真合成一句（会真的调一次厂商接口）。`,
+      });
+    }
+  } else {
+    try {
+      origin = new URL(cfg.endpoint).origin;
+    } catch {
+      return c.json({ ok: false, stage: "config", error: `语音服务地址不是合法 URL：${cfg.endpoint}` }, 400);
+    }
 
-  if (!body?.deep) {
-    return c.json({
-      ok: true,
-      stage: "reach",
-      origin,
-      reachMs,
-      status: reachStatus,
-      detail: `服务可达（HEAD ${reachStatus}）。这只证明「有东西在监听」，配置是否正确要加 deep=true 才知道`,
-    });
+    const t0 = Date.now();
+    let reachStatus = 0;
+    try {
+      const res = await fetch(origin, { method: "HEAD", redirect: "manual", signal: AbortSignal.timeout(3000) });
+      reachStatus = res.status;
+    } catch (err: any) {
+      const code = err?.cause?.code ?? err?.code ?? "";
+      const why =
+        err?.name === "TimeoutError" || code === "UND_ERR_CONNECT_TIMEOUT"
+          ? "3 秒无响应"
+          : code === "ECONNREFUSED"
+            ? "连接被拒绝（端口没在监听）"
+            : code === "ENOTFOUND"
+              ? "域名解析失败"
+              : (err?.message ?? "连接失败");
+      return c.json({ ok: false, stage: "reach", origin, ms: Date.now() - t0, error: `${origin} 连不上：${why}` }, 400);
+    }
+    reachMs = Date.now() - t0;
+
+    if (!body?.deep) {
+      return c.json({
+        ok: true,
+        stage: "reach",
+        origin,
+        reachMs,
+        status: reachStatus,
+        detail: `服务可达（HEAD ${reachStatus}）。这只证明「有东西在监听」，配置是否正确要加 deep=true 才知道`,
+      });
+    }
   }
 
   const t1 = Date.now();
@@ -528,6 +552,7 @@ app.post("/api/tts/check", async (c) => {
     return c.json({
       ok: true,
       stage: "deep",
+      provider: providerId,
       origin,
       reachMs,
       synthMs: Date.now() - t1,
@@ -538,7 +563,7 @@ app.post("/api/tts/check", async (c) => {
     });
   } catch (err) {
     return c.json(
-      { ok: false, stage: "synth", origin, reachMs, ms: Date.now() - t1, error: (err as Error).message },
+      { ok: false, stage: "synth", provider: providerId, origin, reachMs, ms: Date.now() - t1, error: (err as Error).message },
       400,
     );
   }

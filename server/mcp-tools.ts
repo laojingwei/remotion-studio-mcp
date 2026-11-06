@@ -2258,7 +2258,9 @@ const TOOLS: ToolDef[] = [
     name: "tts_check",
     description:
       "语音服务预检。默认只探连通性（快）；deep=true 会真合成一句极短语音，验证 key/model/voice/format 全对（约 1–3 秒，产物不留）。\n" +
-      "**开工做配音之前先调它**，比跑到第 6 步才发现服务没启动便宜得多。",
+      "**开工做配音之前先调它**，比跑到第 6 步才发现服务没启动便宜得多。\n" +
+      "当前用的是插件 provider（list_tts_providers 里标「当前使用」的那家）时没有本机地址可探，" +
+      "默认只回报「用的是哪家」，要验鉴权/接口就传 deep=true 真调一次厂商。",
     shape: {
       deep: z.boolean().optional().describe("true = 连真合成一起验"),
     },
@@ -2276,12 +2278,20 @@ const TOOLS: ToolDef[] = [
         const stageTip: Record<string, string> = {
           config: "配置问题：用 get_tts_config 看当前地址，set_tts_config 改",
           reach: "服务没起来：先把本地 TTS 服务拉起来再重试",
-          synth: "服务在跑但合成失败：多半是 model / voice / format 名字不对，或用 set_tts_config 检查 apiKey",
+          synth:
+            "合成失败：内置 provider 多半是 model / voice / format 名字不对或 apiKey 错；" +
+            "插件 provider 看它要的鉴权字段填没填（list_tts_providers 看 configFields）",
         };
         return (
           `❌ 预检失败（阶段：${data.stage}）${nl}${data.error}` +
+          (data.stage === "synth" && data.provider && data.provider !== "openai"
+            ? `${nl}当前 provider：${data.provider}（插件提供）`
+            : "") +
           (stageTip[data.stage] ? `${nl}建议：${stageTip[data.stage]}` : "")
         );
+      }
+      if (data.stage === "provider") {
+        return `ℹ️ ${data.detail}${nl}当前 provider：${data.provider}（插件提供，配置在它自己的界面里）`;
       }
       if (data.stage === "reach") {
         return (
@@ -2289,10 +2299,17 @@ const TOOLS: ToolDef[] = [
           `${data.detail}${nl}要确认配置真的对，再调一次 deep=true。`
         );
       }
+      /*
+       * deep 成功：内置 provider 有地址/连通耗时，插件 provider 只有合成耗时
+       * （跳过 HEAD 探测，所以 origin 是空的）——别把空字段当"地址丢了"报出去。
+       */
+      const where = data.origin
+        ? `地址：${data.origin}　连通 ${data.reachMs}ms　合成 ${data.synthMs}ms`
+        : `来源：插件 provider「${data.provider}」　合成 ${data.synthMs}ms`;
       return (
         `✅ 语音服务可用（完整链路）${nl}` +
-        `地址：${data.origin}　连通 ${data.reachMs}ms　合成 ${data.synthMs}ms${nl}` +
-        `音色：${data.voice ?? "默认"}　模型：${data.model ?? "默认"}　产出 ${data.bytes} 字节 ${data.format}（预检文件已清理）`
+        `${where}${nl}` +
+        `音色：${data.voice ?? "默认"}　产出 ${data.bytes} 字节 ${data.format}（预检文件已清理）`
       );
     },
   },

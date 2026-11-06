@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from "react";
+import React, { useCallback, useEffect, useRef, useState } from "react";
 
 /**
  * 插件自带界面的浮窗。
@@ -214,3 +214,73 @@ export const PluginUiWindow: React.FC<{
     </div>
   );
 };
+
+/* ── 复用层：任何面板都能打开插件界面 ──
+   插件面板的列表、语音面板的「来源」选择都要能弹同一个浮窗。
+   状态放 hook（宿主这边），渲染交给 PluginUiWindows——两个面板各自持有，
+   不会同时开着（对话框互斥），所以不需要全局单例。 */
+
+export type UiWinSlot = UiWin & { /** 窗口标题（插件名），打开时记下来，列表刷新也不丢 */ name: string };
+
+export function usePluginUiWindows() {
+  const [wins, setWins] = useState<Record<string, UiWinSlot>>({});
+  const zTop = useRef(200);
+
+  /**
+   * 打开界面：已经开着就只置顶，不重建。
+   * 重建会让插件页面里的输入（密钥、连接状态）全部丢掉——用户点两下按钮不该丢东西。
+   */
+  const open = useCallback((id: string, name: string) => {
+    setWins((prev) => {
+      const cur = prev[id];
+      const z = ++zTop.current;
+      return { ...prev, [id]: cur ? { ...cur, z } : { ...initialUiWin(Object.keys(prev).length), name, z } };
+    });
+  }, []);
+
+  const close = useCallback((id: string) => {
+    setWins((prev) => {
+      if (!prev[id]) return prev;
+      const next = { ...prev };
+      delete next[id];
+      return next;
+    });
+  }, []);
+
+  const patch = useCallback((id: string, p: Partial<UiWin>) => {
+    setWins((prev) => (prev[id] ? { ...prev, [id]: { ...prev[id], ...p } } : prev));
+  }, []);
+
+  const focus = useCallback((id: string) => {
+    setWins((prev) => {
+      const cur = prev[id];
+      if (!cur) return prev;
+      if (cur.z === zTop.current) return prev; // 已经在最上面，别为一次点击留一个多余的渲染
+      return { ...prev, [id]: { ...cur, z: ++zTop.current } };
+    });
+  }, []);
+
+  return { wins, open, close, patch, focus };
+}
+
+/** 渲染当前所有浮窗。放在面板 JSX 的最外层（遮罩之外），它们要能压在面板之上。 */
+export const PluginUiWindows: React.FC<{
+  wins: Record<string, UiWinSlot>;
+  onPatch: (id: string, patch: Partial<UiWin>) => void;
+  onClose: (id: string) => void;
+  onFocus: (id: string) => void;
+}> = ({ wins, onPatch, onClose, onFocus }) => (
+  <>
+    {Object.entries(wins).map(([id, w]) => (
+      <PluginUiWindow
+        key={id}
+        id={id}
+        name={w.name}
+        win={w}
+        onPatch={(p) => onPatch(id, p)}
+        onClose={() => onClose(id)}
+        onFocus={() => onFocus(id)}
+      />
+    ))}
+  </>
+);

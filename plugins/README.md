@@ -628,6 +628,11 @@ tts_synthesize / tts_narration                      # 调用方式完全不变
 配置存在 `data/tts-config.json` 的 `providers[id]` 里，按 provider 合并——改一家不会清掉别家。
 老配置（endpoint/apiKey/model…）不用改：它就是内置 `openai` provider 的配置。
 
+**自带界面的 TTS 插件注意落点**：你的界面要往 `PUT /api/tts/config` 写
+`{ provider: "你的id", providers: { "你的id": { appid: "...", ... } } }`——
+**不要**写进 `PUT /api/plugin-config/<id>`。那是通用的插件配置存储，宿主合成时读的是
+tts-config 里的 `providers[id]`，写错地方用户会看到「还缺 appid」，但明明已经填了。
+
 ## 文本处理：在字进工程之前改它
 
 字幕和稿件不是文件，是字段。所以"用我的插件处理字幕"= 在文本**写进工程之前**改写它：
