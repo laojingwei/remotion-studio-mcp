@@ -116,7 +116,7 @@ plugins/我的玩法/
 | 你做了什么 | 生效时机 |
 |---|---|
 | 新建/修改/删除 `skills` `styles` `brief` `templates` `scene3d/skies.json` `scene3d/presets.json` | 下一次相关请求（即时） |
-| 修改 `plugin.ts`（钩子/工具/TTS/处理链） | 即时：宿主按"入口文件 mtime + size"指纹变化重新加载模块 |
+| 修改 `plugin.ts`（钩子/工具/TTS/处理链） | 即时：宿主按入口**及其同目录源码**（script 模式扫两层，改 helper 也算）的指纹变化重新加载模块 |
 | 新装/修改场景组件、元素、looks、passes、转场 | 服务端渲染前自动重新生成入口并重打包；编辑器侧要等一次构建（§12） |
 | 停用/启用插件 | 即时 |
 
@@ -151,6 +151,7 @@ plugins/我的玩法/
 | `apiVersion` | 否 | 插件针对的宿主 API 版本。**高于宿主 = 拒绝加载**（致命错误）；低于 = 警告。当前为 1 |
 | `provides` | 否 | 声明贡献项白名单。可写值（13 项，当前**全部已接通**）：`skill` / `style` / `template` / `elements` / `scene3d.sky` / `scene3d.preset` / `scene3d.look` / `scene3d.pass` / `transition` / `tts` / `brief.steps` / `scene` / `hooks`。写未知值会被忽略并警告。**建议写**：目录推断和声明取并集，写清楚让 `list_plugins` 更准确 |
 | `permissions` | 否 | 目前只有两条有真实 API：`project:read`（读工程）、`project:write`（改工程）。其它值会被忽略并警告。L0 内容插件一条都不需要 |
+| `render` | 否 | ⚠ 目前只被解析存储，**宿主没有任何消费点**，写了也不生效——不要照它实现功能 |
 | `description` / `author` | 否 | 展示用 |
 
 ### 4.2 package.json 就是清单（工程化插件用）
@@ -189,6 +190,8 @@ plugins/我的玩法/
 
 这一节全是"摆文件 + 写 JSON/MD"，零代码。所有 JSON 文件都接受两种形态：**包一层键**（推荐，如 `{"skies":[...]}`）或**裸数组**（`[...]`）；元素和模板还接受单个对象。
 
+**重名冲突规则**（全部贡献项统一）：与**内置**重名 → 内置优先，你的不生效；与**另一个插件**重名 → **先注册的持有，后来者注册被拒**并在 `list_plugins` 的「内容问题」里报「已被插件 X 占用」（注册顺序 = 插件 id 字母序）。两个品牌包都想要 `id: "logo"` 时，后装的那个要换 id。同插件内改文件重注册不受此限（那是正常的更新）。
+
 ### 5.1 技能指南 `skills/*.md`
 
 普通 markdown。同名时**内置优先**（插件同名不生效，换个文件名即可）。
@@ -196,7 +199,7 @@ plugins/我的玩法/
 ### 5.2 风格规则 `styles/*.md` 与预设 `styles/presets.json`
 
 - md：风格规则文本，`list_styles` 可见、`get_style` 可读、`apply_style` 可套。
-- presets.json：色板/字体/转场的一键落字段预设。格式参考内置 `server/styles/` 下的预设结构。
+- presets.json：色板/字体/转场的一键落字段预设。格式参考内置 `server/styles/` 下的预设结构。每个 slug 要是 `{ name, palette(色值表), font{heading,body}, radius }`——结构不对或 JSON 坏会在 `list_styles` 末尾的「插件预设问题」里报出来（不会静默消失）。
 
 ### 5.3 问诊步骤 `brief/steps.json`
 
@@ -220,6 +223,8 @@ plugins/我的玩法/
 
 **`x.` 前缀是扩展字段**：问诊问出来、宿主不认识，但会原样存进 brief。想让它产生实际约束，配套写一个 `brief:derive` 钩子把它翻成设计锁规则（见 §7 与 `_example-audit` 示例）。
 
+步骤还可以带 `"core": true`——标记为**核心步骤**，`save_brief` 确认后会单独把它排在最前（内置流程的"先搞清这门生意"就是 core 步骤）。
+
 ### 5.4 整片模板 `templates/*.json`
 
 ```json
@@ -238,6 +243,8 @@ plugins/我的玩法/
   ]
 }
 ```
+
+注意：`scenes[].type` 的校验发生在**套用时刻**（`create_from_template`），不是注册时——因为插件场景的注册可能晚于模板。type 打错字的模板能通过注册、`list_templates` 可见，用户点「使用」才报「引用了未知场景类型」。所以写完模板务必套用一次验证。
 
 ### 5.5 元素素材 `elements/*.json`
 
@@ -268,11 +275,13 @@ plugins/我的玩法/
       "label": "黄昏港湾",
       "asset": "dusk_harbor_2k",    // 全景图资产 id（文件名与下载地址由它拼）
       "category": "time",           // 只能 season / time / night / indoor
-      "world": { "skyTint": 0.4, "fogDensity": 0.02, "exposure": 1.1 }   // 起始档位，值必须是数字
+      "world": { "imageIntensity": 1.0, "envIntensity": 0.6, "haze": 0.2, "vignette": 0.25 }   // 起始档位
     }
   ]
 }
 ```
+
+`world` 里 **4 个必填数字键**：`imageIntensity`（全景图亮度）/ `envIntensity`（环境光强度）/ `haze`（雾感）/ `vignette`（暗角），可选 `imageRotation`（全景图旋转弧度）。写别的键名（如 `fogDensity`）注册时会报「world.xxx 必须是数字」。
 
 `world.*` 的值**必须是数字**——写错类型渲染端不报错、只发黑。写完用 `set_graph_scene { worldPreset: "<id>" }` + 抽帧验证。
 
@@ -302,6 +311,7 @@ plugins/我的玩法/
 ```
 
 - `rimB` / `fill` 可为 `null`（不上这两盏灯）；`color` 可以是色值，也可以是主题语义色（`"core"` / `"dot"` 等，随主题联动）。
+- 每盏灯可带 `"hemisphere": true`——表示这盏灯按**半球光**算（从下方/环境补光，内置 `nature` 就这么用）；默认false=普通点光。
 - **最稳的写法：抄内置四套（`studio` / `dramatic` 等）的结构改数值**，别从零发明字段。
 
 ### 5.8 3D 图形配方 `scene3d/presets.json`
@@ -350,7 +360,7 @@ export default (p: number, ctx: { phase: "in" | "out"; frame: number; params: Re
 
 硬规则：
 - **只写"入场"方向**。出场 = 宿主拿 `1-p` 再调一次同一函数。想做不对称就按 `ctx.phase` 分支，但绝大多数不需要。
-- 返回值只认**视觉属性白名单**：`transform` / `transformOrigin` / `opacity` / `filter` / `backdropFilter` / `clipPath` / `maskImage` / `maskSize` / `maskPosition` / `background` / `boxShadow` / `mixBlendMode` / `borderRadius`。写布局属性（`position`/`width`…）会被丢弃并告警——转场样式和版式共用一个 style，混进去表现是"版面错"而不是"转场怪"。
+- 返回值只认**视觉属性白名单**：`transform` / `transformOrigin` / `opacity` / `filter` / `backdropFilter` / `clipPath` / `maskImage` / `WebkitMaskImage` / `maskSize` / `maskPosition` / `background` / `backgroundColor` / `boxShadow` / `mixBlendMode` / `borderRadius`。写布局属性（`position`/`width`…）会被丢弃并告警——转场样式和版式共用一个 style，混进去表现是"版面错"而不是"转场怪"。
 - `url(...)` 会被丢弃（渲染端抓不到外部资源）。
 - **禁用 `Math.random()` / `Date.now()`**：逐帧渲染每帧独立调用，必须确定性。要"抖动"用 `ctx.frame` 算 hash。
 - 写崩了（抛错/返回非法值）退回淡入淡出 + 告警，**整片照出**；工程里引用了已删插件的转场 id 也只是退回淡入。
@@ -651,7 +661,7 @@ plugins/我的场景/
     { "key": "score",  "type": "number", "label": "分数", "default": 8.6, "min": 0, "max": 10 },
     { "key": "tone",   "type": "enum",   "label": "语气", "options": ["克制", "热烈"], "default": "克制" },
     { "key": "tags",   "type": "stringArray", "label": "亮点标签", "default": ["手感扎实"], "maxItems": 5 },
-    { "key": "rows",   "type": "objectArray", "label": "明细",
+    { "key": "rows",   "type": "objectArray", "label": "明细", "default": [],
       "items": [ { "key": "name", "type": "text", "label": "项目", "default": "" },
                  { "key": "val",  "type": "number", "label": "数值", "default": 0 } ] }
   ]
@@ -746,7 +756,7 @@ parent.postMessage({ type: "studio:resize", height: 720 }, "*");  // 请宿主�
 parent.postMessage({ type: "studio:close" }, "*");                // 用户保存后顺手关窗
 ```
 
-边界：iframe 带 `allow-same-origin`（因为要 fetch `/api/*`），但**没有** `allow-top-navigation`——你的页面不能把整个编辑器导航走。完整例子：`plugins/_example-ui/`。
+边界：iframe 带 `allow-same-origin`（因为要 fetch `/api/*`）。**这意味着插件页与编辑器同源**——它可以触达编辑器的 DOM、localStorage 与 cookie，沙箱并不构成安全边界；把 ui/ 页面当成"同一份代码库里的前端"来对待。但**没有** `allow-top-navigation`——你的页面不能把整个编辑器导航走。主题变量：宿主在页面 load 后 `postMessage { type: "studio:init", tokens }` 发一次；如果你的页面用异步框架初始化（监听建得晚），建好监听后随手 `parent.postMessage({ type: "studio:hello" }, "*")`，宿主会立刻补发一次 init。完整例子：`plugins/_example-ui/`。
 
 ---
 
