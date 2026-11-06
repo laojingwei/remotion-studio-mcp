@@ -22,6 +22,7 @@
  */
 
 import { execSync } from "node:child_process";
+import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -94,19 +95,58 @@ function fail(lines) {
   process.exit(1);
 }
 
-let report;
+/*
+ * 取 npm 的打包清单。
+ *
+ * **两种输出形状都要吃**：npm 10 及更早是数组 `[{…}]`，npm 12 起改成以包名为键的
+ * 对象 `{"<包名>": {…}}`（npm/cli#9247 的 BREAKING CHANGE，没有回移到 v11）。
+ * 而 publish.yml 发版前会 `npm install -g npm@latest`，所以 runner 上永远跑更新的那个：
+ * 只认数组的写法会在这里直接抛 TypeError，崩溃点还是取值那一行——看起来像"守卫自己坏了"，
+ * 把真正该报的问题盖掉（2026-11-07 发版就撞在这上面，npm 上 1.2.0 因此没发出去）。
+ *
+ * 再变形状时不要让它自己崩：拿不到合法的 entry 就带着「npm 版本 + 实际拿到了什么」退出。
+ *
+ * 复现/测试用：CHECK_PACKAGE_RAW_JSON=<文件> 可直接从文件读原始输出，绕过执行 npm。
+ *   CHECK_PACKAGE_RAW_JSON=/tmp/pack-npm12.json node scripts/check-package.mjs
+ */
+let raw;
 try {
-  const raw = execSync("npm pack --dry-run --json", {
-    cwd: ROOT,
-    encoding: "utf8",
-    maxBuffer: 64 * 1024 * 1024,
-    stdio: ["ignore", "pipe", "ignore"],
-  });
-  report = JSON.parse(raw)[0];
+  raw = process.env.CHECK_PACKAGE_RAW_JSON
+    ? fs.readFileSync(process.env.CHECK_PACKAGE_RAW_JSON, "utf8")
+    : execSync("npm pack --dry-run --json", {
+        cwd: ROOT,
+        encoding: "utf8",
+        maxBuffer: 64 * 1024 * 1024,
+        stdio: ["ignore", "pipe", "ignore"],
+      });
 } catch (err) {
   fail([
     "✗ 读不到 npm 打包清单（npm pack --dry-run --json 失败）",
     `  ${err instanceof Error ? err.message.split("\n")[0] : String(err)}`,
+  ]);
+}
+
+let parsed;
+try {
+  parsed = JSON.parse(raw);
+} catch (err) {
+  fail([
+    "✗ npm 的清单不是合法 JSON（可能有 banner / 警告混进了 stdout）",
+    `  npm: ${process.env.npm_config_user_agent ?? "未知"}`,
+    `  ${err instanceof Error ? err.message.split("\n")[0] : String(err)}`,
+    `  输出头部：${String(raw).slice(0, 200).replace(/\n/g, "⏎")}`,
+  ]);
+}
+
+const entries = Array.isArray(parsed) ? parsed : Object.values(parsed ?? {});
+const report = entries.find((e) => e && Array.isArray(e.files));
+if (!report) {
+  fail([
+    "✗ 读不懂 npm 的打包清单（形状不在预期内）",
+    `  npm: ${process.env.npm_config_user_agent ?? "未知"}`,
+    `  顶层类型：${Array.isArray(parsed) ? "数组" : parsed === null ? "null" : typeof parsed}`,
+    `  实际内容：${JSON.stringify(parsed).slice(0, 300)}`,
+    "  已知形状：npm ≤11 是数组 [{files}]，npm ≥12 是对象 {\"<包名>\": {files}}；再变就更新这段解析",
   ]);
 }
 
