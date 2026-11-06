@@ -201,14 +201,45 @@ class ProjectService {
 
     // 贴图素材校验（存在性/格式/体积/尺寸）在写库前挡——渲染端加载失败只会静默回退，agent 看不到
     assertTextureAssets(ops);
+
+    /*
+     * 插件写入前把关（`ops:before`）：**只给否决权，不给改写权**。
+     *
+     * 三个必须守住的边界：
+     *  1. 否决 = 抛错退出。此时 `applyOps` 还没跑，`current` 没被碰过，
+     *     所以 rev 不涨、撤销栈干净、历史里没有这一笔 —— 不用回滚，因为什么都没发生
+     *  2. 插件**不能改** op。能改就等于能在落盘前重写用户的工程，且撤销栈里看不出是谁干的
+     *  3. 钩子自己抛异常**不拦**（`runHook` 内部已吞掉并记账）——一个坏插件不该让人存不了盘
+     */
+    let beforeWarnings: string[] = [];
+    if (hasHook("ops:before")) {
+      const v = runHook("ops:before", {
+        before: frozenSnapshot(current) as unknown as Record<string, unknown>,
+        ops: frozenSnapshot(ops) as unknown as Record<string, unknown>[],
+      });
+      if (v.blocking.length) {
+        const err = Object.assign(
+          new Error(
+            `插件拒绝这批写入，工程**未改动**（rev 仍是 ${current.rev}，历史里没有这一笔）：\n` +
+              v.blocking.map((x) => `· ${x}`).join("\n") +
+              `\n不想被拦就停用对应插件（list_plugins 看是谁，toggle_plugin 关掉）。`,
+          ),
+          { status: 422 },
+        );
+        throw err;
+      }
+      beforeWarnings = v.warnings;
+    }
+
     const result: AppliedResult = applyOps(current, ops);
+    if (beforeWarnings.length) result.summary.unshift(...beforeWarnings);
 
     /*
      * 插件复盘（ops:review）：拿到写入前/后两份快照，只能往回调回执里加文字。
      *
-     * 为什么是"复盘"而不是"拦截"：真实的拦截点应该在写库之前，那意味着插件能改
-     * 一份即将落盘的工程——一个写错的插件会把用户的工程改坏，而且撤销栈里看不出
-     * 是哪一步被谁改的。先给只读的复盘能力，等权限执法那批再谈拦截。
+     * 为什么这里只"复盘"不"拦截"：拦截是上面的 `ops:before`。两个钩子分工是硬的——
+     * `ops:before` 说"这批别写"，`ops:review` 说"写完了，我看出来这些"。
+     * 在这里返回 blocking 已经晚了一步（数据落盘了），所以只能降级成警示并标明"已写入"。
      *
      * 快照只在真有钩子时才拷（结构化克隆整份工程不便宜），没装插件时零开销。
      */

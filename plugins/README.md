@@ -286,11 +286,19 @@ export default {
 | 钩子 | 什么时候被调用 | ctx 里有什么 |
 |---|---|---|
 | `audit:rules` | 调 `audit_project` 体检时 | `{ brief, project, lock }` |
+| `ops:before` | **写入之前**（还没落库，可以拦） | `{ before, ops }` |
 | `ops:review` | 每次写入工程之后（已落库） | `{ before, after, ops }` |
 | `brief:derive` | 推导设计锁时 | `{ brief, lock }` |
 
 返回 `{ blocking?, warnings?, passed?, lockRules? }`，都是字符串数组，全部可省。
 宿主管家会自动加 `[你的插件id]` 前缀——用户必须看得出这条不是宿主的判断。
+
+**`ops:before` 的 `blocking` 是"否决"，不是"提醒"**：非空就让这一批 op 整批失败，
+工程一个字都不动（rev 不涨、撤销栈干净、历史里没有这一笔），调用方会收到错误说明。
+它在**只有一处**被调用——写库前，`applyOps` 之前。
+
+`ops:review` 里返回 `blocking` **拦不住**（已经写进去了），只会变成"⚠️ 已写入，需手动修"。
+要拦就用 `ops:before`，要事后提醒就用 `ops:review`。
 
 三条边界：
 

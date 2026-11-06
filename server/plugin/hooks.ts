@@ -64,6 +64,7 @@ import { ffmpegPath } from "../ffmpeg";
 
 export const HOOK_KINDS = [
   "audit:rules",
+  "ops:before",
   "ops:review",
   "brief:derive",
   "text:transform",
@@ -74,6 +75,7 @@ export type HookKind = (typeof HOOK_KINDS)[number];
 /** 钩子的中文说明（`list_plugins` 与文档共用） */
 export const HOOK_LABEL: Record<HookKind, string> = {
   "audit:rules": "自检补充检查项",
+  "ops:before": "写入前把关（可否决）",
   "ops:review": "写入后复盘",
   "brief:derive": "设计锁补充规则",
   "text:transform": "文本处理（字幕/稿件）",
@@ -97,6 +99,22 @@ export type HookContext = {
     project: Record<string, unknown>;
     /** 设计锁；没定形态时为 null */
     lock: Record<string, unknown> | null;
+  };
+  /**
+   * 写入**前**的把关：只给否决权，不给改写权。
+   *
+   * 返回 `blocking` 非空 = 这批 op 被拒，工程一个字都不动（rev 不涨、撤销栈干净、
+   * 历史里没有这一笔）。**没有 `after`**——因为还不存在写入后的世界。
+   *
+   * 为什么不给"改 op"的能力：那等于让插件在落盘前改一份即将写入的工程，
+   * 一个写错的插件会把用户的数据改坏，而且撤销栈里看不出是谁改的。
+   * 想修正内容用 `text:transform`（文本）或 `ops:review` 的意见（人看着改）。
+   */
+  "ops:before": {
+    /** 写入前的工程（只读，已深冻结） */
+    before: Record<string, unknown>;
+    /** 这一批 op 原文（只读，已深冻结） */
+    ops: Record<string, unknown>[];
   };
   "ops:review": {
     /** 写入前的工程（只读，已深冻结） */

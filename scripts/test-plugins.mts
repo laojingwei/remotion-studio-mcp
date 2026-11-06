@@ -733,6 +733,77 @@ await testAsync("接进写入：ops:review 的提醒出现在 apply 的回执里
   );
 });
 
+/**
+ * `ops:before`：写入**前**的把关，只给否决权。
+ *
+ * 三条边界都要守住：① 否决后工程一个字不动（rev/历史/文件）；② 只提醒不否决时照常写；
+ * ③ 钩子自己炸了不拦（坏插件不该让人存不了盘）。
+ */
+await testAsync("写入前把关：blocking 非空 → 整批被拒，工程一个字没动", async () => {
+  resetPlugins();
+  writeHookPlugin(
+    "gate2",
+    // 只拦"改名成 新名"这一种，用来验证否决是按批、按内容判断的，不是一刀切
+    'export default { "ops:before": (ctx) => ({ blocking: ctx.ops.some((o) => o.op === "update_project" && o.patch?.name === "新名") ? ["不许叫这个名字"] : [] }) };',
+  );
+  resetHookCache();
+  await ensurePluginHooks();
+
+  const seed = { ...createSeedProject(), id: "veto1", rev: 1, name: "原名" };
+  writeProject(seed as never);
+  const before = projects.get("veto1");
+  const histBefore = projects.history("veto1").length;
+
+  assert.throws(
+    () => projects.apply("veto1", [{ op: "update_project", patch: { name: "新名" } } as never]),
+    /拒绝这批写入/,
+    "必须抛错，不能静默放行",
+  );
+
+  const after = projects.get("veto1");
+  assert.equal(after.rev, before.rev, "rev 不能涨");
+  assert.equal(after.name, "原名", "内容不能变");
+  assert.equal(projects.history("veto1").length, histBefore, "历史里不能多出一笔");
+  // 回读磁盘：不能是"内存没变但已经落盘了"
+  assert.equal(readProject("veto1").name, "原名", "磁盘上也不能变");
+
+  // 换成不被禁的名字就应当放行：否决是按内容/按批的，不是把这个工程锁死
+  projects.apply("veto1", [{ op: "update_project", patch: { name: "别的名字" } } as never]);
+  assert.equal(projects.get("veto1").name, "别的名字", "不触发规则时不该被拦");
+  assert.ok(projects.get("veto1").rev > before.rev, "放行后 rev 正常上涨");
+});
+
+await testAsync("写入前把关：只给 warnings 时照常写入，并把提醒放进回执", async () => {
+  resetPlugins();
+  writeHookPlugin("softgate", 'export default { "ops:before": () => ({ warnings: ["记得抽帧核对"] }) };');
+  resetHookCache();
+  await ensurePluginHooks();
+
+  const seed = { ...createSeedProject(), id: "veto2", rev: 1 };
+  writeProject(seed as never);
+  const res = projects.apply("veto2", [{ op: "update_project", patch: { name: "放行了" } } as never]);
+  assert.equal(projects.get("veto2").name, "放行了", "只提醒不该拦");
+  assert.ok(
+    res.summary.some((s) => s.includes("[softgate] 记得抽帧核对")),
+    `提醒要进回执，实际：${JSON.stringify(res.summary)}`,
+  );
+});
+
+await testAsync("写入前把关：钩子自己抛错 → 不拦，照常写入", async () => {
+  resetPlugins();
+  writeHookPlugin("badgate", 'export default { "ops:before": () => { throw new Error("我坏了"); } };');
+  resetHookCache();
+  await ensurePluginHooks();
+
+  const seed = { ...createSeedProject(), id: "veto3", rev: 1 };
+  writeProject(seed as never);
+  assert.doesNotThrow(
+    () => projects.apply("veto3", [{ op: "update_project", patch: { name: "照写" } } as never]),
+    "坏钩子不能让用户存不了盘",
+  );
+  assert.equal(projects.get("veto3").name, "照写");
+});
+
 /* ────────────────────────── 工具插件（批次 4b） ────────────────────────── */
 
 const { ensurePluginTools, pluginToolStatus, resetPluginToolCache } = await import(
