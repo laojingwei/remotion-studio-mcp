@@ -26,6 +26,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { ROOT } from "../server/root";
 
 const TMP = fs.mkdtempSync(path.join(os.tmpdir(), "studio-plugins-"));
 const PLUGIN_DIR = path.join(TMP, "plugins");
@@ -39,7 +40,9 @@ process.env.STUDIO_DATA_ROOT = DATA_DIR;
 // 而删除会撞上 safe-delete 的批量上限（静默失败 → 残留 → 断言指向完全错误的方向）
 process.env.STUDIO_PUBLIC_DIR = path.join(TMP, "public");
 
-const { scanPlugins, setPluginEnabled, isPluginEnabled, seedExamplePluginsDisabled } = await import("../server/plugin/discovery");
+const { scanPlugins, pluginRoots, setPluginEnabled, isPluginEnabled, seedExamplePluginsDisabled } = await import(
+  "../server/plugin/discovery"
+);
 const { listSkills } = await import("../server/skills.service");
 const { listStyles, presetOf } = await import("../server/styles.service");
 const { briefSteps, briefStepsSource, coreSteps, stepMissingFields } = await import("../server/brief.service");
@@ -724,9 +727,10 @@ await testAsync("接进写入：ops:review 的提醒出现在 apply 的回执里
 
 /* ────────────────────────── 工具插件（批次 4b） ────────────────────────── */
 
-const { ensurePluginTools, pluginToolStatus, resetPluginToolCache, WIRED_PERMISSIONS } = await import(
+const { ensurePluginTools, pluginToolStatus, resetPluginToolCache } = await import(
   "../server/plugin/plugin-tools"
 );
+const { PERMISSIONS, parseManifest } = await import("../server/plugin/manifest");
 const { pluginTools } = await import("../server/plugin/tool-registry");
 const { buildParamShape } = await import("../server/plugin/tool-params");
 
@@ -741,8 +745,21 @@ const writeToolPlugin = (dir: string, toolsBody: string, permissions: string[] =
 
 const toolByName = (name: string) => pluginTools().find((t) => t.name === name);
 
-await testAsync("权限表：只接线读/写两条（其余只有定义，不能假装能用）", async () => {
-  assert.deepEqual(WIRED_PERMISSIONS, ["project:read", "project:write"]);
+await testAsync("权限表：白名单里只有能执法的读/写两条（写了别的会被忽略并说明）", async () => {
+  assert.deepEqual([...PERMISSIONS], ["project:read", "project:write"]);
+  /*
+   * 白名单缩小的意义就在这条：作者写了 `net` / `render`，必须**当场**得到反馈，
+   * 而不是以为自己在某个版本里能用。这是「能声明却不生效」的唯一出口。
+   */
+  const parsed = parseManifest(
+    { id: "p", name: "p", version: "1.0.0", provides: [], permissions: ["project:read", "net", "exec"] },
+    { dirId: "p" },
+  );
+  assert.deepEqual(parsed.manifest?.permissions, ["project:read"], "未在册的权限要被过滤掉");
+  assert.ok(
+    parsed.warnings.some((w) => w.includes("net") && w.includes("未知权限")),
+    `未知权限要有警告，实际：${JSON.stringify(parsed.warnings)}`,
+  );
 });
 
 await testAsync("参数声明：各类型都能转成 zod，必填/可选/default 各自生效", async () => {
@@ -1668,7 +1685,7 @@ test("未识别目录：能删（挪进回收站），删完就不在列表里",
 
 test("未识别目录：拒绝删除插件目录之外的东西", async () => {
   const { removeOrphanDir } = await import("../server/plugin/installer.service");
-  assert.throws(() => removeOrphanDir(path.join(TMP, "not-a-plugin")), /不在任何插件目录内/);
+  assert.throws(() => removeOrphanDir(path.join(TMP, "not-a-plugin")), /不在插件目录内/);
 });
 
 // 收尾清掉本文件自己造的文件（不删整个目录：safe-delete 会按数量拦）
@@ -1716,8 +1733,241 @@ test("示例种子：停用种子后扫描出来的 enabled 状态正确", () =>
 
 fs.rmSync(path.join(DATA_DIR, "plugins.json"), { force: true });
 
-/* ────────────────────────── 收尾 ────────────────────────── */
+/* ────────────────── 单目录（2026-11-06 删除用户级目录） ────────────────── */
 
+/**
+ * 守两件事：
+ *  1. 插件根只有一个——用户级目录已经删了，不能再冒出来第二个（那会让"装完不生效"复发）
+ *  2. 那个目录本来就不该存在：`pluginRoots()` 是扫描面，多一个根就是多一处
+ *     "装了但打包不进去"的可能
+ */
+test("插件根：只有一个，且就是 plugins/", () => {
+  const roots = pluginRoots();
+  assert.equal(roots.length, 1, `插件根应该只有一个，实际：${JSON.stringify(roots)}`);
+  assert.equal(roots[0].dir, PLUGIN_DIR);
+  assert.equal(roots[0].scope, "project");
+});
+
+test("插件能装进这个唯一的根（安装目标 = 扫描目标，不会再出现「装上了看不见」）", () => {
+  resetPlugins();
+  write("single/demo.json", JSON.stringify({ id: "single", name: "单根", version: "1.0.0", apiVersion: 1, provides: [] }));
+  write("single/skills/a.md", "# 单根测试");
+  const p = scanPlugins().find((x) => x.id === "single");
+  assert.ok(p, "应当被发现");
+  assert.equal(p.scope, "project");
+  assert.equal(path.resolve(p.dir), path.join(PLUGIN_DIR, "single"));
+  resetPlugins();
+});
+
+/* ──────────────── 数据型贡献项：3D 天空配方 / 整片模板 ──────────────── */
+
+const { syncPluginWorldSkies, syncPluginTemplates } = await import("../server/plugin/content-sync");
+const { allWorldSkies, findWorldSky, unregisterWorldSky } = await import("../shared/worldPresets");
+const { templateList, getTemplate, buildFromTemplate, unregisterTemplate } = await import("../shared/templates");
+
+/**
+ * 这两类以前是「能声明、能识别、没有消费方」——放进去的文件宿主根本不读，
+ * list_plugins 还老老实实写着"提供：3D 天空"。现在接上了，所以要守两件事：
+ *  1. 放了就真的出现在消费点的表里（list_world_skies / /api/templates 读的是同一份）
+ *  2. 停用插件后要**撤掉**，不能"停用了但还能选"
+ */
+
+const pluginSky = {
+  id: "sea-dusk",
+  label: "海边黄昏",
+  asset: "sea_dusk_test",
+  category: "time",
+  note: "测试用",
+  world: { imageIntensity: 0.9, envIntensity: 0.5, haze: 0.35, vignette: 0.3 },
+  lights: [{ type: "ambient", color: "#8899AA", intensity: 1.2 }],
+  ground: { mode: "shadow", shadowOpacity: 0.5 },
+};
+
+test("3D 天空：插件的 skies.json 进注册表，停用后撤掉", () => {
+  resetPlugins();
+  write("sky/scene3d/skies.json", JSON.stringify({ skies: [pluginSky] }));
+
+  const first = syncPluginWorldSkies();
+  assert.equal(first.issues.length, 0, `不该有报错：${JSON.stringify(first.issues)}`);
+  assert.ok(allWorldSkies().some((s) => s.id === "sea-dusk"), "插件的配方应出现在全集里");
+  assert.equal(findWorldSky("sea-dusk")?.label, "海边黄昏");
+  // 也接受按 asset id 找（agent 常把资产 id 当预设 id 给）
+  assert.equal(findWorldSky("sea_dusk_test")?.id, "sea-dusk");
+
+  setPluginEnabled("sky", false);
+  syncPluginWorldSkies();
+  assert.equal(findWorldSky("sea-dusk"), undefined, "停用插件后不该还能选到它的天空");
+  setPluginEnabled("sky", true);
+  resetPlugins();
+  syncPluginWorldSkies();
+  unregisterWorldSky("sea-dusk");
+});
+
+test("3D 天空：内置 id 不能被插件顶掉（agent 的指南引用的是内置 id）", () => {
+  resetPlugins();
+  const builtinId = allWorldSkies()[0].id;
+  write("sky2/scene3d/skies.json", JSON.stringify([{ ...pluginSky, id: builtinId }]));
+  const r = syncPluginWorldSkies();
+  assert.ok(r.issues.some((i) => i.includes("内置")), `要报"与内置重名"，实际：${JSON.stringify(r.issues)}`);
+  assert.notEqual(findWorldSky(builtinId)?.label, "海边黄昏", "内置配方不能被改写");
+  resetPlugins();
+  syncPluginWorldSkies();
+});
+
+test("整片模板：插件的 templates/*.json 能列出来，也能真的套用", () => {
+  resetPlugins();
+  write(
+    "tpl/templates/demo.json",
+    JSON.stringify({
+      templates: [
+        {
+          key: "tpl-plugin-demo",
+          name: "插件示范模板",
+          description: "两幕，足够验证套用链路",
+          tags: ["测试"],
+          scenes: [{ type: "hero", durationInFrames: 40, props: { title: "插件模板" } }],
+        },
+      ],
+    }),
+  );
+
+  const r = syncPluginTemplates();
+  assert.equal(r.issues.length, 0, `不该有报错：${JSON.stringify(r.issues)}`);
+  const card = templateList().find((t) => t.key === "tpl-plugin-demo");
+  assert.ok(card, "模板应出现在 templateList（/api/templates 读的就是它）");
+  assert.equal(card?.sceneCount, 1);
+
+  const project = buildFromTemplate("tpl-plugin-demo", "套用测试", "tplapply01");
+  assert.equal(project.scenes.length, 1);
+  assert.equal(project.scenes[0].type, "hero");
+  assert.equal(project.name, "套用测试");
+
+  setPluginEnabled("tpl", false);
+  syncPluginTemplates();
+  assert.equal(getTemplate("tpl-plugin-demo"), undefined, "停用后不该还能套用");
+  setPluginEnabled("tpl", true);
+  resetPlugins();
+  syncPluginTemplates();
+  unregisterTemplate("tpl-plugin-demo");
+});
+
+test("整片模板：坏数据（没有 scenes / key 非法）报出来且不登记", () => {
+  resetPlugins();
+  write("tpl2/templates/bad.json", JSON.stringify({ key: "Bad Key", name: "x", scenes: [] }));
+  const r = syncPluginTemplates();
+  assert.ok(r.issues.some((i) => i.includes("key")), `要报 key 非法，实际：${JSON.stringify(r.issues)}`);
+  assert.equal(getTemplate("Bad Key"), undefined);
+  resetPlugins();
+  syncPluginTemplates();
+});
+
+/* ──────────────── 元素素材（2026-11-06 第 5 步） ──────────────── */
+
+const { syncPluginElements, ensurePluginEntryFresh } = await import("../server/plugin/content-sync");
+const { allLibraryItems, allLibraryCats, registerLibraryItem, unregisterLibraryItem } = await import(
+  "../shared/elementLibrary"
+);
+
+const pluginIcon = {
+  id: "brand-logo",
+  name: "品牌标",
+  cat: "品牌图标",
+  kind: "svg",
+  size: 10,
+  stroke: true,
+  strokeWidth: 2,
+  svg: '<path d="M4 12h16M12 4v16"/>',
+};
+
+test("元素：插件的 elements/*.json 进注册表，分类跟着长出来", () => {
+  resetPlugins();
+  write("els/elements/icons.json", JSON.stringify({ elements: [pluginIcon] }));
+
+  const r = syncPluginElements();
+  assert.equal(r.issues.length, 0, `不该有报错：${JSON.stringify(r.issues)}`);
+  assert.ok(allLibraryItems().some((i) => i.id === "brand-logo"), "元素应出现在全集里");
+  // 分类是作者自定义的：面板的筛选项必须自动多一个，否则元素存在但筛不到
+  assert.ok(allLibraryCats().includes("品牌图标"), `分类应自动追加，实际：${JSON.stringify(allLibraryCats())}`);
+  // 内置分类顺序不变（前 5 个是内置的，不能被打乱）
+  assert.deepEqual(allLibraryCats().slice(0, 5), ["标记", "箭头", "形状", "符号", "标签"]);
+
+  setPluginEnabled("els", false);
+  syncPluginElements();
+  assert.equal(allLibraryItems().some((i) => i.id === "brand-logo"), false, "停用插件后元素应消失");
+  setPluginEnabled("els", true);
+  resetPlugins();
+  syncPluginElements();
+  unregisterLibraryItem("brand-logo");
+});
+
+test("元素：内置 id 不能被顶掉；坏数据（缺 svg / 带 script）被拒", () => {
+  resetPlugins();
+  const builtinId = allLibraryItems()[0].id;
+  const dup = registerLibraryItem({ ...pluginIcon, id: builtinId });
+  assert.equal(dup.ok, false);
+  assert.ok(dup.reason?.includes("内置"), `要说明与内置重名，实际：${dup.reason}`);
+
+  const bad1 = registerLibraryItem({ ...pluginIcon, id: "no-svg", svg: undefined });
+  assert.equal(bad1.ok, false);
+  const bad2 = registerLibraryItem({ ...pluginIcon, id: "evil", svg: "<script>alert(1)</script>" });
+  assert.equal(bad2.ok, false);
+  assert.ok(bad2.reason?.includes("script"));
+  const bad3 = registerLibraryItem({ ...pluginIcon, id: "no-size", size: 0 });
+  assert.equal(bad3.ok, false);
+});
+
+/**
+ * 这条守的是 9.5 的第一个前提：`elements/` 变化必须能触发重新生成。
+ * 生成文件是编辑器拿到元素的唯一通道（web 是独立 bundle），
+ * 触发器漏了就等于"插件元素永远只存在于服务端"。
+ */
+test("元素：改 elements/ 会触发重新生成，且生成文件里带上了它", () => {
+  resetPlugins();
+  const out = path.join(TMP, "gen", "_plugins.generated.ts");
+  fs.mkdirSync(path.dirname(out), { recursive: true });
+
+  // 先跑一次空的，占住"上一次"的状态
+  generatePluginEntry({ outFile: out });
+  write("els2/elements/icons.json", JSON.stringify([pluginIcon]));
+
+  const res = generatePluginEntry({ outFile: out });
+  assert.equal(res.elementCount, 1, `应统计到 1 个元素，实际：${res.elementCount}`);
+  const text = fs.readFileSync(out, "utf8");
+  assert.ok(text.includes("PLUGIN_ELEMENTS"), "生成文件要导出 PLUGIN_ELEMENTS");
+  assert.ok(text.includes("brand-logo"), "生成文件要内联元素数据");
+  assert.ok(text.includes("registerLibraryItem"), "生成文件要在模块顶层注册它");
+
+  // 停用后重新生成：元素要不在了（否则"停用了图标还挂在面板里"）
+  setPluginEnabled("els2", false);
+  const res2 = generatePluginEntry({ outFile: out });
+  assert.equal(res2.elementCount, 0, "停用的插件不该把元素写进生成文件");
+  assert.ok(!fs.readFileSync(out, "utf8").includes("brand-logo"));
+
+  setPluginEnabled("els2", true);
+  resetPlugins();
+  generatePluginEntry({ outFile: out });
+  fs.rmSync(out, { force: true });
+});
+
+test("元素：ensurePluginEntryFresh 会自己发现 elements/ 变化（不需要先渲染一次）", () => {
+  resetPlugins();
+  // 它写的是仓库里那个真实文件；测完要还原成"没插件元素"的状态
+  const real = path.join(ROOT, "src", "_plugins.generated.ts");
+  const before = fs.existsSync(real) ? fs.readFileSync(real, "utf8") : "";
+  try {
+    ensurePluginEntryFresh();
+    write("els3/elements/icons.json", JSON.stringify([{ ...pluginIcon, id: "fresh-check" }]));
+    const r = ensurePluginEntryFresh();
+    assert.ok(fs.readFileSync(real, "utf8").includes("fresh-check"), "生成文件应带上新元素");
+    assert.equal(r.changed, true, "有变化就要报告 changed");
+  } finally {
+    resetPlugins();
+    ensurePluginEntryFresh();
+    if (before) fs.writeFileSync(real, before, "utf8");
+  }
+});
+
+/* ────────────────────────── 收尾 ────────────────────────── */
 fs.rmSync(TMP, { recursive: true, force: true });
 
 console.log(`\n插件内核：${passed} 通过${failures.length ? `，${failures.length} 失败` : ""}`);

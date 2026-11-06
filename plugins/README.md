@@ -3,14 +3,15 @@
 把文件夹丢进来就生效，不用重启。删掉就消失。这个目录本身不入库（示例插件除外），
 所以你自己做的东西不会被 `git pull` 覆盖。
 
-## 两个位置
+## 只有一个位置
 
-| 位置 | 用途 |
-|---|---|
-| `<项目>/plugins/` | 跟这个项目走，适合团队共享 |
-| `~/.remotion-studio/plugins/` | 跨项目通用，适合个人收藏，升级不覆盖 |
+`<安装目录>/plugins/`（就是这个目录）。
 
-两处都生效。同名 id 时**项目内优先**。
+**没有"用户目录"了**（`~/.remotion-studio/plugins/` 已于 2026-11-06 删除）。原因：
+它当初是为了"换个项目也能用"，但这个 `plugins/` 本来就是**整份安装共用**的——
+同一份安装下的所有工程都读它，用户目录并不额外提供什么。反而因为它在工程根之外，
+场景组件（要静态打包）装进去永远不生效，且宿主不报错。留一个"选错了就静默没用"的入口，
+不如没有。
 
 `_example-*` 开头的是仓库自带的演示插件。它们**默认是停用的**（全新环境首次启动时自动停用，
 避免示例技能/风格/场景混进真实项目）——想看示例长什么样，在编辑器顶栏「插件」面板里一键启用即可。
@@ -23,6 +24,9 @@ plugins/我的插件/
   styles/*.md            风格规则      → list_styles / get_style / apply_style
   styles/presets.json    风格预设      → apply_style 一键落字段
   brief/steps.json       问诊步骤      → intake / save_brief 按你的流程走
+  templates/*.json       整片模板      → 模板市场里多一套，create_from_template 可套
+  elements/*.json        元素素材      → 元素面板里多几个图标 / 标签（分类可自定义）
+  scene3d/skies.json     3D 天空配方   → list_world_skies 多几条，set_graph_scene 能套
   scenes/*.json + *.tsx  场景组件      → 选择器里多一种画面（必须放项目内）
   plugin.ts              钩子/工具/处理器 → 说意见、改字、洗素材，或加一个 MCP 工具
   package.json + dist/   同上，但做成**完整工程**（可以带自己的 dependencies）
@@ -45,9 +49,12 @@ plugins/我的插件/
 | **工具** | `plugin.ts` 的 `tools`，给 agent 加一个 MCP 工具；能读工程、改工程（要声明权限，配合 `dryRun`） |
 | **文本处理** | `plugin.ts` 的 `text:transform`，在字幕/稿件写进工程之前改字（术语表、品牌名、口头禅） |
 | **文件处理** | `plugin.ts` 的 `media:process`，新上传的图/音/视频先过一遍（压缩、剥元数据、统一响度）；补历史素材用 `reprocess_assets` |
+| **整片模板** | `templates/*.json`，模板市场里多一套；`{ "templates": [...] }`、`[...]`、单个对象三种写法都收 |
+| **3D 天空配方** | `scene3d/skies.json`，`list_world_skies` 里多几条（带「〔插件 xxx〕」标记），`set_graph_scene { worldPreset }` 直接套 |
+| **元素素材** | `elements/*.json`，元素面板里多几个图标/标签；`cat` 随你定（会自动变成筛选项），也能被 `list_element_library` / `add_element { libraryId }` 用 |
 
-元素库、整片模板、3D 配方、转场、特效属于后续批次，
-现在放进去会被识别但**明确标注不生效**（见 `list_plugins`）。
+**还没接的**只剩 3D 观感（`scene3d/looks.json`）——放进去会被识别但**明确标注不生效**（见 `list_plugins`）。
+转场 / 特效 / 3D 几何体（`scene3d/presets.json`）**不打算做**，理由见计划文档 9.3。
 完整路线见 `docs/2026-11-05-插件化架构与实施计划.md`。
 
 ## 插件可以是一个完整工程
@@ -196,7 +203,7 @@ export default {
 `ctx.ffmpeg` 指向 Remotion 自带的那个（装了 Remotion 就一定在），所以不需要为了处理图片
 给宿主装 sharp。示例：`plugins/_example-media/`。
 
-## 场景组件：唯一必须放项目内的一类
+## 场景组件：需要重新打包的一类
 
 ``` 
 plugins/我的场景/
@@ -205,8 +212,12 @@ plugins/我的场景/
     rating-card.tsx      React 组件（默认导出）
 ```
 
-**为什么只能在项目内**：渲染端是 webpack 打包 `src/index.ts`，项目外的路径
-（`~/.remotion-studio/plugins/`）进不了 bundle。内容类插件（技能/风格/问诊）没有这个限制。
+**为什么要重新打包**：渲染端是 webpack 打包 `src/index.ts`，插件的 `.tsx` 靠生成文件
+（`src/_plugins.generated.ts`）变成静态 import 才能进去。所以放进来之后要重新打包一次
+——服务端渲染前会自动做，编辑器里用「插件」面板的「重建」也行。
+
+> 2026-11-06 起"必须放项目内"这条限制已经不存在了：插件目录只有一个，且就在工程根内，
+> "装在哪"和"能不能被打包"永远是同一个答案。
 
 json 的格式（字段支持 text / number / boolean / enum / stringArray / objectArray）：
 

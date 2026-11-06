@@ -42,7 +42,7 @@ import {
   resolveChanges,
   type LooseScene,
 } from "./revise.service";
-import { ELEMENT_LIBRARY, elementFromLibrary } from "../shared/elementLibrary";
+import { allLibraryItems, elementFromLibrary } from "../shared/elementLibrary";
 import { getMeta, normalizeProps, describeTypeDeep } from "../shared/sceneMetas";
 import {
   assetIdOf,
@@ -5188,12 +5188,13 @@ const TOOLS: ToolDef[] = [
   {
     name: "list_element_library",
     description:
-      "列出可用的元素素材：内置素材库（图标 / 形状 / 标签）+「我的素材」里已入库的图片。拿到 id 后用 add_element 的 libraryId 放进场景。两边都没有合适的，可以直接用 add_element 的 svg / text / imageSrc 自己造。",
-    shape: { category: z.string().optional().describe("按分类筛选：标记 / 箭头 / 形状 / 符号 / 标签") },
+      "列出可用的元素素材：内置素材库（图标 / 形状 / 标签）+ 插件贡献的元素 +「我的素材」里已入库的图片。拿到 id 后用 add_element 的 libraryId 放进场景。两边都没有合适的，可以直接用 add_element 的 svg / text / imageSrc 自己造。",
+    shape: { category: z.string().optional().describe("按分类筛选：标记 / 箭头 / 形状 / 符号 / 标签（插件可带自己的分类）") },
     run: async (a) => {
       await ensureServer();
       const lines: string[] = [];
-      const items = ELEMENT_LIBRARY.filter((i) => !a.category || i.cat === a.category);
+      // 插件贡献的元素也要在这里出现，否则 agent 只能用面板里看得到、工具里查不到的 id
+      const items = allLibraryItems().filter((i) => !a.category || i.cat === a.category);
       if (items.length) {
         const cats = [...new Set(items.map((i) => i.cat))];
         lines.push(

@@ -25,7 +25,7 @@ import {
 import { describeSceneBox, normalizeSceneBox, type SceneBox } from "./sceneBox";
 import { droppedProps, getMeta, MIN_SCENE_FRAMES, normalizeProps } from "./sceneMetas";
 import { dslIssues, dslSchema, dslWarnings, nodeSchema, type DslNode, type Scene3DDsl } from "./scene3dDsl";
-import { WORLD_SKIES, findWorldSky, hdriPath } from "./worldPresets";
+import { allWorldSkies, findWorldSky, hdriPath } from "./worldPresets";
 import { hasAnimatedChain, reparentLocalTrs, type Trs } from "./scene3dTransform";
 import { effectLabel, effectSummaryText } from "./effects";
 import { TRANSITION_TYPES } from "./transitions";
@@ -2104,7 +2104,7 @@ export function applyOps(project: Project, ops: Op[]): OpResult {
           if (!sky) {
             throw new Error(
               `set_graph_world：没有这个世界预设「${presetId}」。` +
-                `可选：${WORLD_SKIES.map((s) => s.id).join("、")}（详情用 list_world_skies）`,
+                `可选：${allWorldSkies().map((s) => s.id).join("、")}（详情用 list_world_skies）`,
             );
           }
           const override = isPlainObject(op.world) ? { ...op.world } : {};

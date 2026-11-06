@@ -102,9 +102,8 @@ export const PluginsDialog: React.FC<{ open: boolean; onClose: () => void }> = (
   const [plugins, setPlugins] = useState<PluginItem[]>([]);
   const [trashDir, setTrashDir] = useState("");
   const [orphans, setOrphans] = useState<OrphanDir[]>([]);
-  const [roots, setRoots] = useState<{ dir: string; scope: "project" | "user"; exists: boolean }[]>([]);
+  const [roots, setRoots] = useState<{ dir: string; scope: "project"; exists: boolean }[]>([]);
   const [source, setSource] = useState("");
-  const [scope, setScope] = useState<"project" | "user">("project");
   const [registry, setRegistry] = useState("");
   const [presets, setPresets] = useState<PluginRegistryPreset[]>([]);
   const [defaultRegistry, setDefaultRegistry] = useState("");
@@ -174,7 +173,7 @@ export const PluginsDialog: React.FC<{ open: boolean; onClose: () => void }> = (
     }
     let alive = true;
     const t = setTimeout(() => {
-      detectPluginSource(s, scope)
+      detectPluginSource(s)
         .then((r) => {
           if (alive) setInfo(r);
         })
@@ -186,7 +185,7 @@ export const PluginsDialog: React.FC<{ open: boolean; onClose: () => void }> = (
       alive = false;
       clearTimeout(t);
     };
-  }, [source, scope, open]);
+  }, [source, open]);
 
   // 任务轮询：只在跑的时候轮，结束就停
   useEffect(() => {
@@ -229,7 +228,7 @@ export const PluginsDialog: React.FC<{ open: boolean; onClose: () => void }> = (
       const reg = registry.trim();
       // 记住这个源（下次开面板还是它）；存不进去也不拦着这次安装
       if (reg) void savePluginRegistry(reg).catch(() => {});
-      const j = await installPlugin({ source: source.trim(), scope, registry: reg || undefined });
+      const j = await installPlugin({ source: source.trim(), registry: reg || undefined });
       setJob(j);
       setSource("");
       setInfo(null);
@@ -246,7 +245,7 @@ export const PluginsDialog: React.FC<{ open: boolean; onClose: () => void }> = (
     setBusy(true);
     setMsg("");
     try {
-      setJob(await installPlugin({ source: src, scope, registry: registry.trim() || undefined, force: true }));
+      setJob(await installPlugin({ source: src, registry: registry.trim() || undefined, force: true }));
     } catch (err) {
       setMsg(err instanceof Error ? err.message : "安装失败");
     } finally {
@@ -351,36 +350,25 @@ export const PluginsDialog: React.FC<{ open: boolean; onClose: () => void }> = (
             </button>
           </div>
 
+          {/*
+            装到哪：**只有一个目录**。
+            2026-11-06 删掉了「用户目录」那个选项——它装上下载包、装完不生效
+            （场景组件要静态打包，家目录不在打包范围里），留着就是一个会选错的入口。
+            但路径必须照样显示出来：不然用户永远不知道东西装到哪了、去哪删。
+          */}
           <div className="plg-scopes">
-            {(
-              [
-                { key: "project" as const, label: "装到本项目", hint: "跟着这个仓库走，可以提交、团队共享" },
-                { key: "user" as const, label: "装到用户目录", hint: "跨项目通用，编辑器升级不会覆盖" },
-              ] as const
-            ).map((opt) => {
-              const root = roots.find((r) => r.scope === opt.key);
-              return (
-                <label className={`plg-scope-opt ${scope === opt.key ? "is-on" : ""}`} key={opt.key}>
-                  <input
-                    type="radio"
-                    checked={scope === opt.key}
-                    onChange={() => setScope(opt.key)}
-                    disabled={active}
-                  />
-                  <span className="plg-scope-text">
-                    <span className="plg-scope-label">
-                      {opt.label}
-                      <i>{opt.hint}</i>
-                    </span>
-                    {/* 路径必须显示出来：不然"装到用户目录"到底装哪了，用户永远不知道 */}
-                    <span className="plg-scope-path" title={root?.dir ?? ""}>
-                      {root?.dir ?? "读取中…"}
-                      {root && !root.exists ? <em>（还不存在，安装时自动创建）</em> : null}
-                    </span>
-                  </span>
-                </label>
-              );
-            })}
+            <label className="plg-scope-opt is-on">
+              <span className="plg-scope-text">
+                <span className="plg-scope-label">
+                  装到 plugins/
+                  <i>跟着这个仓库走，可提交、团队共享；升级编辑器不会覆盖</i>
+                </span>
+                <span className="plg-scope-path" title={roots[0]?.dir ?? ""}>
+                  {roots[0]?.dir ?? "读取中…"}
+                  {roots[0] && !roots[0].exists ? <em>（还不存在，安装时自动创建）</em> : null}
+                </span>
+              </span>
+            </label>
           </div>
 
           <div className="plg-row plg-registry">
@@ -515,7 +503,6 @@ export const PluginsDialog: React.FC<{ open: boolean; onClose: () => void }> = (
                     <div className="plg-item-title">
                       <b>{p.name}</b>
                       <span className="plg-ver">v{p.version}</span>
-                      <span className="plg-scope">{p.scope === "project" ? "本项目" : "用户级"}</span>
                       {!p.enabled ? <span className="plg-badge">已停用</span> : null}
                       {broken ? <span className="plg-badge bad">未构建</span> : null}
                       {dormant ? <span className="plg-badge warn">未生效</span> : null}
@@ -593,7 +580,6 @@ export const PluginsDialog: React.FC<{ open: boolean; onClose: () => void }> = (
                         {o.sizeTruncated ? "≥ " : ""}
                         {fmtBytes(o.bytes)}
                       </span>
-                      <span className="plg-scope">{o.scope === "project" ? "本项目" : "用户级"}</span>
                     </div>
                     <div className="plg-item-path" title={o.dir}>
                       {o.pathLabel}

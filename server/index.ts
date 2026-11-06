@@ -9,11 +9,16 @@ import fs from "node:fs";
 import path from "node:path";
 import { metaList } from "../shared/sceneMetas";
 import { ensurePluginScenes, pluginSceneTypes } from "./plugin/scene-meta";
+import {
+  ensurePluginEntryFresh,
+  syncPluginElements,
+  syncPluginTemplates,
+  syncPluginWorldSkies,
+} from "./plugin/content-sync";
 import { ensurePluginHooks } from "./plugin/hooks";
 import { ensurePluginTools } from "./plugin/plugin-tools";
 import {
   PROJECT_PLUGIN_DIR,
-  USER_PLUGIN_DIR,
   PLUGIN_TRASH_DIR,
   cancelJob,
   cleanupPluginStaging,
@@ -161,6 +166,7 @@ const app = new Hono();
 
 /** 插件问题只报一次，避免每个请求刷屏 */
 let ensuredOnce = false;
+let ensuredContentOnce = false;
 let hooksReported = false;
 let toolsReported = false;
 
@@ -178,6 +184,24 @@ let toolsReported = false;
 app.use("*", async (_c, next) => {
   try {
     const res = ensurePluginScenes();
+    /*
+     * 内容型贡献项（3D 天空配方 / 整片模板）也在这里同步一次。
+     * 它们和场景一样"改了要立刻生效"，但判据不同：场景看 scenes/*.json，
+     * 内容看各自的 JSON 文件——所以 content-sync 自己算指纹，没变时只是几个 stat。
+     */
+    const sky = syncPluginWorldSkies();
+    const tpl = syncPluginTemplates();
+    const els = syncPluginElements();
+    /*
+     * 元素/场景要落到 `src/_plugins.generated.ts` 才能被编辑器看见（web 是独立 bundle）。
+     * 这一步保证了"装完插件打开面板就有"，而不是"等下次渲染才生效"。
+     */
+    const entry = ensurePluginEntryFresh();
+    const contentIssues = [...sky.issues, ...tpl.issues, ...els.issues, ...entry.issues];
+    if (contentIssues.length && !ensuredContentOnce) {
+      ensuredContentOnce = true;
+      for (const i of contentIssues) console.warn(`[plugin] ${i}`);
+    }
     if (res.issues.length && !ensuredOnce) {
       // 只在第一次报，避免每个请求刷屏
       ensuredOnce = true;
@@ -1230,7 +1254,6 @@ app.put("/api/plugins/settings", async (c) => {
  */
 app.get("/api/plugins/detect", (c) => {
   const source = String(c.req.query("source") ?? "");
-  const scope = c.req.query("scope") === "user" ? "user" : "project";
   if (!source.trim()) return c.json({ kind: null, reason: "还没有输入" });
   const kind = detectSourceKind(source);
   if (!kind) {
@@ -1240,9 +1263,8 @@ app.get("/api/plugins/detect", (c) => {
     });
   }
   const name = guessTargetName(kind, source);
-  const root = scope === "user" ? USER_PLUGIN_DIR : PROJECT_PLUGIN_DIR;
-  const dir = path.join(root, name);
-  return c.json({ kind, name, dir, scope, exists: fs.existsSync(dir) });
+  const dir = path.join(PROJECT_PLUGIN_DIR, name);
+  return c.json({ kind, name, dir, exists: fs.existsSync(dir) });
 });
 
 /** 安装：git / npm / 本地目录 → 装依赖 → 构建 → 校验。返回 job，前端轮询进度 */
@@ -1251,14 +1273,12 @@ app.post("/api/plugins/install", async (c) => {
     const body = (await c.req.json().catch(() => ({}))) as {
       source?: string;
       name?: string;
-      scope?: "project" | "user";
       registry?: string;
       force?: boolean;
     };
     const job = startInstall({
       source: String(body.source ?? ""),
       name: body.name || undefined,
-      scope: body.scope === "user" ? "user" : "project",
       registry: body.registry || undefined,
       force: !!body.force,
     });

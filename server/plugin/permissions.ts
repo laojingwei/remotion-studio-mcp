@@ -1,29 +1,27 @@
 /**
- * 权限：声明式，默认拒绝。
+ * 断言能力边界的辅助物：`PermissionDenied` + 人话描述。
  *
- * ## 为什么这一层在 L0 就建起来
+ * ## 真正的执法点不在这里
  *
- * L0 插件一个权限都不需要——它只提供数据（md / json），不读工程、不写文件。
- * 但「权限」这件事必须在**第一批插件存在之前**就有定义，否则等到批次 4
- * 引入代码插件时才补，会出现一批"没声明权限也要跑"的历史插件，
- * 那时候再加校验就是破坏性变更。
+ * 有个 `assertPermission(manifest, perm)` 曾定义在这里，但零调用点——
+ * 实际执法走 `plugin-tools.ts#capabilitiesFor` 里的 `require(perm)`（它拿得到
+ * 当前插件的 id，报错才说得清是谁干的）。2026-11-06 把这个死函数删了：
+ * 留着它会让人以为"加一个 assert 就安全了"，而真正的门控在别处。
  *
- * 所以这里先把定义与判定逻辑立住，L0 只是不用它；批次 4 的代码插件
- * 直接继承同一套语义，没有迁移成本。
+ * ## 必须先说清：权限不是沙箱
+ *
+ * `plugin.ts` 是被 `import()` 执行的任意代码，顶层直接 `import fs` 就能绕过所有检查。
+ * 权限声明的真实作用是**知情同意**（用户 `list_plugins` 时能看见"这个插件要读写我的工程"），
+ * 以及挡住"通过宿主 API 的顺手越权"。挡不住恶意代码——这一点写在代码里比写在文档里重要。
  */
 
-import type { Permission, PluginManifest } from "./manifest";
+import type { Permission } from "./manifest";
 import { PERMISSIONS } from "./manifest";
 
 /** 权限的中文说明（`list_plugins` 要展示给人看，光给 `project:write` 看不懂） */
 const PERMISSION_DESC: Record<Permission, string> = {
   "project:read": "读工程数据",
   "project:write": "改工程数据（能删幕、改文案、动主题）",
-  "assets:read": "读素材库与上传的文件",
-  "assets:write": "写/删素材文件",
-  render: "起渲染（占 CPU 与磁盘，能生成成片）",
-  net: "发起网络请求",
-  exec: "起子进程（等于这台机器上的一切，默认拒绝）",
 };
 
 export const describePermission = (p: Permission): string => PERMISSION_DESC[p] ?? p;
@@ -46,19 +44,6 @@ export class PermissionDenied extends Error {
     );
     this.name = "PermissionDenied";
   }
-}
-
-/**
- * 断言插件有某个权限，没有就抛 `PermissionDenied`。
- *
- * 调用方是宿主的能力边界（批次 4 的写工程 / 起渲染 / 联网入口）。
- * 抛错而不是返回 false，是因为调用点几乎都是"没有就没法继续"，
- * 返回布尔会让每个调用点都写一遍 `if (!ok) throw`，忘一个就是一个洞。
- */
-export function assertPermission(plugin: PluginManifest | null, permission: Permission): void {
-  const id = plugin?.id ?? "(未知插件)";
-  if (!plugin) throw new PermissionDenied(id, permission);
-  if (!plugin.permissions.includes(permission)) throw new PermissionDenied(id, permission);
 }
 
 /** 权限清单是否合法（manifest 解析时已过滤，这里给测试与诊断用） */

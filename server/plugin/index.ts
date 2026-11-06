@@ -21,7 +21,6 @@ export {
 export {
   PROJECT_PLUGIN_DIR,
   PROJECT_PLUGIN_DIR_NAME,
-  USER_PLUGIN_DIR,
   pluginRoots,
   scanPlugins,
   activePlugins,
@@ -36,7 +35,6 @@ export {
 } from "./discovery";
 
 export {
-  assertPermission,
   describePermission,
   describePermissions,
   invalidPermissions,
@@ -67,7 +65,6 @@ export {
 } from "./hooks";
 
 export {
-  WIRED_PERMISSIONS,
   ensurePluginTools,
   pluginToolStatus,
   resetPluginToolCache,

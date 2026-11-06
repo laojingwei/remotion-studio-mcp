@@ -397,6 +397,9 @@ export const SCENE3D_TOOLS: ToolDef[] = [
       const ops: Record<string, unknown>[] = [];
       // 世界预设放第一个：它会把 lights/ground/post 一起换掉，后面显式给的要能覆盖它
       if (a.worldPreset !== undefined) {
+        // 插件给的配方要先在注册表里，否则 ops 层找不到 id 会报"没有这个世界预设"
+        const { syncPluginWorldSkies } = await import("../plugin/content-sync");
+        syncPluginWorldSkies();
         ops.push({
           op: "set_graph_world",
           sceneId: a.sceneId,
@@ -442,7 +445,17 @@ export const SCENE3D_TOOLS: ToolDef[] = [
         .describe("只列某一类：season=春夏秋冬 / time=晨午昏 / night=夜景与星空 / indoor=室内"),
     },
     run: async (a) => {
-      const { WORLD_SKIES, WORLD_DIR_REL, hdriFileName, hdriDownloadUrl } = await import("../../shared/worldPresets");
+      const { allWorldSkies, worldSkySource, WORLD_DIR_REL, hdriFileName, hdriDownloadUrl } = await import(
+        "../../shared/worldPresets"
+      );
+      /*
+       * 先同步插件贡献的配方。`list_world_skies` 是最可能"刚装完插件就调"的工具，
+       * 只靠请求中间件同步的话，MCP 侧直连（不经 HTTP）就会拿到旧列表。
+       * 代价是一次指纹比对（几个 stat），没变就直接返回。
+       */
+      const { syncPluginWorldSkies } = await import("../plugin/content-sync");
+      const synced = syncPluginWorldSkies();
+      const ALL = allWorldSkies();
       const fs = await import("node:fs");
       const path = await import("node:path");
       const { PUBLIC_DIR } = await import("../store");
@@ -456,7 +469,7 @@ export const SCENE3D_TOOLS: ToolDef[] = [
         files = [];
       }
       const have = new Set(files);
-      const known = new Set(WORLD_SKIES.map((s) => hdriFileName(s.asset)));
+      const known = new Set(ALL.map((s) => hdriFileName(s.asset)));
       const extras = files.filter((f) => !known.has(f));
 
       const groupLabel: Record<string, string> = {
@@ -465,16 +478,25 @@ export const SCENE3D_TOOLS: ToolDef[] = [
         night: "夜与星空",
         indoor: "室内",
       };
-      const list = a.category ? WORLD_SKIES.filter((s) => s.category === a.category) : WORLD_SKIES;
+      const list = a.category ? ALL.filter((s) => s.category === a.category) : ALL;
       if (!list.length) throw new Error(`没有这类预设：${a.category}`);
 
-      const present = WORLD_SKIES.filter((s) => have.has(hdriFileName(s.asset))).length;
+      const present = ALL.filter((s) => have.has(hdriFileName(s.asset))).length;
       const out: string[] = [
-        `世界全景配方（${list.length} / ${WORLD_SKIES.length} 组）· 本机目录 ${dir}`,
-        `本机已有 ${present} / ${WORLD_SKIES.length} 张推荐素材` +
+        `世界全景配方（${list.length} / ${ALL.length} 组）· 本机目录 ${dir}`,
+        `本机已有 ${present} / ${ALL.length} 张推荐素材` +
           (extras.length ? `，另有 ${extras.length} 张不在配方表里的图` : ""),
         "",
       ];
+      /*
+       * 插件配方写坏了必须在这里说。不然用户看到的现象是"我明明加了天空却没有"，
+       * 而唯一的线索（哪一条不合法）只躺在服务端 stdout 里。
+       */
+      if (synced.issues.length) {
+        out.push("⚠ 有插件配方没能加载：");
+        for (const i of synced.issues) out.push(`  · ${i}`);
+        out.push("");
+      }
 
       for (const cat of ["season", "time", "night", "indoor"] as const) {
         const rows = list.filter((s) => s.category === cat);
@@ -482,7 +504,8 @@ export const SCENE3D_TOOLS: ToolDef[] = [
         out.push(`■ ${groupLabel[cat]}`);
         for (const s of rows) {
           const ok = have.has(hdriFileName(s.asset));
-          out.push(`· ${s.id}（${s.label}）  ${ok ? "✅ 已在本机" : "⛔ 缺失"}`);
+          const from = worldSkySource(s.id);
+          out.push(`· ${s.id}（${s.label}）  ${ok ? "✅ 已在本机" : "⛔ 缺失"}${from ? `  〔插件 ${from}〕` : ""}`);
           out.push(`  ${s.note}`);
           out.push(
             `  起始档位：背景 ${s.world.imageIntensity}× / 环境 ${s.world.envIntensity}× / 雾 ${s.world.haze} / 暗角 ${s.world.vignette}` +

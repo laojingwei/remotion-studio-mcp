@@ -8,29 +8,21 @@
  */
 
 import { IMPLEMENTED_PROVIDES, PROVIDE_LABEL, PLUGIN_API_VERSION } from "./manifest";
-import {
-  PROJECT_PLUGIN_DIR,
-  USER_PLUGIN_DIR,
-  pluginRoots,
-  scanPlugins,
-  type DiscoveredPlugin,
-} from "./discovery";
+import { PROJECT_PLUGIN_DIR, pluginRoots, scanPlugins, type DiscoveredPlugin } from "./discovery";
 import path from "node:path";
 import { describePermissions } from "./permissions";
 import { resolvePluginEntry } from "./entry";
 import { HOOK_KINDS, HOOK_LABEL, hasExampleEntry, hookKindsOf, hookStatus } from "./hooks";
-import { WIRED_PERMISSIONS, pluginToolStatus } from "./plugin-tools";
+import { pluginToolStatus } from "./plugin-tools";
 import { pluginToolNamesOf } from "./tool-registry";
 
 const NL = String.fromCharCode(10);
 
 /** 目录存在性：不存在时提示"目录还没建"比直接消失更有用 */
 function rootLines(): string[] {
-  return pluginRoots().map((r) => {
-    const label = r.scope === "project" ? "项目内" : "用户级";
-    const dir = r.scope === "project" ? PROJECT_PLUGIN_DIR : USER_PLUGIN_DIR;
-    return `  ${label}  ${dir}${r.exists ? "" : "（目录不存在，放插件时会自动建）"}`;
-  });
+  return pluginRoots().map(
+    (r) => `  ${PROJECT_PLUGIN_DIR}${r.exists ? "" : "（目录不存在，放插件时会自动建）"}`,
+  );
 }
 
 function pluginBlock(p: DiscoveredPlugin): string[] {
@@ -40,7 +32,7 @@ function pluginBlock(p: DiscoveredPlugin): string[] {
   if (p.errors.length) flags.push("加载失败");
   const badge = flags.length ? `  [${flags.join(" / ")}]` : "";
 
-  out.push(`■ ${p.id}  ${p.name}  v${p.version}  ${p.scope === "project" ? "项目内" : "用户级"}${badge}`);
+  out.push(`■ ${p.id}  ${p.name}  v${p.version}${badge}`);
   out.push(`   路径：${p.pathLabel}`);
 
   /*
@@ -80,15 +72,12 @@ function pluginBlock(p: DiscoveredPlugin): string[] {
 
   // 只有代码插件才会声明权限；L0 插件这里会显示"不需要任何权限"
   const perms = p.manifest?.permissions ?? [];
-  out.push(`   权限：${describePermissions(perms)}`);
   /*
-   * 声明了但这一版没有对应 API 的权限要标出来。
-   * 不标的话，作者会以为写了 "render" 就能渲染，然后花半天查"为什么没效果"。
+   * 这里曾经还有一段「声明了但这一版没有 API」的提示。白名单缩到只有能执法的两条之后
+   * 它永久不会命中——留着就是一段死分支，删掉。未知权限仍会在 parseManifest 里被忽略并警告，
+   * 那条路才是作者写错名字时真正会走到的。
    */
-  const unwired = perms.filter((x) => !WIRED_PERMISSIONS.includes(x));
-  if (unwired.length) {
-    out.push(`   ⚠ ${unwired.join("、")} 本版本没有对应 API：声明了也用不上（目前只接了 ${WIRED_PERMISSIONS.join(" / ")}）`);
-  }
+  out.push(`   权限：${describePermissions(perms)}`);
 
   const toolNames = pluginToolNamesOf(p.id);
   if (toolNames.length) {
@@ -130,15 +119,19 @@ const HOW_TO = [
   "  styles/*.md          风格规则      → list_styles 可见、get_style 可读、apply_style 可套",
   "  styles/presets.json  风格预设      → apply_style 一键落色板/字体/转场",
   "  brief/steps.json     问诊步骤      → intake / save_brief 按你的步骤走（可替换或追加）",
-  "  scenes/<type>.json + <type>.tsx  场景组件 → 选择器里多一种画面（**必须放项目内**，要重新打包）",
+  "  templates/*.json     整片模板      → 模板市场里多一套（create_from_template 可套）",
+  "  scene3d/skies.json   3D 天空配方   → list_world_skies 多几条，set_graph_scene 能套",
+  "  elements/*.json      元素素材      → 元素面板里多几个图标/标签（分类可自定义）",
+  "  scenes/<type>.json + <type>.tsx  场景组件 → 选择器里多一种画面（改了要重新打包）",
   "  plugin.ts            钩子/工具/处理器 → 说意见、改字、清洗素材，或加一个 MCP 工具",
   "  package.json + dist/ 完整工程        → 同上，但可以带自己的 dependencies / 构建脚本 / 原生模块",
   "     · text:transform   字幕/稿件写进工程前改字（术语表、品牌名、口头禅）",
   "     · media:process    新上传的图/音/视频先过一遍（压缩、剥元数据、统一响度）",
-  "放好就生效，不用重启。技能/风格/问诊/钩子/文本/文件处理改完立刻生效；场景组件要等一次自动重新打包（几十秒）。",
+  "放好就生效，不用重启。技能/风格/问诊/3D 天空/整片模板/钩子/文本/文件处理改完立刻生效；场景组件要等一次自动重新打包（几十秒）。",
   "文件处理只对**新上传**生效；要补已有的素材用 reprocess_assets（默认只预览）。",
   "需要更细的控制（版本、作者、权限）时再加 manifest.json；规则与示例见 plugins/README.md。",
-  "元素库、整片模板、3D 配方、转场、特效属于后续批次，现在放进去会被识别但不生效（上面会标「本版本未接入」）。",
+  "只剩 3D 观感（scene3d/looks.json）没接；转场/特效/几何体（scene3d/presets.json）不打算做（见计划文档 9.3）。\n"
+  + "没接的项会被识别但不生效，上面会标「本版本未接入」。",
 ].join(NL);
 
 /** 一个插件都没有时的引导（首次使用最可能看到的就是这个） */

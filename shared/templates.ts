@@ -437,7 +437,78 @@ export const PROJECT_TEMPLATES: ProjectTemplate[] = [
 ];
 
 export const getTemplate = (key: string): ProjectTemplate | undefined =>
-  PROJECT_TEMPLATES.find((t) => t.key === key);
+  allTemplates().find((t) => t.key === key);
+
+/* ─────────────────────── 插件贡献的整片模板 ─────────────────────── */
+
+/**
+ * 插件注册的模板。
+ *
+ * 和 `worldPresets` 同一个套路：`shared/` 不读 fs，服务端读完注入。
+ * web 侧零改动——模板市场本来就只认 `/api/templates`（它调的就是下面的 `templateList()`）。
+ *
+ * 内置优先：模板 key 会被 `create_from_template` / 用户操作记录引用，
+ * 被插件顶掉就是"点进去出来的不是那一套"，排查成本远高于收益。
+ */
+const EXTRA_TEMPLATES: ProjectTemplate[] = [];
+
+const TPL_KEY_RE = /^[a-z0-9][a-z0-9_-]*$/;
+
+/**
+ * 校验并登记一个插件模板。
+ *
+ * 只卡"套用时会炸"的字段：
+ *  - key 非法 / 与内置重名 → 要么选不到，要么选到别的
+ *  - scenes 为空 → 建出来的工程一帧都没有
+ *  - 场景 type / props 是否合法**不在这里查**：那要在 `buildFromTemplate` 里走
+ *    `meta.schema.parse`，而插件场景的 meta 可能后于模板注册——早查会误杀
+ */
+export function registerTemplate(tpl: unknown, source = ""): { ok: boolean; reason?: string } {
+  if (!tpl || typeof tpl !== "object" || Array.isArray(tpl)) {
+    return { ok: false, reason: "模板要是一个对象" };
+  }
+  const t = tpl as Partial<ProjectTemplate>;
+  const key = typeof t.key === "string" ? t.key.trim() : "";
+  if (!TPL_KEY_RE.test(key)) {
+    return { ok: false, reason: `key「${key || "(空)"}」不合法：只能小写字母、数字、下划线、短横线` };
+  }
+  if (PROJECT_TEMPLATES.some((x) => x.key === key)) {
+    return { ok: false, reason: `key「${key}」与内置模板重名（内置优先，换个 key）` };
+  }
+  if (!t.name || typeof t.name !== "string") return { ok: false, reason: `「${key}」缺 name` };
+  if (!Array.isArray(t.scenes) || !t.scenes.length) {
+    return { ok: false, reason: `「${key}」的 scenes 要是非空数组（一个场景都没有的模板建出来是空片）` };
+  }
+  for (const [i, s] of t.scenes.entries()) {
+    if (!s || typeof s !== "object" || typeof (s as TemplateSceneSpec).type !== "string") {
+      return { ok: false, reason: `「${key}」第 ${i + 1} 个场景缺 type` };
+    }
+  }
+
+  const clean: ProjectTemplate = {
+    key,
+    name: t.name,
+    description: typeof t.description === "string" ? t.description : "",
+    tags: Array.isArray(t.tags) ? t.tags.filter((x): x is string => typeof x === "string") : [],
+    scenes: t.scenes as TemplateSceneSpec[],
+  };
+  const at = EXTRA_TEMPLATES.findIndex((x) => x.key === key);
+  if (at >= 0) EXTRA_TEMPLATES[at] = clean;
+  else EXTRA_TEMPLATES.push(clean);
+  void source; // 来源目前只用于日志，模板卡片形态里没有"来源"这个字段
+  return { ok: true };
+}
+
+/** 注销一个插件模板（插件停用/删除时用）；内置的删不掉 */
+export function unregisterTemplate(key: string): boolean {
+  const at = EXTRA_TEMPLATES.findIndex((t) => t.key === key);
+  if (at < 0) return false;
+  EXTRA_TEMPLATES.splice(at, 1);
+  return true;
+}
+
+/** 内置 + 插件，全部模板。**消费点一律用这个** */
+export const allTemplates = (): ProjectTemplate[] => [...PROJECT_TEMPLATES, ...EXTRA_TEMPLATES];
 
 /** 套模板生成工程实例：id/rev/updatedAt 全部新生成，模板本身不可变 */
 export function buildFromTemplate(templateKey: string, name?: string, id?: string): Project {
@@ -475,7 +546,7 @@ export function buildFromTemplate(templateKey: string, name?: string, id?: strin
 
 /** 模板列表（给 Web / MCP 看的精简形态） */
 export function templateList() {
-  return PROJECT_TEMPLATES.map((t) => ({
+  return allTemplates().map((t) => ({
     key: t.key,
     name: t.name,
     description: t.description,

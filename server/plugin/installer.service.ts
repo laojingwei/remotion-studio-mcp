@@ -32,7 +32,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { spawn, type ChildProcess } from "node:child_process";
 import { DATA_ROOT } from "../paths";
-import { PROJECT_PLUGIN_DIR, USER_PLUGIN_DIR, scanPlugins, setPluginEnabled } from "./discovery";
+import { PROJECT_PLUGIN_DIR, scanPlugins, setPluginEnabled, type PluginScope } from "./discovery";
 import { declaresCodeEntry, isBrokenPackage, readPackageJson, resolvePluginEntry, type PackageJson } from "./entry";
 import { resetHookCache } from "./hooks";
 import { resetPluginToolCache } from "./plugin-tools";
@@ -61,7 +61,7 @@ export type InstallJob = {
   kind: InstallSourceKind;
   /** 猜测的目标目录名（下载前就能显示给用户） */
   targetName: string;
-  /** 装到哪个插件根（项目内 / 用户级） */
+  /** 装到哪个插件根（2026-11-06 起只有一个：<repo>/plugins/） */
   scopeRoot: string;
   /** install = 下载并安装；repair = 原地重建 */
   mode: "install" | "repair";
@@ -275,7 +275,7 @@ export function guessTargetName(kind: InstallSourceKind, source: string): string
  */
 export function cleanupPluginStaging(): string[] {
   const cleaned: string[] = [];
-  for (const root of [PROJECT_PLUGIN_DIR, USER_PLUGIN_DIR]) {
+  for (const root of [PROJECT_PLUGIN_DIR]) {
     const dir = path.join(root, STAGING_DIR_NAME);
     if (!fs.existsSync(dir)) continue;
     try {
@@ -688,8 +688,6 @@ export type InstallInput = {
   source: string;
   /** 覆盖目录名（可选） */
   name?: string;
-  /** 装到用户级目录（跨项目）而不是项目内 */
-  scope?: "project" | "user";
   /** 本次安装用的 npm 源；不传就用设置里那个（默认国内镜像） */
   registry?: string;
   /**
@@ -717,7 +715,7 @@ export function startInstall(input: InstallInput): InstallJob {
   }
 
   const targetName = input.name ? safeDirName(input.name) : guessTargetName(kind, raw);
-  const root = input.scope === "user" ? USER_PLUGIN_DIR : PROJECT_PLUGIN_DIR;
+  const root = PROJECT_PLUGIN_DIR;
   const dir = path.join(root, targetName);
 
   if (fs.existsSync(dir)) {
@@ -1179,7 +1177,7 @@ export type OrphanDir = {
   name: string;
   dir: string;
   pathLabel: string;
-  scope: "project" | "user";
+  scope: PluginScope;
   /** 为什么没被当成插件（一句话，界面上直接显示） */
   reason: string;
   bytes: number;
@@ -1202,10 +1200,7 @@ export function scanOrphanDirs(): OrphanDir[] {
   const known = new Set(scanPlugins().map((p) => path.resolve(p.dir)));
   const out: OrphanDir[] = [];
 
-  for (const root of [
-    { dir: PROJECT_PLUGIN_DIR, scope: "project" as const },
-    { dir: USER_PLUGIN_DIR, scope: "user" as const },
-  ]) {
+  for (const root of [{ dir: PROJECT_PLUGIN_DIR, scope: "project" as const }]) {
     if (!fs.existsSync(root.dir)) continue;
     let entries: fs.Dirent[];
     try {
@@ -1291,10 +1286,8 @@ export function removePlugin(id: string): RemoveResult {
   if (!target) throw new Error(`没有 id 为「${id}」的插件`);
 
   const dir = path.resolve(target.dir);
-  const inProject = isInside(dir, PROJECT_PLUGIN_DIR);
-  const inUser = isInside(dir, USER_PLUGIN_DIR);
-  if (!inProject && !inUser) {
-    throw new Error(`拒绝卸载：${dir} 不在任何插件目录内（这不是这个服务该动的东西）`);
+  if (!isInside(dir, PROJECT_PLUGIN_DIR)) {
+    throw new Error(`拒绝卸载：${dir} 不在插件目录内（这不是这个服务该动的东西）`);
   }
 
   const trash = moveToTrash(dir);
@@ -1331,8 +1324,8 @@ function moveToTrash(dir: string): string {
  */
 export function removeOrphanDir(dir: string): { dir: string; trash: string } {
   const abs = path.resolve(dir);
-  if (!isInside(abs, PROJECT_PLUGIN_DIR) && !isInside(abs, USER_PLUGIN_DIR)) {
-    throw new Error(`拒绝删除：${abs} 不在任何插件目录内`);
+  if (!isInside(abs, PROJECT_PLUGIN_DIR)) {
+    throw new Error(`拒绝删除：${abs} 不在插件目录内`);
   }
   // 万一它其实是能识别的插件，也别走这条路径（应该用 removePlugin，会清缓存）
   if (scanPlugins().some((p) => path.resolve(p.dir) === abs)) {

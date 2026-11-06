@@ -24,21 +24,22 @@ export const PLUGIN_API_VERSION = 1;
 /**
  * 插件能贡献的东西。分层见 docs/2026-11-05-插件化架构与实施计划.md。
  *
- * 这里只列**已经被宿主消费**的项。计划里有但还没接的（tool / hook / scene …）
- * 故意不列：列了却不生效，等于给插件作者一个"写了没用"的坑。
+ * 白名单 = **宿主认得的名字**。认不认是一回事、生不生效是另一回事：
+ * 生效的项在下面的 `IMPLEMENTED_PROVIDES` 里，两张表一起决定 `list_plugins` 怎么显示。
+ * 别把只有大纲的东西加进来——写了被忽略比没写更让人迷惑。
  */
 export const PROVIDE_KINDS = [
   /* ── L0 内容层 ── */
   "skill", //            skills/*.md            → list_guides / get_guide
   "style", //            styles/*.md            → list_styles / apply_style
-  "template", //         templates/*.json       → 整片模板
-  "elements", //         elements/*.json        → 元素库
+  "template", //         templates/*.json       → 整片模板（/api/templates）
+  "elements", //         elements/*.json        → 元素库（面板 + list_element_library）
   "scene3d.sky", //      scene3d/skies.json     → 3D 天空 + 打光配方
-  "scene3d.preset", //   scene3d/presets.json   → 3D 母题
-  "scene3d.look", //     scene3d/looks.json     → 3D 观感预设
+  "scene3d.preset", //   scene3d/presets.json   → 3D 母题（不按原方案接，见计划 9.3）
+  "scene3d.look", //     scene3d/looks.json     → 3D 观感预设（未接）
   /* ── L1 注册表层 ── */
   "brief.steps", //      brief/steps.json       → 问诊步骤（替换或追加）
-  "scene", //            scenes/<type>.json + <type>.tsx → 新场景类型（**必须放项目内**）
+  "scene", //            scenes/<type>.json + <type>.tsx → 新场景类型
   "hooks", //            plugin.ts              → 介入流程（自检 / 写入复盘 / 设计锁）
 ] as const;
 
@@ -61,32 +62,49 @@ export const PROVIDE_LABEL: Record<ProvideKind, string> = {
 /**
  * **当前版本真正接了消费方**的贡献项。
  *
- * 为什么要有这张表：`PROVIDE_KINDS` 描述的是架构支持的全集（后面几批会逐个接上），
- * 而 `list_plugins` 面对的是用户——如果它显示"提供：元素库"，用户就会往
- * `elements/` 里放图标然后发现面板没变。**能声明但没生效**是插件系统里最伤人的
- * 一类问题（比直接报错伤人，因为不报错）。所以没接的项必须在输出里标出来。
+ * 为什么要有这张表：`PROVIDE_KINDS` 描述的是架构支持的全集，而 `list_plugins` 面对的是用户——
+ * 如果它显示"提供：元素库"，用户就会往 `elements/` 里放图标然后发现面板没变。
+ * **能声明但没生效**是插件系统里最伤人的一类问题（比直接报错伤人，因为不报错）。
+ * 所以没接的项必须在输出里标出来。
+ *
+ * 2026-11-06：`template` / `scene3d.sky` / `elements` 都已接上消费方
+ * （`server/plugin/content-sync.ts` + 生成文件）。剩下 `scene3d.look` 未接；
+ * `scene3d.preset` 不再按原方案做（见计划文档 9.3，改成 graph 配方）。
  */
-export const IMPLEMENTED_PROVIDES: ProvideKind[] = ["skill", "style", "brief.steps", "scene", "hooks"];
+export const IMPLEMENTED_PROVIDES: ProvideKind[] = [
+  "skill",
+  "style",
+  "brief.steps",
+  "scene",
+  "hooks",
+  "template",
+  "scene3d.sky",
+  "elements",
+];
 
 /**
  * 权限。
  *
- * 目前只有 L0 在用（L0 其实一个权限都不需要——它只提供数据，
- * 不读工程也不写文件），但类型先立起来：
- * 批次 4 的代码插件要靠它拦住"未声明却去写工程"。
+ * L0 插件一个权限都不需要（它只提供数据，不读工程也不写文件）；
+ * 需要权限的只有 L2 代码插件——批次 4b 的 `plugin-tools.ts` 靠它拦住
+ * "没声明却去读/写工程"。
  *
- * `exec` 单独列且默认拒绝：起子进程等于拿到这台机器的一切，
- * 任何插件都不该"顺手"有这个能力。
+ * ## 为什么只有两条（2026-11-06 从 7 条缩到 2 条）
+ *
+ * 原来还有 `assets:read` / `assets:write` / `render` / `net` / `exec`，但这一版**没有任何
+ * 对应 API**。而「能声明却不生效」比「没这个声明」更伤人：插件作者写了 `render`，
+ * 然后花半天查"为什么没效果"。所以按本计划自己的原则，**宁可白名单小**：
+ *
+ * - `assets:*`：需要读素材的钩子走 `media:process`（拿的是 buffer，比开一个读盘 API 更窄），
+ *   需要重跑处理链走 `reprocess_assets` 工具——不需要插件自己摸文件
+ * - `render`：真实诉求是"渲染完通知我"，那是钩子（`ops:review` / 媒体处理），不是权限
+ * - `net`：**永远不执法**。`plugin.ts` 是 `import()` 执行的任意代码，Node 里 `fetch` 本来就能用，
+ *   声明它只是装饰品，反而让人误以为"没声明就联不上网"
+ * - `exec`：**永不开放**。起子进程等于拿到这台机器的一切
+ *
+ * 真要加回来的条件：先有 API、先有执法点、先有调用它的插件——三者缺一就别加进白名单。
  */
-export const PERMISSIONS = [
-  "project:read",
-  "project:write",
-  "assets:read",
-  "assets:write",
-  "render",
-  "net",
-  "exec",
-] as const;
+export const PERMISSIONS = ["project:read", "project:write"] as const;
 
 export type Permission = (typeof PERMISSIONS)[number];
 

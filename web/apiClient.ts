@@ -1167,7 +1167,7 @@ export type PluginItem = {
   name: string;
   version: string;
   dir: string;
-  scope: "project" | "user";
+  scope: "project";
   pathLabel: string;
   provides: string[];
   enabled: boolean;
@@ -1222,7 +1222,7 @@ export type OrphanDir = {
   name: string;
   dir: string;
   pathLabel: string;
-  scope: "project" | "user";
+  scope: "project";
   reason: string;
   bytes: number;
   sizeTruncated: boolean;
@@ -1232,14 +1232,13 @@ export type PluginSourceInfo = {
   kind: "git" | "npm" | "local" | null;
   name?: string;
   dir?: string;
-  scope?: "project" | "user";
   exists?: boolean;
   reason?: string;
 };
 
 export async function fetchPlugins(): Promise<{
   plugins: PluginItem[];
-  roots: { dir: string; scope: "project" | "user"; exists: boolean }[];
+  roots: { dir: string; scope: "project"; exists: boolean }[];
   trashDir: string;
   orphans: OrphanDir[];
 }> {
@@ -1250,11 +1249,8 @@ export async function fetchPlugins(): Promise<{
 }
 
 /** 来源预检：只判定类型与目标目录，不下载 */
-export async function detectPluginSource(
-  source: string,
-  scope: "project" | "user" = "project",
-): Promise<PluginSourceInfo> {
-  const res = await jfetch(`/api/plugins/detect?source=${encodeURIComponent(source)}&scope=${scope}`);
+export async function detectPluginSource(source: string): Promise<PluginSourceInfo> {
+  const res = await jfetch(`/api/plugins/detect?source=${encodeURIComponent(source)}`);
   const data = await res.json();
   if (!res.ok) throw new Error(data.error ?? "识别失败");
   return data;
@@ -1263,7 +1259,6 @@ export async function detectPluginSource(
 export async function installPlugin(input: {
   source: string;
   name?: string;
-  scope?: "project" | "user";
   /** 本次用哪个 npm 源；不传就用设置里保存的那个 */
   registry?: string;
   /** 跳过"是不是插件"的预检（用户已确认） */

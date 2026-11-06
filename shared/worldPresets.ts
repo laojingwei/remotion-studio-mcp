@@ -243,13 +243,117 @@ export const WORLD_SKIES: WorldSkyPreset[] = [
   },
 ];
 
+/* ─────────────────────── 插件贡献的天空预设 ─────────────────────── */
+
+/**
+ * 插件注册的天空配方。
+ *
+ * ## 为什么放这里而不是"服务端自己维护一张表"
+ *
+ * 消费点有两个（`server/tools/scene3d.ts` 的列表、`shared/ops.ts` 的 `worldPreset` 展开），
+ * 而 `ops.ts` 是**纯函数、不带 fs**——它只认这张表。所以注册表必须落在 shared，
+ * 由服务端在启动/插件变化时注入。`shared/sceneMetas.ts#registerSceneMeta` 是同一个套路。
+ *
+ * ## 内置优先
+ *
+ * 插件不能覆盖内置 id。理由与技能/风格一致：agent 的技能指南会引用 `golden-hour` 这类
+ * 具体 id，被插件顶掉就是"文档说的和图出来的不是一个东西"。
+ */
+const EXTRA_SKIES: WorldSkyPreset[] = [];
+
+/** id → 来源插件（`list_world_skies` 要标出"这条是插件给的"，出图不对时才知道找谁） */
+const SKY_SOURCE = new Map<string, string>();
+
+const SKY_ID_RE = /^[a-z0-9][a-z0-9-]*$/;
+const SKY_CATEGORIES = new Set(["season", "time", "night", "indoor"]);
+
+/**
+ * 校验并登记一条插件天空配方。
+ *
+ * 校验只卡"用了会出事"的字段，不做完整 schema：
+ *  - `id` 非法 → 无法被 `worldPreset` 引用（这里不拦，后面报错更难定位）
+ *  - `asset` 空 → 拼不出文件名，画面会静默退回渐变天空
+ *  - `world.*` 必须是数字 → 写错类型会变成 `NaN × 不确定`，渲染端不报错只发黑
+ */
+export function registerWorldSky(preset: unknown, source = ""): { ok: boolean; reason?: string } {
+  if (!preset || typeof preset !== "object" || Array.isArray(preset)) {
+    return { ok: false, reason: "天空配方要是一个对象" };
+  }
+  const p = preset as Partial<WorldSkyPreset>;
+  const id = typeof p.id === "string" ? p.id.trim() : "";
+  if (!SKY_ID_RE.test(id)) {
+    return { ok: false, reason: `id「${id || "(空)"}」不合法：只能小写字母、数字、短横线` };
+  }
+  if (WORLD_SKIES.some((s) => s.id === id)) {
+    return { ok: false, reason: `id「${id}」与内置配方重名（内置优先，换个 id）` };
+  }
+  if (!p.label || typeof p.label !== "string") return { ok: false, reason: `「${id}」缺 label（中文名）` };
+  if (!p.asset || typeof p.asset !== "string") {
+    return { ok: false, reason: `「${id}」缺 asset（全景图资产 id，文件名与下载地址都由它拼）` };
+  }
+  if (!p.category || !SKY_CATEGORIES.has(p.category)) {
+    return { ok: false, reason: `「${id}」的 category 必须是 season / time / night / indoor` };
+  }
+  const w = p.world as WorldSkyPreset["world"] | undefined;
+  if (!w || typeof w !== "object") return { ok: false, reason: `「${id}」缺 world（起始档位）` };
+  for (const k of ["imageIntensity", "envIntensity", "haze", "vignette"] as const) {
+    if (typeof w[k] !== "number" || !Number.isFinite(w[k])) {
+      return { ok: false, reason: `「${id}」的 world.${k} 必须是数字` };
+    }
+  }
+  if (p.lights !== undefined && !Array.isArray(p.lights)) {
+    return { ok: false, reason: `「${id}」的 lights 必须是数组` };
+  }
+
+  const clean: WorldSkyPreset = {
+    id,
+    label: p.label,
+    asset: p.asset,
+    category: p.category,
+    note: typeof p.note === "string" ? p.note : "",
+    world: {
+      imageIntensity: w.imageIntensity,
+      envIntensity: w.envIntensity,
+      haze: w.haze,
+      vignette: w.vignette,
+      ...(typeof w.imageRotation === "number" ? { imageRotation: w.imageRotation } : {}),
+    },
+    ...(p.lights ? { lights: p.lights } : {}),
+    ...(p.post ? { post: p.post } : {}),
+    ...(p.ground ? { ground: p.ground } : {}),
+  };
+
+  // 同 id 重复注册 = 文件被改了，直接替换（幂等，不需要先注销）
+  const at = EXTRA_SKIES.findIndex((s) => s.id === id);
+  if (at >= 0) EXTRA_SKIES[at] = clean;
+  else EXTRA_SKIES.push(clean);
+  if (source) SKY_SOURCE.set(id, source);
+  return { ok: true };
+}
+
+/** 注销一条插件配方（插件停用/删除时用）；内置的删不掉 */
+export function unregisterWorldSky(id: string): boolean {
+  const at = EXTRA_SKIES.findIndex((s) => s.id === id);
+  if (at < 0) return false;
+  EXTRA_SKIES.splice(at, 1);
+  SKY_SOURCE.delete(id);
+  return true;
+}
+
+/** 内置 + 插件，全部可选配方。**消费点一律用这个，不要直接用 `WORLD_SKIES`** */
+export const allWorldSkies = (): WorldSkyPreset[] => [...WORLD_SKIES, ...EXTRA_SKIES];
+
+/** 这条配方来自哪个插件（内置返回空串） */
+export const worldSkySource = (id: string): string => SKY_SOURCE.get(id) ?? "";
+
 /** 按 id 找预设；也接受 Poly Haven 资产 id 或文件名（agent 常把路径和 id 混着给） */
 export const findWorldSky = (id: string): WorldSkyPreset | undefined => {
   const key = id.trim();
   const bare = key.replace(/^.*\//, "").replace(/_2k\.hdr$/i, "");
+  const all = allWorldSkies();
   return (
-    WORLD_SKIES.find((s) => s.id === key) ??
-    WORLD_SKIES.find((s) => s.asset === key) ??
-    WORLD_SKIES.find((s) => s.asset === bare)
+    all.find((s) => s.id === key) ??
+    all.find((s) => s.asset === key) ??
+    all.find((s) => s.asset === bare)
   );
 };

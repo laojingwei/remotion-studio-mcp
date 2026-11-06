@@ -16,7 +16,7 @@ import { DATA_ROOT } from "../paths";
 import { CONFIRM_GROUPS, briefCoverage, briefProgress, briefToText, confirmBrief, legacyFieldNotice, readBrief, recomputeDesignLock, saveBrief, sceneCountHint, stepMissingFields, type Brief } from "../brief.service";
 import { listNarrationClips, markVoiceHeard, narrationFingerprint, voiceHeardState } from "../narration-voice.service";
 import { readStoryboard, saveStoryboard, storyboardToText, type Storyboard } from "../storyboard.service";
-import { ELEMENT_LIBRARY, elementFromLibrary } from "../../shared/elementLibrary";
+import { elementFromLibrary } from "../../shared/elementLibrary";
 import {
   assetIdOf,
   assetToElement,

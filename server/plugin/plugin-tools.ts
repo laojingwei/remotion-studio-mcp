@@ -17,10 +17,12 @@
  *
  * 这条写在文档里比写在代码里重要——不能让"声明式权限"给人一种被隔离的错觉。
  *
- * ## 只读/写两条能力，其余先不开
+ * ## 只开读/写两条，其余已从白名单里删掉
  *
- * `render` / `net` / `exec` / `assets:*` 在 `PERMISSIONS` 里有定义，但这一版**没有对应 API**。
- * 声明了也用不上，`list_plugins` 会标出来。与其给一个半成品接口，不如先只开最需要的两条。
+ * 2026-11-06 起 `PERMISSIONS` 只有 `project:read` / `project:write`——这是**唯一**有 API
+ * 也有执法点的两条。`assets:*` / `render` / `net` / `exec` 原来只是定义，声明了也用不上，
+ * 已按计划原则（能声明却不生效比没这个声明更伤人）从白名单移除，理由写在 `manifest.ts`。
+ * 所以这里不再需要"哪些接了"这张对照表：**白名单里的就是能用的**。
  */
 
 import type { Permission, PluginManifest } from "./manifest";
@@ -33,9 +35,6 @@ import { replacePluginTools, pluginToolEntries, type PluginToolEntry } from "./t
 import { listProjectIds, readProject } from "../store";
 import { projects } from "../project.service";
 import type { ToolDef } from "../tools/_shared";
-
-/** 这一版真正接了 API 的权限（其余只有定义，见文件头） */
-export const WIRED_PERMISSIONS: Permission[] = ["project:read", "project:write"];
 
 export type PluginToolError = { pluginId: string; message: string };
 

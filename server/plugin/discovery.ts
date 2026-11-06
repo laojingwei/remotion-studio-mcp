@@ -10,19 +10,24 @@
  * 对比一下：技能库（`server/skills.service.ts`）本来就是每次读文件，
  * 所以它天然热更新。这里沿用同一个选择，不引入新的一致性风险。
  *
- * ## 双目录
+ * ## 单目录：只有 `<repo>/plugins/`
  *
- *   <repo>/plugins/                项目内，随仓库共享
- *   ~/.remotion-studio/plugins/    用户级，跨项目、升级不覆盖
+ * 2026-11-06 删掉了原来的用户级目录（`~/.remotion-studio/plugins/`）。当时的理由有两条，
+ * 现在两条都不成立了：
  *
- * 两个都扫、都启用。同名 id 时**项目内优先**（项目内的是这个项目专用的，
- * 用户级的可能是通用件，项目内也应该有能力覆盖它）。
+ * 1. "放仓库里会被 git pull / npm update 覆盖" —— `/plugins/*` 已经在 `.gitignore` 里，
+ *    这条从来没发生过
+ * 2. "用户级才能跨项目" —— `plugins/` 是**安装级**目录（`ROOT/plugins`，不是 `data/projects/<id>/`），
+ *    同一份安装下的所有工程本来就共用它。用户级并不额外提供什么
  *
- * `STUDIO_PLUGINS_DIR` 可覆盖项目内目录——测试用临时目录，不碰真实插件。
+ * 而它的代价是实打实的：渲染类插件（场景组件）要靠 `gen-entry` 生成静态 import 才能进 bundle，
+ * webpack 的 loader 与 tsconfig 的 include 都覆盖不到家目录——装在用户级就是**装上了但不生效**，
+ * 且宿主不报错。一个"选错了就静默没用"的入口，不如没有。
+ *
+ * `STUDIO_PLUGINS_DIR` 可覆盖这个目录——测试用临时目录，不碰真实插件。
  */
 
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import { ROOT } from "../root";
 import { DATA_ROOT } from "../paths";
@@ -45,14 +50,17 @@ export const PROJECT_PLUGIN_DIR = overrideDir
   ? path.resolve(overrideDir)
   : path.join(ROOT, PROJECT_PLUGIN_DIR_NAME);
 
-/** 用户级插件目录（跨项目） */
-export const USER_PLUGIN_DIR = path.join(os.homedir(), ".remotion-studio", "plugins");
-
 /** 启用状态文件（放 data/ 下，跟 tts-config.json 同一层） */
 export const PLUGIN_STATE_FILE = path.join(DATA_ROOT, "plugins.json");
 const STATE_FILE = PLUGIN_STATE_FILE;
 
-export type PluginScope = "project" | "user";
+/**
+ * 插件装在哪。
+ *
+ * 只剩一个值了，类型故意不删：`DiscoveredPlugin.scope` / `PluginRoot.scope` 上还带着它，
+ * 界面上要显示"装在哪"，而且哪天真的再分出第二个根，改的是这里而不是十几个调用点。
+ */
+export type PluginScope = "project";
 
 export type DiscoveredPlugin = {
   id: string;
@@ -61,7 +69,7 @@ export type DiscoveredPlugin = {
   version: string;
   dir: string;
   scope: PluginScope;
-  /** 相对项目根的展示路径；用户级目录显示为绝对路径的 ~ 缩写 */
+  /** 相对工程根的展示路径 */
   pathLabel: string;
   /** 无 manifest 时为 null（隐式插件，按目录结构推断） */
   manifest: PluginManifest | null;
@@ -74,12 +82,9 @@ export type DiscoveredPlugin = {
 
 export type PluginRoot = { dir: string; scope: PluginScope; exists: boolean };
 
-/** 两个插件根目录（顺序 = 优先级：项目内在前） */
+/** 插件根目录。只有一个——用户级目录已在 2026-11-06 删除，理由见文件头 */
 export function pluginRoots(): PluginRoot[] {
-  return [
-    { dir: PROJECT_PLUGIN_DIR, scope: "project", exists: fs.existsSync(PROJECT_PLUGIN_DIR) },
-    { dir: USER_PLUGIN_DIR, scope: "user", exists: fs.existsSync(USER_PLUGIN_DIR) },
-  ];
+  return [{ dir: PROJECT_PLUGIN_DIR, scope: "project", exists: fs.existsSync(PROJECT_PLUGIN_DIR) }];
 }
 
 /**
@@ -204,11 +209,9 @@ function safeReadDir(dir: string): fs.Dirent[] {
   }
 }
 
-const label = (dir: string, scope: PluginScope): string => {
-  if (scope === "project") return path.relative(ROOT, dir).split(path.sep).join("/") || ".";
-  const home = os.homedir();
-  return dir.startsWith(home) ? "~" + dir.slice(home.length).split(path.sep).join("/") : dir;
-};
+/** 展示路径：相对工程根（插件都在 `plugins/` 下，不再有 `~` 缩写那种形态） */
+const label = (dir: string, _scope: PluginScope): string =>
+  path.relative(ROOT, dir).split(path.sep).join("/") || ".";
 
 /**
  * 扫描全部插件。**每次现扫**（见文件头注释：这是热更新的实现方式）。

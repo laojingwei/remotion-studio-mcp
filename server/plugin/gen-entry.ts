@@ -7,11 +7,12 @@
  * `require(任意运行时路径)` 或 `import(variable)` 会打进一个空壳，运行时报找不到模块。
  * 唯一可靠的办法是让这些路径在**编译期就是字面量**，也就是生成一个真代码文件。
  *
- * ## 为什么只扫项目内的 plugins/
+ * ## 为什么只扫 `<repo>/plugins/`
  *
- * `~/.remotion-studio/plugins/` 在项目外，webpack 的 loader 规则与 tsconfig 的
- * include 都覆盖不到。所以规则是：
- * **内容类插件（技能/风格/问诊）可以放用户级；渲染类（场景组件）必须放项目内。**
+ * webpack 的 loader 规则与 tsconfig 的 include 都只覆盖工程根之内。
+ * 2026-11-06 之前还有一个用户级目录（家目录下），它恰好落在这个范围之外——
+ * 装进去的场景组件永远打不进 bundle，且宿主不报错。那个目录已经删了，
+ * 现在"插件目录"和"能被打包的目录"是同一个，这个坑从结构上消失了。
  *
  * ## 谁会调它
  *
@@ -23,7 +24,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { ROOT } from "../root";
-import { PROJECT_PLUGIN_DIR } from "./discovery";
+import { PROJECT_PLUGIN_DIR, isPluginEnabled, scanPlugins } from "./discovery";
 import { pluginBriefSteps } from "./brief-steps";
 
 /** 生成文件的默认位置（相对工程根） */
@@ -35,9 +36,18 @@ export type PluginSceneEntry = {
   pluginId: string;
 };
 
+/** 插件贡献的元素（纯数据，没有组件文件可配对） */
+export type PluginElementEntry = {
+  file: string;
+  pluginId: string;
+  items: unknown[];
+};
+
 export type GenResult = {
   changed: boolean;
   count: number;
+  /** 顺带生成进去的插件元素条数（0 = 没有这类插件） */
+  elementCount: number;
   issues: string[];
   outFile: string;
 };
@@ -102,26 +112,105 @@ export function discoverSceneEntries(pluginDir = PROJECT_PLUGIN_DIR): { entries:
   return { entries: entries.sort((a, b) => a.metaFile.localeCompare(b.metaFile)), issues };
 }
 
-function render(entries: PluginSceneEntry[], issues: string[], outDir: string): string {
+/**
+ * 扫出插件贡献的元素（`elements/*.json`）。
+ *
+ * ## 为什么这里要按启用状态过滤，而场景不用
+ *
+ * 场景的可见性由服务端 `/api/scene-types` 决定（那里已经过滤了停用插件），所以
+ * 生成文件里多注册几个不影响用户看到什么。元素不一样：它的可见性**就在客户端注册表里**
+ * （面板直接读 `allLibraryItems()`），不过滤的话"停用了插件的图标还挂在面板里"。
+ *
+ * 文件形态三种都收：`{"elements":[...]}` / `[...]` / 单个元素对象。
+ */
+export function discoverElementEntries(
+  pluginDir = PROJECT_PLUGIN_DIR,
+): { entries: PluginElementEntry[]; issues: string[] } {
+  const entries: PluginElementEntry[] = [];
+  const issues: string[] = [];
+  // 用 scanPlugins 取启用状态：id 可能来自 manifest（不等于目录名），别自己再算一遍
+  const enabled = new Set(
+    scanPlugins()
+      .filter((p) => p.enabled && !p.errors.length)
+      .map((p) => path.resolve(p.dir)),
+  );
+
+  for (const plugin of safeDir(pluginDir)) {
+    if (!plugin.isDirectory() || plugin.name.startsWith(".") || plugin.name === "node_modules") continue;
+    const dir = path.join(pluginDir, plugin.name);
+    if (!enabled.has(path.resolve(dir))) continue;
+    const elementsDir = path.join(dir, "elements");
+    if (!fs.existsSync(elementsDir)) continue;
+
+    for (const f of safeDir(elementsDir)) {
+      if (!f.isFile() || !f.name.toLowerCase().endsWith(".json")) continue;
+      const file = path.join(elementsDir, f.name);
+      let raw: unknown;
+      try {
+        raw = JSON.parse(fs.readFileSync(file, "utf8"));
+      } catch (err) {
+        issues.push(`${plugin.name}/elements/${f.name} 解析失败：${err instanceof Error ? err.message : String(err)}`);
+        continue;
+      }
+      const items = Array.isArray(raw)
+        ? raw
+        : raw && typeof raw === "object" && Array.isArray((raw as { elements?: unknown }).elements)
+          ? ((raw as { elements: unknown[] }).elements as unknown[])
+          : raw && typeof raw === "object" && "id" in raw
+            ? [raw]
+            : null;
+      if (!items) {
+        issues.push(`${plugin.name}/elements/${f.name} 的形态不对：要 {"elements":[...]}、[...] 或 {"id":"...", ...}`);
+        continue;
+      }
+      entries.push({ file, pluginId: plugin.name, items });
+    }
+  }
+
+  return { entries: entries.sort((a, b) => a.file.localeCompare(b.file)), issues };
+}
+
+function render(
+  entries: PluginSceneEntry[],
+  elements: PluginElementEntry[],
+  issues: string[],
+  outDir: string,
+): string {
   const header = [
     "/* eslint-disable */",
     "/**",
     " * 这个文件由 server/plugin/gen-entry.ts 生成，**不要手改**。",
-    " * 它把插件场景的组件与 meta 以静态 import 的方式引入 bundle ——",
+    " * 它把插件的场景组件、meta、元素以静态 import / 内联数据的方式引入 bundle ——",
     " * 渲染端是 webpack 静态分析，运行时加载任意路径会失败。",
     " *",
-    " * 改了插件之后：服务端重新打包前会自动重新生成（见 render.service.ts）。",
+    " * 改了插件之后：服务端会在插件变化时自动重新生成（见 content-sync.ts 的 ensurePluginEntryFresh）。",
     " */",
   ];
 
-  // 空插件时只留占位数组：import 了却不调用会被 lint 判未使用
-  if (!entries.length) {
+  const issueLines = issues.length ? ["", ...issues.map((i) => `// ⚠ ${i}`)] : [];
+
+  /*
+   * 元素是纯数据，直接内联成字面量，不需要 import 什么文件。
+   * 这也是它比场景简单的地方：没有 loader/路径问题，只要内容对就能用。
+   */
+  const elementRows: string[] = [];
+  for (const e of elements) {
+    elementRows.push(
+      `  { from: ${JSON.stringify(e.pluginId)}, file: ${JSON.stringify(path.basename(e.file))}, items: ${JSON.stringify(e.items)} },`,
+    );
+  }
+
+  // 两样都没有：只留占位数组，让编译不依赖"装没装插件"
+  if (!entries.length && !elements.length) {
     return [
       ...header,
-      ...(issues.length ? ["", ...issues.map((i) => `// ⚠ ${i}`)] : []),
+      ...issueLines,
       "",
-      '/** 没有插件场景时的占位：保持文件存在，让编译不依赖「装没装插件」 */',
+      "/** 没有插件场景时的占位：保持文件存在，让编译不依赖「装没装插件」 */",
       "export const PLUGIN_SCENES: { meta: unknown; Component: unknown; from: string; file: string }[] = [];",
+      "",
+      "/** 没有插件元素时的占位 */",
+      "export const PLUGIN_ELEMENTS: { from: string; file: string; items: unknown[] }[] = [];",
       "",
     ].join("\n");
   }
@@ -131,9 +220,10 @@ function render(entries: PluginSceneEntry[], issues: string[], outDir: string): 
     'import { jsonToSceneMeta } from "../shared/pluginSceneMeta";',
     'import { registerSceneMeta } from "../shared/sceneMetas";',
     'import { registerSceneComponent } from "./scenes/components";',
+    'import { registerLibraryItem } from "../shared/elementLibrary";',
   ];
 
-  if (issues.length) lines.push("", ...issues.map((i) => `// ⚠ ${i}`));
+  if (issueLines.length) lines.push(...issueLines);
 
   const rows: string[] = [];
   entries.forEach((e, i) => {
@@ -171,6 +261,18 @@ function render(entries: PluginSceneEntry[], issues: string[], outDir: string): 
     "  }",
     "  registerSceneComponent(parsed.meta.type, c.Component);",
     "}",
+    "",
+    "/** 插件元素：纯数据，注册即生效（面板/预览/时间轴读的是同一份注册表） */",
+    "export const PLUGIN_ELEMENTS: { from: string; file: string; items: unknown[] }[] = [",
+    ...elementRows,
+    "];",
+    "",
+    "for (const e of PLUGIN_ELEMENTS) {",
+    "  for (const item of e.items) {",
+    "    const r = registerLibraryItem(item);",
+    "    if (!r.ok) console.warn('[plugin] 元素 ' + e.from + '/' + e.file + ' 已跳过：' + r.reason);",
+    "  }",
+    "}",
   );
 
   return lines.join("\n") + "\n";
@@ -188,7 +290,9 @@ export function generatePluginEntry(opts: { pluginDir?: string; outFile?: string
   const outDir = path.dirname(outFile);
 
   const { entries, issues } = discoverSceneEntries(pluginDir);
-  const next = render(entries, issues, outDir);
+  const els = discoverElementEntries(pluginDir);
+  const allIssues = [...issues, ...els.issues];
+  const next = render(entries, els.entries, allIssues, outDir);
 
   let prev = "";
   try {
@@ -206,6 +310,7 @@ export function generatePluginEntry(opts: { pluginDir?: string; outFile?: string
   // 问诊插件的读取问题顺带报出来：它和场景插件是同一批目录，
   // 让用户在一次输出里看到全部问题，不用逐个工具试
   const briefIssues = pluginBriefSteps().issues;
+  const elementCount = els.entries.reduce((n, e) => n + e.items.length, 0);
 
-  return { changed, count: entries.length, issues: [...issues, ...briefIssues], outFile };
+  return { changed, count: entries.length, elementCount, issues: [...allIssues, ...briefIssues], outFile };
 }
