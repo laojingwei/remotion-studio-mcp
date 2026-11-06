@@ -336,6 +336,8 @@ export const SCENE3D_TOOLS: ToolDef[] = [
     name: "set_graph_scene",
     description:
       "改 scene3d 的**场景级**设置（不是某个节点）：相机、光源、世界/地面、粒子、后期。只传要改的那几项，其余保持原样；传 null 表示清掉（恢复默认）。\n" +
+      "**graphPreset**：整套换成插件提供的图形配方（list_graph_presets 查）。"
+      + "它会**替换**现有 graph（不是合并），之后就是普通 graph，可继续用节点工具改。\n" +
       "相机：{position:[0,2,8], target:[0,0,0], fov:42, orbit:{degPerSec:6}}；" +
       "运镜段里想**锁定看向某个会动的节点**（行星、飘的物体）用 anim[].lookAt:\"节点id\"" +
       "（target 每帧重算，targetX/Y/Z 在该段失效；退出锁定=下一段不给 lookAt 且不写 from.target，镜头会自动接上）；" +
@@ -381,6 +383,13 @@ export const SCENE3D_TOOLS: ToolDef[] = [
             "dawn-field / misty-morning / overcast / golden-hour / city-night / milky-way / warehouse / apartment。" +
             "整组套用：背景图 + imageIntensity/envIntensity 标定 + 补光 + 地面 + 后期；world 里的字段可再覆盖",
         ),
+      graphPreset: z
+        .string()
+        .optional()
+        .describe(
+          "图形配方 id（list_graph_presets 查）：整套替换成插件给的 graph，等于「换一个起手图」。" +
+            "**会替换现有 graph**，其它场景级参数（world/camera/lights）照常叠加在它之上",
+        ),
       ground: z
         .record(z.any())
         .nullable()
@@ -395,6 +404,24 @@ export const SCENE3D_TOOLS: ToolDef[] = [
     },
     run: async (a) => {
       const ops: Record<string, unknown>[] = [];
+      /*
+       * 配方放最前：它替换整个 graph，后面显式给的相机/灯/世界要能覆盖配方里的设定。
+       * 先同步注册表，否则刚装的插件在 MCP 直连路径上会取不到。
+       */
+      if (a.graphPreset !== undefined) {
+        const { syncPluginGraphPresets } = await import("../plugin/content-sync");
+        syncPluginGraphPresets();
+        const { graphPresetOf, allGraphPresets } = await import("../../shared/scene3dPresets");
+        const preset = graphPresetOf(a.graphPreset);
+        if (!preset) {
+          const ids = allGraphPresets().map((p) => p.id);
+          throw new Error(
+            `没有这个图形配方「${a.graphPreset}」。` +
+              (ids.length ? `可用：${ids.join("、")}（详情用 list_graph_presets）` : "当前没有任何插件提供配方（plugins/<名>/scene3d/presets.json）"),
+          );
+        }
+        ops.push({ op: "update_scene", sceneId: a.sceneId, patch: { graph: preset.graph } });
+      }
       // 世界预设放第一个：它会把 lights/ground/post 一起换掉，后面显式给的要能覆盖它
       if (a.worldPreset !== undefined) {
         // 插件给的配方要先在注册表里，否则 ops 层找不到 id 会报"没有这个世界预设"
@@ -415,7 +442,7 @@ export const SCENE3D_TOOLS: ToolDef[] = [
       if (a.post !== undefined) ops.push({ op: "set_graph_post", sceneId: a.sceneId, post: a.post });
       if (!ops.length) {
         throw new Error(
-          "set_graph_scene 没有要改的东西：给 camera / lights / world / worldPreset / ground / particles / post 之一",
+          "set_graph_scene 没有要改的东西：给 camera / lights / world / worldPreset / ground / particles / post / graphPreset 之一",
         );
       }
       const p = await resolveProject(a.projectId);
@@ -529,6 +556,53 @@ export const SCENE3D_TOOLS: ToolDef[] = [
           `${WORLD_DIR_REL}/（.hdr 约 5–7MB，2048×1024），要么让用户提供，要么先用渐变（world.mode=gradient）顶上。`,
       );
       out.push("换完抽一帧：背景有没有过曝 / 主体还读不读得出来 / 影子方向和照片里的太阳对不对。");
+      return out.join("\n");
+    },
+  },
+  {
+    name: "list_graph_presets",
+    description:
+      "列出插件提供的**图形配方**（graph 配方）：一套现成的起手图，含几何/材质/灯光/相机，"
+      + "用 set_graph_scene { graphPreset: \"id\" } 一套换掉当前 graph，之后可继续用节点工具改。\n" +
+      "⚠ 内置的 6 个母题（orbit-core / particle-field / grid-horizon / explode-parts / waveform / globe-arc）"
+      + "**不在这里**——它们是代码画死的预置画面，用 add_scene / update_scene 的 `preset` 字段选。"
+      + "这个工具只列插件贡献的配方。\n" +
+      "什么时候用：① 想让 agent 从一套成型画面起步，而不是从空白画布搭；② 用户说「有没有现成的 XX 场景」。\n" +
+      "自己搭的话：get_graph 看当前结构、add_graph_node 加物体；配方的 JSON 写法见 get_guide('scene3d')。",
+    shape: {},
+    run: async () => {
+      const { syncPluginGraphPresets } = await import("../plugin/content-sync");
+      const synced = syncPluginGraphPresets();
+      const { allGraphPresets } = await import("../../shared/scene3dPresets");
+      const list = allGraphPresets();
+
+      const out: string[] = [];
+      if (synced.issues.length) {
+        out.push("⚠ 有配方没能加载：");
+        for (const i of synced.issues) out.push(`  · ${i}`);
+        out.push("");
+      }
+      if (!list.length) {
+        out.push("当前没有插件提供图形配方。");
+        out.push("");
+        out.push("放法：plugins/<名>/scene3d/presets.json，内容形如");
+        out.push('  { "presets": [ { "id": "my-hero", "label": "开场大件", "summary": "一句话说明适合讲什么", "graph": { "nodes": [...] } } ] }');
+        out.push("graph 的完整写法见 get_guide('scene3d')，或先用 get_graph 拿一份现成的照抄。");
+        return out.join("\n");
+      }
+
+      out.push(`插件图形配方（${list.length} 套）`);
+      for (const p of list) {
+        const nodes = Array.isArray((p.graph as { nodes?: unknown[] }).nodes) ? (p.graph as { nodes: unknown[] }).nodes.length : 0;
+        const cam = (p.graph as { camera?: { anim?: unknown[] } }).camera;
+        const anim = Array.isArray(cam?.anim) ? cam!.anim!.length : 0;
+        out.push(`· ${p.id}（${p.label}）`);
+        if (p.summary) out.push(`  ${p.summary}`);
+        out.push(`  ${nodes} 个节点${anim ? ` · 相机 ${anim} 段运镜` : " · 固定机位"}${p.from ? ` · 来自插件 ${p.from}` : ""}`);
+      }
+      out.push("");
+      out.push('套用：set_graph_scene { sceneId: "scene_xxx", graphPreset: "id" }');
+      out.push("⚠ 套用是**替换**整个 graph（不是合并）。套完抽一帧看构图，再决定要不要补光/改机位。");
       return out.join("\n");
     },
   },

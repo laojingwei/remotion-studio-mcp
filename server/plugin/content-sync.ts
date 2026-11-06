@@ -27,6 +27,7 @@ import { registerWorldSky, unregisterWorldSky } from "../../shared/worldPresets"
 import { registerTemplate, unregisterTemplate } from "../../shared/templates";
 import { registerLibraryItem, unregisterLibraryItem } from "../../shared/elementLibrary";
 import { registerLook, unregisterLook } from "../../shared/scene3dLooks";
+import { registerGraphPreset, unregisterGraphPreset } from "../../shared/scene3dPresets";
 
 type Candidate = { file: string; pluginId: string };
 
@@ -366,6 +367,71 @@ export function syncPluginLooks(): { count: number; issues: string[] } {
 
 /** 诊断用：当前由插件提供的 look id */
 export const pluginLookIds = (): string[] => [...ownedLooks].sort();
+
+/* ────────────────────── 3D 母题配方（graph 配方） ────────────────────── */
+
+const ownedPresets = new Set<string>();
+let presetKey = "";
+let presetIssues: string[] = [];
+
+/**
+ * 把 `scene3d/presets.json` 登记进 `shared/scene3dPresets`。
+ *
+ * **不进生成文件**：配方只在"套用那一刻"被读一次，写进工程后就是普通 graph，
+ * 渲染端不需要知道它从哪来。所以只有服务端这一条通道。
+ */
+export function syncPluginGraphPresets(): { count: number; issues: string[] } {
+  const key = fingerprint(candidateFiles(path.join("scene3d", "presets.json")));
+  if (key === presetKey) return { count: ownedPresets.size, issues: [...presetIssues] };
+
+  const files = pluginFiles("scene3d.preset", ".json");
+  const issues: string[] = [];
+  const seen = new Set<string>();
+
+  for (const { file, pluginId } of files) {
+    const where = `${pluginId}/scene3d/presets.json`;
+    let raw: unknown;
+    try {
+      raw = JSON.parse(fs.readFileSync(file, "utf8"));
+    } catch (err) {
+      issues.push(`${where} 解析失败：${err instanceof Error ? err.message : String(err)}`);
+      continue;
+    }
+    const list: unknown[] = Array.isArray(raw)
+      ? raw
+      : raw && typeof raw === "object" && Array.isArray((raw as { presets?: unknown }).presets)
+        ? ((raw as { presets: unknown[] }).presets as unknown[])
+        : raw && typeof raw === "object" && "id" in raw
+          ? [raw]
+          : [];
+    if (!list.length) {
+      issues.push(`${where} 的形态不对：要 {"presets":[...]}、[...] 或 {"id":"...", ...}`);
+      continue;
+    }
+    for (const item of list) {
+      const reg = registerGraphPreset(item, pluginId);
+      if (!reg.ok) {
+        issues.push(`${where}：${reg.reason}`);
+        continue;
+      }
+      const id = String((item as { id: string }).id).trim();
+      seen.add(id);
+      ownedPresets.add(id);
+    }
+  }
+
+  for (const id of [...ownedPresets]) {
+    if (seen.has(id)) continue;
+    if (unregisterGraphPreset(id)) ownedPresets.delete(id);
+  }
+
+  presetKey = key;
+  presetIssues = issues;
+  return { count: ownedPresets.size, issues: [...issues] };
+}
+
+/** 诊断用：当前由插件提供的配方 id */
+export const pluginGraphPresetIds = (): string[] => [...ownedPresets].sort();
 
 /* ───────────────────── 生成文件（web/渲染端那一份） ───────────────────── */
 

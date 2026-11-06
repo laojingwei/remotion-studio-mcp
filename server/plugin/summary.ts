@@ -123,6 +123,7 @@ const HOW_TO = [
   "  scene3d/skies.json   3D 天空配方   → list_world_skies 多几条，set_graph_scene 能套",
   "  elements/*.json      元素素材      → 元素面板里多几个图标/标签（分类可自定义）",
   "  scene3d/looks.json   3D 光线风格   → 3D 场景的 look 下拉里多几套（灯位/色温/辉光）",
+  "  scene3d/presets.json 3D 图形配方   → list_graph_presets 多几套起手图，set_graph_scene 一套换上",
   "  scenes/<type>.json + <type>.tsx  场景组件 → 选择器里多一种画面（改了要重新打包）",
   "  plugin.ts            钩子/工具/处理器 → 说意见、改字、清洗素材，或加一个 MCP 工具",
   "  package.json + dist/ 完整工程        → 同上，但可以带自己的 dependencies / 构建脚本 / 原生模块",

@@ -432,11 +432,29 @@ const camAnimOk =
 if (!camAnimOk) errors.push("M4 相机运镜写回形状不对: " + JSON.stringify(camAnim));
 console.log("相机运镜写回:", JSON.stringify(camAnim)?.slice(0, 180), camAnimOk ? "OK" : "!! 形状不对");
 
-// 轨迹开关应随运镜出现（轨道线画在视口里，有没有真的画出来靠截图看）
-const trackBtn = page.locator(".vp3d-btn", { hasText: "轨迹" });
-const hasTrackBtn = (await trackBtn.count()) > 0;
-if (!hasTrackBtn) errors.push("M4 有运镜时轨迹开关没出现");
-console.log("轨迹开关:", hasTrackBtn ? "有" : "!! 没有");
+// 轨迹开关应随运镜出现。
+// 注意它已经不是一个 `.vp3d-btn`，而是分段控件「无轨迹 / 选中轨迹 / 全部轨迹」
+// （`hasAnyTrack` 为真时才渲染）。以前这里找 `.vp3d-btn`+文字「轨迹」，
+// 控件改成分段之后就永远找不到——测试比实现旧，报的是假失败。
+const trackSeg = page.locator(".seg", { hasText: "全部轨迹" });
+const hasTrackSeg = (await trackSeg.count()) > 0;
+if (!hasTrackSeg) errors.push("M4 有运镜时轨迹控件没出现");
+if (hasTrackSeg) {
+  // 光"出现"还不够：三个档位都在，且点击能切到「全部轨迹」
+  const opts = await trackSeg.locator(".seg-item").allInnerTexts();
+  const want = ["无轨迹", "选中轨迹", "全部轨迹"];
+  if (JSON.stringify(opts) !== JSON.stringify(want)) {
+    errors.push(`M4 轨迹档位不对：${JSON.stringify(opts)}（期望 ${JSON.stringify(want)}）`);
+  }
+  await trackSeg.locator(".seg-item", { hasText: "全部轨迹" }).click();
+  await page.waitForTimeout(200);
+  const on = await trackSeg.locator(".seg-item.is-on").innerText().catch(() => "");
+  if (!on.includes("全部轨迹")) errors.push(`M4 点「全部轨迹」没生效（当前选中：${on || "无"}）`);
+  // 切回默认，免得影响后面用例的截图与选中逻辑
+  await trackSeg.locator(".seg-item", { hasText: "选中轨迹" }).click();
+  await page.waitForTimeout(200);
+}
+console.log("轨迹控件:", hasTrackSeg ? "有（三档齐全、可切换）" : "!! 没有");
 await page.screenshot({ path: `${OUT}/pw-10-cam-keys.png` });
 
 // 11) 动画区间内拖节点 → 应写关键帧（而不是基础变换）

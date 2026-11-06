@@ -54,7 +54,15 @@ let passed = 0;
 const failures: string[] = [];
 const test = (name: string, fn: () => void) => {
   try {
-    fn();
+    const ret = (fn as () => unknown)();
+    /*
+     * 异步函数传进 `test()` 是**假绿**：这里不 await，断言失败不会进 failures，
+     * 而是在收尾之后变成 unhandled rejection（2026-11-06 的 list_graph_presets 用例
+     * 就这么"✓ 通过"了，一分钟后才炸）。所以直接拒掉，逼调用方用 testAsync。
+     */
+    if (ret && typeof (ret as Promise<unknown>).then === "function") {
+      throw new Error("test() 收到异步函数：请改用 testAsync()，否则失败不会计入结果");
+    }
     passed++;
     console.log(`  ✓ ${name}`);
   } catch (err) {
@@ -1628,7 +1636,7 @@ test("安装器：启动时清掉残留的暂存目录", () => {
   assert.equal(fs.existsSync(staging), false);
 });
 
-test("预检：registry 清单里没有任何插件标志 → 拒绝下载", async () => {
+await testAsync("预检：registry 清单里没有任何插件标志 → 拒绝下载", async () => {
   const { manifestRejectsPlugin } = await import("../server/plugin/installer.service");
   // 三种"明确是插件"的声明，一个都不能误杀
   assert.equal(manifestRejectsPlugin({ remotionStudio: { provides: ["hooks"] } }, "a"), null);
@@ -1641,7 +1649,7 @@ test("预检：registry 清单里没有任何插件标志 → 拒绝下载", asy
   assert.ok(why && why.includes("没有任何插件标志"), `应拒绝：${why}`);
 });
 
-test("预检：仓库目录树里有 skills/manifest.json 就算插件", async () => {
+await testAsync("预检：仓库目录树里有 skills/manifest.json 就算插件", async () => {
   const { treeLooksLikePlugin } = await import("../server/plugin/installer.service");
   assert.equal(treeLooksLikePlugin(["skills/a.md", "README.md"], null), true);
   assert.equal(treeLooksLikePlugin(["manifest.json"], null), true);
@@ -1651,7 +1659,7 @@ test("预检：仓库目录树里有 skills/manifest.json 就算插件", async (
   assert.equal(treeLooksLikePlugin(["a.ts"], { remotionStudio: {} }), true);
 });
 
-test("未识别目录：装进来的包会列出来（可见），纯碎文件不打扰", async () => {
+await testAsync("未识别目录：装进来的包会列出来（可见），纯碎文件不打扰", async () => {
   const { scanOrphanDirs } = await import("../server/plugin/installer.service");
 
   // 有 package.json、没有插件标志 = 一次装错的痕迹
@@ -1675,7 +1683,7 @@ test("未识别目录：装进来的包会列出来（可见），纯碎文件�
   assert.match(one.reason, /插件标志/);
 });
 
-test("未识别目录：能删（挪进回收站），删完就不在列表里", async () => {
+await testAsync("未识别目录：能删（挪进回收站），删完就不在列表里", async () => {
   const { scanOrphanDirs, removeOrphanDir } = await import("../server/plugin/installer.service");
   const r = removeOrphanDir(path.join(PLUGIN_DIR, "wrong-pkg"));
   assert.ok(fs.existsSync(r.trash), `回收站里应有一份：${r.trash}`);
@@ -1683,7 +1691,7 @@ test("未识别目录：能删（挪进回收站），删完就不在列表里",
   assert.ok(!scanOrphanDirs().some((o) => o.name === "wrong-pkg"));
 });
 
-test("未识别目录：拒绝删除插件目录之外的东西", async () => {
+await testAsync("未识别目录：拒绝删除插件目录之外的东西", async () => {
   const { removeOrphanDir } = await import("../server/plugin/installer.service");
   assert.throws(() => removeOrphanDir(path.join(TMP, "not-a-plugin")), /不在插件目录内/);
 });
@@ -2062,6 +2070,110 @@ test("3D 风格：写进生成文件（渲染端只有这一条通道）", () =>
   resetPlugins();
   generatePluginEntry({ outFile: out });
   fs.rmSync(out, { force: true });
+});
+
+/* ──────────────── 3D 图形配方（scene3d.preset 的新语义） ──────────────── */
+
+const { syncPluginGraphPresets } = await import("../server/plugin/content-sync");
+const { allGraphPresets, graphPresetOf, unregisterGraphPreset } = await import("../shared/scene3dPresets");
+
+const pluginGraph = {
+  nodes: [
+    { id: "core", geometry: { type: "sphere" }, material: { color: "primary" } },
+    { id: "ring", parent: "core", geometry: { type: "box" }, transform: { position: [1.4, 0, 0] } },
+  ],
+  camera: { position: [0, 1.5, 6], target: [0, 0, 0] },
+};
+
+const pluginPreset = {
+  id: "hero-orbit",
+  label: "开场环绕",
+  summary: "一个球 + 一个方块，固定机位，用来验证配方链路",
+  graph: pluginGraph,
+};
+
+test("图形配方：插件的 presets.json 进注册表，停用后撤掉", () => {
+  resetPlugins();
+  write("gp/scene3d/presets.json", JSON.stringify({ presets: [pluginPreset] }));
+
+  const r = syncPluginGraphPresets();
+  assert.equal(r.issues.length, 0, `不该有报错：${JSON.stringify(r.issues)}`);
+  const got = graphPresetOf("hero-orbit");
+  assert.ok(got, "配方应能按 id 取到");
+  assert.equal(got?.graph.nodes.length, 2);
+  assert.equal(got?.from, "gp", "要记得它来自哪个插件");
+
+  setPluginEnabled("gp", false);
+  syncPluginGraphPresets();
+  assert.equal(graphPresetOf("hero-orbit"), undefined, "停用插件后不该还能套用");
+
+  setPluginEnabled("gp", true);
+  resetPlugins();
+  syncPluginGraphPresets();
+  unregisterGraphPreset("hero-orbit");
+});
+
+/**
+ * 配方写坏必须在**注册时**就拦住，而不是等 agent 套用之后渲出半张黑屏。
+ * 这里用的是和用户写入完全相同的校验路径（dslSchema + dslIssues）。
+ */
+test("图形配方：不合 DSL 的 graph 被拒，且报出具体位置", () => {
+  resetPlugins();
+  write(
+    "gp2/scene3d/presets.json",
+    JSON.stringify({
+      presets: [
+        { ...pluginPreset, id: "bad-geo", graph: { nodes: [{ id: "x", geometry: { type: "teapot" } }] } },
+        { ...pluginPreset, id: "bad-id", id2: "x", graph: { nodes: [] }, label: "" },
+      ],
+    }),
+  );
+  const r = syncPluginGraphPresets();
+  assert.ok(r.issues.length >= 2, `两条坏配方都要报：${JSON.stringify(r.issues)}`);
+  assert.equal(graphPresetOf("bad-geo"), undefined);
+  assert.equal(graphPresetOf("bad-id"), undefined);
+  // 合法的那份不该被坏数据连累
+  resetPlugins();
+  syncPluginGraphPresets();
+});
+
+test("图形配方：结构问题（悬空 parent）在注册时被 dslIssues 拦下", () => {
+  resetPlugins();
+  write(
+    "gp3/scene3d/presets.json",
+    JSON.stringify({ presets: [{ ...pluginPreset, id: "orphan", graph: { nodes: [{ id: "a", parent: "nope", geometry: { type: "box" } }] } }] }),
+  );
+  const r = syncPluginGraphPresets();
+  assert.ok(r.issues.some((i) => i.includes("parent") || i.includes("不存在")), `要报悬空父级：${JSON.stringify(r.issues)}`);
+  assert.equal(graphPresetOf("orphan"), undefined);
+  resetPlugins();
+  syncPluginGraphPresets();
+});
+
+await testAsync("图形配方：list_graph_presets 能列出来（agent 的发现入口）", async () => {
+  resetPlugins();
+  write("gp4/scene3d/presets.json", JSON.stringify({ presets: [pluginPreset] }));
+  const { TOOLS } = await import("../server/mcp-tools");
+  const tool = TOOLS.find((t) => t.name === "list_graph_presets");
+  assert.ok(tool, "工具必须存在");
+  const text = String(await tool!.run({} as never));
+  assert.ok(text.includes("hero-orbit"), `输出里要有配方 id：${text.slice(0, 200)}`);
+  assert.ok(text.includes("2 个节点"), "要报节点数");
+
+  /*
+   * 套用入口的错分支也测：写错 id 必须在**发请求之前**就报错并列出可用的，
+   * 而不是丢给服务端变成一句"未知字段/场景不存在"。
+   * （成功分支要真起服务，属于 e2e，见计划文档 9.6。）
+   */
+  const applyTool = TOOLS.find((t) => t.name === "set_graph_scene")!;
+  await assert.rejects(
+    () => applyTool.run({ projectId: "nope", sceneId: "nope", graphPreset: "not-a-preset" } as never),
+    (err: Error) => err.message.includes("没有这个图形配方") && err.message.includes("hero-orbit"),
+    "写错配方 id 要报错并列出可用的",
+  );
+
+  resetPlugins();
+  syncPluginGraphPresets();
 });
 
 /* ────────────────────────── 收尾 ────────────────────────── */
