@@ -2,7 +2,7 @@ import React, { useEffect, useRef, useState } from "react";
 import type { OverlayElement } from "@shared/schema";
 import { MAX_VOLUME } from "@shared/schema";
 import { useDoc } from "../store";
-import { TRANSITION_OPTIONS } from "@shared/transitions";
+import { allTransitionOptions } from "@shared/transitions";
 import { colorAlpha } from "@shared/color";
 import { ColorPicker } from "./ColorPicker";
 import { AssetField } from "./AssetField";
@@ -211,7 +211,7 @@ export const ElementInspector: React.FC<{ sceneId: string; el: OverlayElement }>
           <select
             value={draft.enter?.type ?? "none"}
             onChange={(e) => {
-              const t = TRANSITION_OPTIONS.find((o) => o.key === e.target.value)!;
+              const t = allTransitionOptions().find((o) => o.key === e.target.value)!;
               commit({
                 enter: {
                   type: t.key,
@@ -220,7 +220,7 @@ export const ElementInspector: React.FC<{ sceneId: string; el: OverlayElement }>
               });
             }}
           >
-            {TRANSITION_OPTIONS.map((t) => (
+            {allTransitionOptions().map((t) => (
               <option key={t.key} value={t.key} title={t.hint}>
                 {t.label} · {t.hint}
               </option>
@@ -256,7 +256,7 @@ export const ElementInspector: React.FC<{ sceneId: string; el: OverlayElement }>
           <select
             value={draft.exit?.type ?? "none"}
             onChange={(e) => {
-              const t = TRANSITION_OPTIONS.find((o) => o.key === e.target.value)!;
+              const t = allTransitionOptions().find((o) => o.key === e.target.value)!;
               commit({
                 exit: {
                   type: t.key,
@@ -265,7 +265,7 @@ export const ElementInspector: React.FC<{ sceneId: string; el: OverlayElement }>
               });
             }}
           >
-            {TRANSITION_OPTIONS.map((t) => (
+            {allTransitionOptions().map((t) => (
               <option key={t.key} value={t.key} title={t.hint}>
                 {t.label} · {t.hint}
               </option>

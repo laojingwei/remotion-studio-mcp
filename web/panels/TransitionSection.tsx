@@ -1,5 +1,5 @@
 import React, { useMemo } from "react";
-import { TRANSITION_OPTIONS, seamOverlaps } from "@shared/transitions";
+import { allTransitionOptions, seamOverlaps } from "@shared/transitions";
 import { sceneSpans, type Scene } from "@shared/schema";
 import { useDoc } from "../store";
 import { RangeInput } from "../RangeInput";
@@ -15,6 +15,11 @@ import { RangeInput } from "../RangeInput";
 export const TransitionSection: React.FC<{ scene: Scene }> = ({ scene }) => {
   const apply = useDoc((s) => s.apply);
   const project = useDoc((s) => s.project);
+  /*
+   * 选项来自注册表（内置 12 种 + 插件），不是常量表 —— 插件装了之后这里立刻能看到。
+   * 每次渲染重算：列表很短，且**装完插件不刷新面板也能用**比省这点开销重要。
+   */
+  const options = allTransitionOptions();
   const transitionIn = scene.transitionIn ?? { type: "none" as const, durationInFrames: 12 };
   const transitionOut = scene.transitionOut ?? { type: "none" as const, durationInFrames: 12 };
 
@@ -55,7 +60,7 @@ export const TransitionSection: React.FC<{ scene: Scene }> = ({ scene }) => {
         <select
           value={transitionIn.type}
           onChange={(e) => {
-            const t = TRANSITION_OPTIONS.find((o) => o.key === e.target.value)!;
+            const t = options.find((o) => o.key === e.target.value)!;
             void apply([
               {
                 op: "update_scene",
@@ -70,7 +75,7 @@ export const TransitionSection: React.FC<{ scene: Scene }> = ({ scene }) => {
             ]);
           }}
         >
-          {TRANSITION_OPTIONS.map((t) => (
+          {options.map((t) => (
             <option key={t.key} value={t.key} title={t.hint}>
               {t.label} · {t.hint}
             </option>
@@ -112,6 +117,51 @@ export const TransitionSection: React.FC<{ scene: Scene }> = ({ scene }) => {
             接缝没有独立控件，它就是上面这个时长 —— 所以这里直接把「实际重叠多少」算出来。
             少了这行，调接缝只能靠猜：设 24 帧但前幕只有 300 帧时实际可能只给到 12。
           */}
+          {(() => {
+            /*
+             * 插件转场的参数表单。内置转场没有参数（`params` 为空数组），这块就整块不渲染。
+             * 用受控 number 输入而不是滑块：插件声明的 min/max 可能很宽，滑块上拖不准。
+             */
+            const decl = options.find((o) => o.key === transitionIn.type)?.params ?? [];
+            if (!decl.length) return null;
+            return (
+              <div className="field">
+                <label title="由插件声明；不改就用它给的默认值">转场参数</label>
+                <div style={{ display: "flex", flexWrap: "wrap", gap: "6px 12px" }}>
+                  {decl.map((d) => {
+                    const cur = transitionIn.params?.[d.key] ?? d.default ?? "";
+                    return (
+                      <label key={d.key} style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12 }}>
+                        <span style={{ opacity: 0.75 }}>{d.label ?? d.key}</span>
+                        <input
+                          type="number"
+                          style={{ width: 76 }}
+                          min={d.min}
+                          max={d.max}
+                          step="any"
+                          value={cur}
+                          onChange={(e) =>
+                            void apply([
+                              {
+                                op: "update_scene",
+                                sceneId: scene.id,
+                                patch: {
+                                  transitionIn: {
+                                    ...transitionIn,
+                                    params: { ...(transitionIn.params ?? {}), [d.key]: Number(e.target.value) },
+                                  },
+                                },
+                              },
+                            ])
+                          }
+                        />
+                      </label>
+                    );
+                  })}
+                </div>
+              </div>
+            );
+          })()}
           <div className="hint" style={{ marginTop: -6, marginBottom: 8 }}>
             {(() => {
               const base = seamInfo.isFirst
@@ -136,7 +186,7 @@ export const TransitionSection: React.FC<{ scene: Scene }> = ({ scene }) => {
         <select
           value={transitionOut.type}
           onChange={(e) => {
-            const t = TRANSITION_OPTIONS.find((o) => o.key === e.target.value)!;
+            const t = options.find((o) => o.key === e.target.value)!;
             void apply([
               {
                 op: "update_scene",
@@ -154,7 +204,7 @@ export const TransitionSection: React.FC<{ scene: Scene }> = ({ scene }) => {
             ]);
           }}
         >
-          {TRANSITION_OPTIONS.map((t) => (
+          {options.map((t) => (
             <option key={t.key} value={t.key} title={t.hint}>
               {t.label} · {t.hint}
             </option>

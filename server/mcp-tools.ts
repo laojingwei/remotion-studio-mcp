@@ -1632,7 +1632,7 @@ const TOOLS: ToolDef[] = [
     retiredTo: "set_transitions",
     shape: {
       sceneId: z.string().describe("给哪一幕设转场（get_project 里的场景 id）"),
-      type: z.enum(TRANSITION_TYPES).describe("转场类型（可选值见描述）"),
+      type: z.string().describe("转场类型（内置 12 种 + 插件注册的 id；完整清单用 list_transitions）"),
       durationInFrames: z.number().optional().describe("转场时长（帧），不传默认 12，建议 8–20"),
       direction: z.enum(["in", "out"]).optional().describe("in=入场（默认），out=出场"),
       projectId: z.string().optional().describe("要操作的工程 id，不传 = 当前默认工程（list_projects 查）"),
@@ -1641,6 +1641,47 @@ const TOOLS: ToolDef[] = [
       const target = TOOLS.find((t) => t.name === "set_transitions")!;
       const out = await target.run({ ...a, sceneIds: [a.sceneId] });
       return `（提示：「set_transition」已并入 set_transitions——单幕/批量/逐幕都是它，本次已按新工具执行，以后请直接用 set_transitions）\n${out}`;
+    },
+  },
+  {
+    name: "list_transitions",
+    description:
+      "列出**所有可用的转场**：内置 12 种 + 插件注册的（插件放在 `plugins/<名>/transitions/<id>.ts`）。\n" +
+      "内置那 12 种的 hint 就是「什么感觉、什么时候用」；插件转场会额外列出它自己的可调参数（名字 / 范围 / 默认值）。\n" +
+      "什么时候查：① 用户说「想要 XX 过渡」而你不确定有没有；② 要用插件转场但不知道参数怎么填。\n" +
+      "⚠ 插件转场的**出场是自动反向**的（宿主用 1-p 再调一次），所以它只需要写一个方向；\n" +
+      "⚠ 插件转场写崩了（抛错/返回非法样式）会**退回淡入淡出**并告警，不会让整片渲不出来——\n" +
+      "   但效果对不对只能抽帧看，别只看名字就下结论。",
+    shape: {},
+    run: async () => {
+      const { syncPluginTransitions } = await import("./plugin/content-sync");
+      const synced = syncPluginTransitions();
+      const { allTransitionOptions, pluginTransitionIds } = await import("../shared/transitions");
+      const list = allTransitionOptions();
+      const pluginIds = new Set(pluginTransitionIds());
+
+      const out: string[] = [];
+      if (synced.issues.length) {
+        out.push("⚠ 有转场没能加载：");
+        for (const i of synced.issues) out.push(`  · ${i}`);
+        out.push("");
+      }
+      out.push(`转场（共 ${list.length} 种：内置 ${list.length - pluginIds.size} + 插件 ${pluginIds.size}）`);
+      for (const t of list) {
+        out.push(`· ${t.key}（${t.label}）${pluginIds.has(t.key) ? " 〔插件〕" : ""}`);
+        if (t.hint) out.push(`  ${t.hint}`);
+        if (t.params.length) {
+          out.push(
+            `  可调：${t.params
+              .map((d) => `${d.key}${d.min !== undefined && d.max !== undefined ? ` ${d.min}–${d.max}` : ""}（默认 ${d.default ?? "—"}）`)
+              .join("、")}`,
+          );
+        }
+      }
+      out.push("");
+      out.push('用法：set_transitions { sceneId 或 sceneIds, type: "id", durationInFrames: 12, params: {...} }');
+      out.push("⚠ 接缝长度 = 本幕的 durationInFrames；两幕重叠期间上一幕会半透明压在新幕上，抽帧看到「两行大字叠着」是正常的。");
+      return out.join("\n");
     },
   },
   {
@@ -1653,8 +1694,12 @@ const TOOLS: ToolDef[] = [
       "下一幕在它上面渐显。所以这 N 帧里两幕同时可见——**上一幕的最后一个画面（含大字、结论数字）会半透明地压在新幕上**。" +
       "抽帧看到「两个大字叠在一起」通常就是这个，不是渲染错；不想要就缩短转场、把大字提前淡出，或给下一幕硬切。",
     shape: {
-      type: z.enum(TRANSITION_TYPES).optional().describe("转场类型；none=清除（给了 items 时可省略）"),
+      type: z.string().optional().describe("转场类型（内置 + 插件 id，见 list_transitions）；none=清除（给了 items 时可省略）"),
       durationInFrames: z.number().int().min(0).max(120).optional().describe("转场时长（帧），默认 12"),
+      params: z
+        .record(z.union([z.number(), z.string()]))
+        .optional()
+        .describe("插件转场的参数（内置转场忽略）。键名与默认值用 list_transitions 查"),
       direction: z.enum(["in", "out", "both"]).optional().describe("in=入场（默认），out=出场，both=两者都设"),
       sceneIds: z.array(z.string()).optional().describe("只设这些场景；不传=全部场景"),
       items: z
@@ -1662,12 +1707,20 @@ const TOOLS: ToolDef[] = [
           z.object({
             sceneId: z.string(),
             in: z
-              .object({ type: z.enum(TRANSITION_TYPES), durationInFrames: z.number().int().min(0).max(120) })
+              .object({
+                type: z.string(),
+                durationInFrames: z.number().int().min(0).max(120),
+                params: z.record(z.union([z.number(), z.string()])).optional().describe("插件转场的参数"),
+              })
               .nullable()
               .optional()
               .describe("这一幕的入场（null = 清除）"),
             out: z
-              .object({ type: z.enum(TRANSITION_TYPES), durationInFrames: z.number().int().min(0).max(120) })
+              .object({
+                type: z.string(),
+                durationInFrames: z.number().int().min(0).max(120),
+                params: z.record(z.union([z.number(), z.string()])).optional().describe("插件转场的参数"),
+              })
               .nullable()
               .optional()
               .describe("这一幕的出场（null = 清除）"),
@@ -1716,7 +1769,14 @@ const TOOLS: ToolDef[] = [
       }
 
       if (!a.type) throw new Error("要么给 type（统一套），要么给 items（逐幕指定）");
-      const t = a.type === "none" ? null : { type: a.type, durationInFrames: a.durationInFrames ?? TRANSITION_DEFAULT_FRAMES };
+      const t =
+        a.type === "none"
+          ? null
+          : {
+              type: a.type,
+              durationInFrames: a.durationInFrames ?? TRANSITION_DEFAULT_FRAMES,
+              ...(a.params && Object.keys(a.params).length ? { params: a.params } : {}),
+            };
       const dir = a.direction ?? "in";
       const patch =
         dir === "out"

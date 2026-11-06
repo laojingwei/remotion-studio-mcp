@@ -409,7 +409,7 @@ export const STORYBOARD_TOOLS: ToolDef[] = [
             text: z.string().optional().describe("这一幕的口播/字幕文本（会写成字幕）"),
             subtitle: z.string().optional().describe("直接给字幕文本（不给就用 text）"),
             transitionIn: z
-              .object({ type: z.enum(TRANSITION_TYPES), durationInFrames: z.number().int().min(0).max(120) })
+              .object({ type: z.string(), durationInFrames: z.number().int().min(0).max(120) })
               .nullable()
               .optional(),
             transitionOut: z

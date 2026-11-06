@@ -49,6 +49,9 @@ export type PluginLookEntry = PluginElementEntry;
 /** 插件贡献的 3D 后期 pass（fragment 源码内联进 bundle） */
 export type PluginPassEntry = PluginElementEntry;
 
+/** 插件贡献的转场：一个 .ts 文件就是一个转场，文件名即 id */
+export type PluginTransitionEntry = { file: string; pluginId: string; id: string };
+
 export type GenResult = {
   changed: boolean;
   count: number;
@@ -58,6 +61,8 @@ export type GenResult = {
   lookCount: number;
   /** 顺带生成进去的插件后期 pass 个数 */
   passCount: number;
+  /** 顺带生成进去的插件转场个数 */
+  transitionCount: number;
   issues: string[];
   outFile: string;
 };
@@ -205,11 +210,50 @@ export const discoverLookEntries = (pluginDir = PROJECT_PLUGIN_DIR) =>
 export const discoverPassEntries = (pluginDir = PROJECT_PLUGIN_DIR) =>
   discoverDataEntries("scene3d", "passes", pluginDir, "passes");
 
+/**
+ * 扫出插件转场（`transitions/<id>.ts`）。
+ *
+ * id = 文件名。和场景不同，这里没有"元数据文件 + 组件文件"成对的要求：
+ * 一切都写在那个 .ts 的 `export const meta` 里，服务端只按文件名认 id
+ * （它不执行插件代码，见 content-sync 的 syncPluginTransitions）。
+ */
+export function discoverTransitionEntries(pluginDir = PROJECT_PLUGIN_DIR): {
+  entries: PluginTransitionEntry[];
+  issues: string[];
+} {
+  const entries: PluginTransitionEntry[] = [];
+  const issues: string[] = [];
+  const enabled = new Set(
+    scanPlugins()
+      .filter((p) => p.enabled && !p.errors.length)
+      .map((p) => path.resolve(p.dir)),
+  );
+
+  for (const plugin of safeDir(pluginDir)) {
+    if (!plugin.isDirectory() || plugin.name.startsWith(".") || plugin.name === "node_modules") continue;
+    const dir = path.join(pluginDir, plugin.name);
+    if (!enabled.has(path.resolve(dir))) continue;
+    const tdir = path.join(dir, "transitions");
+    if (!fs.existsSync(tdir)) continue;
+
+    for (const f of safeDir(tdir)) {
+      if (!f.isFile()) continue;
+      const m = /\.(ts|tsx|js|jsx|mjs)$/i.exec(f.name);
+      if (!m) continue;
+      const id = f.name.slice(0, -m[0].length);
+      if (id.toLowerCase().endsWith(".d")) continue; // .d.ts 不是实现
+      entries.push({ file: path.join(tdir, f.name), pluginId: plugin.name, id });
+    }
+  }
+  return { entries: entries.sort((a, b) => a.file.localeCompare(b.file)), issues };
+}
+
 function render(
   entries: PluginSceneEntry[],
   elements: PluginElementEntry[],
   looks: PluginLookEntry[],
   passes: PluginPassEntry[],
+  transitions: PluginTransitionEntry[],
   issues: string[],
   outDir: string,
 ): string {
@@ -256,7 +300,7 @@ function render(
   }
 
   // 两样都没有：只留占位数组，让编译不依赖"装没装插件"
-  if (!entries.length && !elements.length && !looks.length && !passes.length) {
+  if (!entries.length && !elements.length && !looks.length && !passes.length && !transitions.length) {
     return [
       ...header,
       ...issueLines,
@@ -284,9 +328,19 @@ function render(
     'import { registerLibraryItem } from "../shared/elementLibrary";',
     'import { registerLook } from "../shared/scene3dLooks";',
     'import { registerPassDef } from "../shared/scene3dPasses";',
+    'import { registerPluginTransition } from "../shared/transitions";',
   ];
 
   if (issueLines.length) lines.push(...issueLines);
+
+  // 转场：一个文件一个 import，id 用文件名
+  const transitionRows: string[] = [];
+  transitions.forEach((t, i) => {
+    lines.push(`import * as transition${i} from ${JSON.stringify(importPath(t.file, outDir))};`);
+    transitionRows.push(
+      `  { id: ${JSON.stringify(t.id)}, from: ${JSON.stringify(t.pluginId)}, file: ${JSON.stringify(path.basename(t.file))}, mod: transition${i} as unknown },`,
+    );
+  });
 
   const rows: string[] = [];
   entries.forEach((e, i) => {
@@ -364,6 +418,19 @@ function render(
     "    if (!r.ok) console.warn('[plugin] 3D 后期 pass ' + e.from + '/' + e.file + ' 已跳过：' + r.reason);",
     "  }",
     "}",
+    "",
+    "/**",
+    " * 插件转场：静态 import 每个实现文件，模块顶层注册。",
+    " * 编辑器（vite）和成片（webpack）吃的是同一份，所以**预览与成片必然一致**。",
+    " */",
+    "export const PLUGIN_TRANSITIONS: { id: string; from: string; file: string; mod: unknown }[] = [",
+    ...transitionRows,
+    "];",
+    "",
+    "for (const t of PLUGIN_TRANSITIONS) {",
+    "  const r = registerPluginTransition(t.id, t.mod, t.from);",
+    "  if (!r.ok) console.warn('[plugin] 转场 ' + t.from + '/' + t.file + ' 已跳过：' + r.reason);",
+    "}",
   );
 
   return lines.join("\n") + "\n";
@@ -384,8 +451,9 @@ export function generatePluginEntry(opts: { pluginDir?: string; outFile?: string
   const els = discoverElementEntries(pluginDir);
   const looks = discoverLookEntries(pluginDir);
   const passes = discoverPassEntries(pluginDir);
-  const allIssues = [...issues, ...els.issues, ...looks.issues, ...passes.issues];
-  const next = render(entries, els.entries, looks.entries, passes.entries, allIssues, outDir);
+  const transitions = discoverTransitionEntries(pluginDir);
+  const allIssues = [...issues, ...els.issues, ...looks.issues, ...passes.issues, ...transitions.issues];
+  const next = render(entries, els.entries, looks.entries, passes.entries, transitions.entries, allIssues, outDir);
 
   let prev = "";
   try {
@@ -406,6 +474,7 @@ export function generatePluginEntry(opts: { pluginDir?: string; outFile?: string
   const elementCount = els.entries.reduce((n, e) => n + e.items.length, 0);
   const lookCount = looks.entries.reduce((n, e) => n + e.items.length, 0);
   const passCount = passes.entries.reduce((n, e) => n + e.items.length, 0);
+  const transitionCount = transitions.entries.length;
 
   return {
     changed,
@@ -413,6 +482,7 @@ export function generatePluginEntry(opts: { pluginDir?: string; outFile?: string
     elementCount,
     lookCount,
     passCount,
+    transitionCount,
     issues: [...allIssues, ...briefIssues],
     outFile,
   };

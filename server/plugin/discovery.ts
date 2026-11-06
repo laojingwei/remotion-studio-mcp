@@ -124,6 +124,7 @@ export function inferProvides(dir: string): ProvideKind[] {
   if (has("scene3d/presets.json")) out.push("scene3d.preset");
   if (has("scene3d/looks.json")) out.push("scene3d.look");
   if (has("scene3d/passes.json")) out.push("scene3d.pass");
+  if (has("transitions")) out.push("transition");
   if (has("brief/steps.json")) out.push("brief.steps");
   // 场景组件：scenes 目录里有 .json 就算（同名的 .tsx 由生成器配对检查）
   if (hasJson("scenes")) out.push("scene");
@@ -372,6 +373,8 @@ export function pluginFiles(kind: ProvideKind, ext: string): PluginFile[] {
             ? "templates"
             : kind === "elements"
               ? "elements"
+              : kind === "transition"
+                ? "transitions"
               : kind === "brief.steps"
                 ? "brief"
                 : "scene3d";

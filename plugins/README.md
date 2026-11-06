@@ -30,6 +30,7 @@ plugins/我的插件/
   scene3d/presets.json   3D 图形配方   → list_graph_presets 里多几套起手图，set_graph_scene 一套换上
   scene3d/skies.json     3D 天空配方   → list_world_skies 多几条，set_graph_scene 能套
   scene3d/passes.json    3D 后期效果   → list_plugin_passes 多几个，写进 post.passes 才上镜（受控 GLSL）
+  transitions/<id>.ts    转场          → 转场下拉里多一个（文件名就是 id；出入场自动成对）
   scenes/*.json + *.tsx  场景组件      → 选择器里多一种画面（必须放项目内）
   plugin.ts              钩子/工具/处理器 → 说意见、改字、洗素材，或加一个 MCP 工具
   package.json + dist/   同上，但做成**完整工程**（可以带自己的 dependencies）
@@ -58,6 +59,7 @@ plugins/我的插件/
 | **3D 光线风格** | `scene3d/looks.json`，3D 场景的 `look` 下拉里多几套（灯位/强度/色温/辉光）；只换光的性格，不换配色 |
 | **3D 图形配方** | `scene3d/presets.json`，一份 graph JSON 当「起手图」：`set_graph_scene { graphPreset }` 整套换上，之后当普通 graph 继续改。校验和用户手写同一条（`dslSchema` + `dslIssues`），写错在注册时就被拒 |
 | **3D 后期效果** | `scene3d/passes.json`，一段 fragment 源码（受控 GLSL）。**默认不上镜**，要显式写进 `post.passes` 才生效；一个工程最多 6 个，按数组顺序叠加 |
+| **转场** | `transitions/<id>.ts`，导出 `(p, ctx) => CSS`。**出场自动反向**（宿主用 1-p 再调一次），所以只写一个方向；写崩了退回淡入，整片照出 |
 
 **上面这张表里的全部接通**（技能、风格、问诊、整片模板、3D 天空、3D 光线风格、3D 图形配方、3D 后期效果、元素、场景组件、钩子）。
 转场 / 特效 / 3D 几何体（`scene3d/presets.json`）**不打算做**，理由见计划文档 9.3。
@@ -208,6 +210,59 @@ export default {
 
 `ctx.ffmpeg` 指向 Remotion 自带的那个（装了 Remotion 就一定在），所以不需要为了处理图片
 给宿主装 sharp。示例：`plugins/_example-media/`。
+
+## 转场：一个函数，进出场都对
+
+放 `plugins/<名>/transitions/<id>.ts`，**文件名就是 id**（小写字母/数字/短横线）：
+
+```ts
+export const meta = {
+  label: "液体荡开",
+  hint: "从中心晕开，带一点模糊",
+  params: [{ key: "amp", label: "幅度", min: 0, max: 3, default: 1 }],
+};
+
+/** p: 0 → 1（0 = 还没开始，1 = 完全就位） */
+export default (p: number, ctx: { phase: "in" | "out"; frame: number; params: Record<string, string | number> }) => ({
+  clipPath: `circle(${p * 70}% at 50% 50%)`,
+  filter: `blur(${(1 - p) * 10}px)`,
+});
+```
+
+### 出入场为什么只写一个
+
+内置的出场就是「反向播放同一套转场」（`exitStyle` 里用 `1-p` 再调一次）。
+插件走同一条路：**你只写"出现"这一侧，出场自动是它的倒放**。
+
+想做出入场/出场不对称的效果（比如出场放大而入场缩小），看 `ctx.phase` 自己分支——
+但绝大多数转场不需要。
+
+### 只能返回「视觉」属性
+
+白名单：`transform` / `transformOrigin` / `opacity` / `filter` / `backdropFilter` /
+`clipPath` / `maskImage` / `maskSize` / `maskPosition` / `background` / `boxShadow` /
+`mixBlendMode` / `borderRadius`。写成 `position` / `width` 这类会被丢弃并告警——
+转场被 `Object.assign` 到场次样式上，而那个样式同时管**布局**，放布局属性进去
+表现出来的不是"转场怪"，而是"版面错"，查不到源头。要整层自定义 DOM 请用场景组件。
+
+`url(...)` 也会被丢掉：渲染端抓不到外部资源，成片里那块就是空的。
+
+### 写坏了会怎样
+
+| 情况 | 结果 |
+|---|---|
+| 函数抛错 | 退回淡入淡出 + `[plugin-transition]` 告警，**整片照出** |
+| 返回 null / 数组 | 按"无转场"处理 + 告警 |
+| 返回非法属性/值 | 该项丢弃 + 告警，其余照用 |
+| 工程里存着已删插件的 id | 渲染时退回淡入（工程不会打不开） |
+
+`Math.random()` / `Date.now()` **别用**：逐帧渲染时每帧是独立的一次调用，
+用了就会每次渲出不同的画面（Remotion 要求同一帧结果确定）。要"抖动"就用 `ctx.frame` 算 hash。
+
+### 代价
+
+转场在每一帧的每一幕上都要算（入场 + 出场窗口），所以它必须**很轻**：
+只算数值、不 new 大对象、不做字符串拼接以外的开销。返回对象每帧都会被 Object.assign 一次。
 
 ## 3D 后期效果：自己写一段 GLSL
 

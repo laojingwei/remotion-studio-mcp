@@ -2377,6 +2377,167 @@ await testAsync("后期 pass：set_graph_scene 写错 id 立刻报错并列出�
   unregisterPassDef("vhs-scan");
 });
 
+/* ──────────────── 插件转场（2026-11-06） ──────────────── */
+
+const {
+  registerPluginTransition,
+  unregisterPluginTransition,
+  allTransitionIds,
+  allTransitionOptions,
+  pluginTransitionIds,
+  transitionStyle,
+  exitStyle,
+} = await import("../shared/transitions");
+const { syncPluginTransitions } = await import("../server/plugin/content-sync");
+const { normalizeTransition } = await import("../shared/ops");
+
+/** 一个"看得见方向"的转场：p 越大越亮、越不模糊 */
+const spinner = (p: number, ctx: { phase: string }) => ({
+  opacity: p,
+  filter: `blur(${(1 - p) * 12}px)`,
+  transform: `rotate(${p * 30}deg)`,
+  // 记下 phase，测试要用它验"出场是反向播的"
+  ...(ctx.phase === "out" ? { transitionDuration: "0" } : {}),
+});
+
+test("转场：注册插件转场后能选、能算样式", () => {
+  const reg = registerPluginTransition("my-spin", {
+    default: spinner,
+    meta: { label: "自转", hint: "边转边显", params: [{ key: "amp", min: 0, max: 2, default: 1 }] },
+  });
+  assert.equal(reg.ok, true, `注册该成功：${reg.reason}`);
+  assert.ok(allTransitionIds().includes("my-spin"), "id 要进合法集合（写入校验靠它）");
+  const opt = allTransitionOptions().find((o) => o.key === "my-spin")!;
+  assert.equal(opt.label, "自转");
+  assert.equal(opt.params.length, 1, "参数表要能被面板/工具读到");
+
+  const st = transitionStyle("my-spin", 6, 12, 12, {});
+  assert.equal(st.opacity, 0.5, `p 应该是 0.5，实际 ${JSON.stringify(st)}`);
+  // 插件返回值不做数值格式化（那是作者的事），所以是 6px 不是 6.00px
+  assert.match(String(st.filter), /blur\(6px\)/);
+  unregisterPluginTransition("my-spin");
+  assert.equal(allTransitionIds().includes("my-spin"), false, "注销后不该还在");
+});
+
+test("转场：内置 id 不可覆盖，没有 default 函数要拒", () => {
+  const dup = registerPluginTransition("fade", { default: spinner });
+  assert.equal(dup.ok, false);
+  assert.match(String(dup.reason), /内置/);
+  const noImpl = registerPluginTransition("no-impl", { meta: { label: "空" } });
+  assert.equal(noImpl.ok, false);
+  assert.match(String(noImpl.reason), /default/);
+  const badId = registerPluginTransition("Bad Id", { default: spinner });
+  assert.equal(badId.ok, false);
+});
+
+/**
+ * 这条是"出入场都支持"的核心判据。
+ *
+ * 宿主在 out 阶段用 `(1-p)` 再调一次同一个函数，并把 phase 传进去 ——
+ * 所以插件**只写一个方向**就能拿到成对的出入场，而想区分方向的也能区分。
+ */
+test("转场：出场自动反向（同一个函数、p 反着走、phase=out）", () => {
+  const seen: { p: number; phase: string }[] = [];
+  registerPluginTransition("probe-dir", {
+    default: (p: number, ctx: { phase: string }) => {
+      seen.push({ p, phase: ctx.phase });
+      return { opacity: p };
+    },
+  });
+
+  transitionStyle("probe-dir", 3, 12, 12); // 入场：p≈0.25
+  const inCall = seen.at(-1)!;
+  assert.equal(inCall.phase, "in");
+
+  // 出场窗口 12 帧，走到窗口末尾附近 → p 应该接近 0（反向）
+  exitStyle({ type: "probe-dir", durationInFrames: 12 }, 11, 12, 120);
+  const outCall = seen.at(-1)!;
+  assert.equal(outCall.phase, "out", "出场必须告诉插件这是 out");
+  assert.ok(outCall.p < 0.2, `出场末尾的 p 应该接近 0（反向），实际 ${outCall.p}`);
+
+  unregisterPluginTransition("probe-dir");
+});
+
+test("转场：插件抛错 / 返回非法属性都不会毁掉画面", () => {
+  registerPluginTransition("boom", {
+    default: () => {
+      throw new Error("我坏了");
+    },
+  });
+  const st = transitionStyle("boom", 6, 12, 12);
+  assert.equal(st.opacity, 0.5, "抛错要退回淡入（opacity=p），不是空白也不是崩");
+  unregisterPluginTransition("boom");
+
+  registerPluginTransition("bad-style", {
+    // position 不在白名单：它会把整片排版搞坏，而表现像"版面错"根本查不到转场上
+    default: () => ({ position: "fixed", width: "200%", transform: "scale(2)" }) as never,
+  });
+  const st2 = transitionStyle("bad-style", 6, 12, 12);
+  assert.equal(st2.position, undefined, "布局属性必须被丢掉");
+  assert.equal(st2.width, undefined);
+  assert.equal(st2.transform, "scale(2)", "白名单内的要保留");
+  unregisterPluginTransition("bad-style");
+
+  // 返回 null/数组这类形状错误也不能崩
+  registerPluginTransition("null-style", { default: () => null as never });
+  assert.deepEqual(transitionStyle("null-style", 3, 12), {});
+  unregisterPluginTransition("null-style");
+});
+
+test("转场：工程里存着已卸载插件的 id → 退回 fade，不会打不开", () => {
+  // 模拟"插件被删了，工程里 transitionIn.type 还留着它"
+  const st = transitionStyle("gone-plugin", 6, 12, 12);
+  assert.equal(st.opacity, 0.5, "未知 id 应该走 fade 分支（opacity=p），不是抛错");
+});
+
+test("转场：服务端按文件名认 id（不执行插件代码），停用即撤销", () => {
+  resetPlugins();
+  write("tr/transitions/wipe-custom.ts", "export default (p) => ({ opacity: p });");
+  write("tr/transitions/glitch2.tsx", "export default (p) => ({ opacity: p });");
+  write("tr/transitions/README.md", "不是实现文件，应被忽略");
+
+  const r = syncPluginTransitions();
+  assert.equal(r.issues.length, 0, `不该有报错：${JSON.stringify(r.issues)}`);
+  assert.ok(pluginTransitionIds().includes("wipe-custom"), "id 来自文件名");
+  assert.ok(pluginTransitionIds().includes("glitch2"), "tsx 也算");
+  assert.equal(pluginTransitionIds().includes("README"), false, "非代码文件不能变成转场");
+
+  // normalizeTransition 要接受它（写入路径的校验靠 allTransitionIds）
+  const t = normalizeTransition({ type: "wipe-custom", durationInFrames: 10, params: { amp: 2, note: "x" } }, "t");
+  assert.equal(t.type, "wipe-custom");
+  assert.equal(t.params?.amp, 2);
+  assert.equal(t.params?.note, "x");
+
+  setPluginEnabled("tr", false);
+  syncPluginTransitions();
+  assert.equal(pluginTransitionIds().includes("wipe-custom"), false, "停用插件后不该还能选");
+  assert.throws(() => normalizeTransition({ type: "wipe-custom", durationInFrames: 10 }, "t"), /不合法/);
+
+  setPluginEnabled("tr", true);
+  resetPlugins();
+  syncPluginTransitions();
+});
+
+test("转场：写进生成文件（编辑器与成片读同一份，预览必然一致）", () => {
+  resetPlugins();
+  const out = path.join(TMP, "gen-tr", "_plugins.generated.ts");
+  fs.mkdirSync(path.dirname(out), { recursive: true });
+  generatePluginEntry({ outFile: out });
+  write("tr2/transitions/liquid.ts", "export const meta = { label: '液体' };\nexport default (p) => ({ opacity: p });");
+
+  const res = generatePluginEntry({ outFile: out });
+  assert.equal(res.transitionCount, 1, `应统计到 1 个转场，实际：${res.transitionCount}`);
+  const text = fs.readFileSync(out, "utf8");
+  assert.ok(text.includes("PLUGIN_TRANSITIONS"), "要导出 PLUGIN_TRANSITIONS");
+  assert.ok(text.includes("registerPluginTransition"), "要在模块顶层注册");
+  assert.ok(text.includes("transitions/liquid"), "要静态 import 那个实现文件");
+  assert.ok(text.includes('"liquid"'), "id 用文件名");
+
+  resetPlugins();
+  generatePluginEntry({ outFile: out });
+  fs.rmSync(out, { force: true });
+});
+
 /* ────────────────────────── 收尾 ────────────────────────── */
 fs.rmSync(TMP, { recursive: true, force: true });
 

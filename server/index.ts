@@ -15,6 +15,7 @@ import {
   syncPluginGraphPresets,
   syncPluginLooks,
   syncPluginPasses,
+  syncPluginTransitions,
   syncPluginTemplates,
   syncPluginWorldSkies,
 } from "./plugin/content-sync";
@@ -197,6 +198,7 @@ app.use("*", async (_c, next) => {
     const els = syncPluginElements();
     const looks = syncPluginLooks();
     const passes = syncPluginPasses();
+    const trans = syncPluginTransitions();
     const gpreset = syncPluginGraphPresets();
     /*
      * 元素/场景要落到 `src/_plugins.generated.ts` 才能被编辑器看见（web 是独立 bundle）。
@@ -209,6 +211,7 @@ app.use("*", async (_c, next) => {
       ...els.issues,
       ...looks.issues,
       ...passes.issues,
+      ...trans.issues,
       ...gpreset.issues,
       ...entry.issues,
     ];

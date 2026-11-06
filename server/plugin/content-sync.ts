@@ -29,6 +29,7 @@ import { registerLibraryItem, unregisterLibraryItem } from "../../shared/element
 import { registerLook, unregisterLook } from "../../shared/scene3dLooks";
 import { registerGraphPreset, unregisterGraphPreset } from "../../shared/scene3dPresets";
 import { registerPassDef, unregisterPassDef } from "../../shared/scene3dPasses";
+import { registerTransitionId, unregisterPluginTransition } from "../../shared/transitions";
 
 type Candidate = { file: string; pluginId: string };
 
@@ -503,6 +504,53 @@ export function syncPluginPasses(): { count: number; issues: string[] } {
 /** 诊断用：当前由插件提供的 pass id */
 export const pluginPassIds = (): string[] => [...ownedPasses].sort();
 
+/* ───────────────────────────── 转场 ───────────────────────────── */
+
+const ownedTransitions = new Set<string>();
+let trKey = "";
+let trIssues: string[] = [];
+
+/**
+ * 登记插件转场的 **id**。
+ *
+ * 服务端**不执行**插件代码：它只需要知道"这个 id 合法"，用来校验
+ * `transitionIn.type` 与生成提示文案。实现由生成文件在 web/渲染端注册。
+ *
+ * 这是刻意的分工——服务端 import 一个未知插件模块，等于让它在写盘路径上跑
+ * 作者的顶层代码（有副作用、可能抛错、可能联网）。能不做就不做。
+ */
+export function syncPluginTransitions(): { count: number; issues: string[] } {
+  const key = fingerprint([...candidateFiles("transitions"), ...candidateDirFiles("transitions")]);
+  if (key === trKey) return { count: ownedTransitions.size, issues: [...trIssues] };
+
+  const files = [...pluginFiles("transition", ".ts"), ...pluginFiles("transition", ".tsx")];
+  const issues: string[] = [];
+  const seen = new Set<string>();
+
+  for (const { file, pluginId } of files) {
+    const id = path.basename(file, path.extname(file));
+    if (!/^[a-z0-9][a-z0-9-]*$/.test(id)) {
+      issues.push(`${pluginId}/transitions/${path.basename(file)}：文件名就是转场 id，只能小写字母、数字、短横线`);
+      continue;
+    }
+    registerTransitionId(id);
+    seen.add(id);
+    ownedTransitions.add(id);
+  }
+
+  for (const id of [...ownedTransitions]) {
+    if (seen.has(id)) continue;
+    if (unregisterPluginTransition(id)) ownedTransitions.delete(id);
+  }
+
+  trKey = key;
+  trIssues = issues;
+  return { count: ownedTransitions.size, issues: [...issues] };
+}
+
+/** 诊断用：当前由插件提供的转场 id */
+export const pluginTransitionIdsOf = (): string[] => [...ownedTransitions].sort();
+
 /* ───────────────────── 生成文件（web/渲染端那一份） ───────────────────── */
 
 let entryKey = "";
@@ -526,6 +574,7 @@ export function ensurePluginEntryFresh(): { changed: boolean; issues: string[] }
     ...candidateDirFiles("elements"),
     ...candidateFiles(path.join("scene3d", "looks.json")),
     ...candidateFiles(path.join("scene3d", "passes.json")),
+    ...candidateDirFiles("transitions"),
   ];
   const key = fingerprint(candidates);
   if (key === entryKey) return { changed: false, issues: [] };

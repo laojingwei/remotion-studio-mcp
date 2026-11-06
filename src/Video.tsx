@@ -50,7 +50,8 @@ const SceneWrap: React.FC<{
 
   // 具体样式在 shared/transitions.ts（纯函数，可单测；新增转场只改那一处）
   const style: Record<string, string | number> = {};
-  if (d > 0) Object.assign(style, transitionStyle(inT!.type, frame, d, durationInFrames));
+  // 第 5 个参数是插件转场的参数（内置转场没有），不写就是空对象
+  if (d > 0) Object.assign(style, transitionStyle(inT!.type, frame, d, durationInFrames, inT!.params));
   if (win.len > 0 && frame >= win.start) {
     Object.assign(style, exitStyle(outT, frame - win.start, win.len, durationInFrames));
   }

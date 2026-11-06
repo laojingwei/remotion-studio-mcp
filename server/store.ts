@@ -5,7 +5,7 @@ import path from "node:path";
 import type { Project } from "../shared/schema";
 import { createSeedProject } from "../shared/ops";
 import { migrateOverlaysToScenes, projectSchema } from "../shared/schema";
-import { TRANSITION_TYPES } from "../shared/transitions";
+import { TRANSITION_TYPES, allTransitionIds } from "../shared/transitions";
 
 export const DATA_DIR = PROJECTS_ROOT;
 export const OUT_DIR = path.join(PROJECT_ROOT, "out");
@@ -181,8 +181,14 @@ export function repairKnownDirtyValues(project: Record<string, unknown>): boolea
       // 先试大小写归一：glitch 在 2026-11 转场扩容后成了合法类型，历史数据里
       // 写成 "GLITCH"/"Glitch" 的应该保留原意，而不是被当成脏值重置成 blur
       const lower = type.toLowerCase();
-      if (TRANSITION_TYPES.includes(type as (typeof TRANSITION_TYPES)[number])) continue;
-      if (TRANSITION_TYPES.includes(lower as (typeof TRANSITION_TYPES)[number])) {
+      /*
+       * 注意这里用 `allTransitionIds()` 而不是内置常量表：
+       * 插件转场的 id 也在合法集合里，用常量表会把它们当成脏值重置成 blur
+       * —— 表现出来是"装了转场插件，一打开旧工程就被改回模糊"。
+       */
+      const ids = allTransitionIds();
+      if (ids.includes(type)) continue;
+      if (ids.includes(lower)) {
         tr.type = lower;
         changed = true;
         continue;
