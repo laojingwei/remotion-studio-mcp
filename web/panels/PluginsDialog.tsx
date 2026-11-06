@@ -113,6 +113,13 @@ export const PluginsDialog: React.FC<{ open: boolean; onClose: () => void }> = (
   const [msg, setMsg] = useState("");
   const [busy, setBusy] = useState(false);
   const [loading, setLoading] = useState(false);
+  /**
+   * 当前展开的是哪个插件的自制界面。
+   *
+   * 用"只有一个"而不是多开：插件界面里常有密钥输入，同时开好几个既挤又容易填错栏。
+   */
+  const [uiOf, setUiOf] = useState<string | null>(null);
+  const uiFrame = useRef<HTMLIFrameElement | null>(null);
   const logRef = useRef<HTMLDivElement | null>(null);
 
   const active = !!job && (job.status === "running" || job.status === "queued");
@@ -544,6 +551,14 @@ export const PluginsDialog: React.FC<{ open: boolean; onClose: () => void }> = (
                     ))}
                   </div>
                   <div className="plg-item-actions">
+                    {p.hasUi ? (
+                      <button
+                        className={`ghost plg-mini ${uiOf === p.id ? "is-on" : ""}`}
+                        onClick={() => setUiOf(uiOf === p.id ? null : p.id)}
+                      >
+                        {uiOf === p.id ? "收起界面" : "打开界面"}
+                      </button>
+                    ) : null}
                     {p.canRepair ? (
                       <button className="ghost plg-mini" onClick={() => void doRepair(p)} disabled={busy || active}>
                         重建
@@ -556,6 +571,49 @@ export const PluginsDialog: React.FC<{ open: boolean; onClose: () => void }> = (
                       卸载
                     </button>
                   </div>
+                  {/*
+                    插件自己的界面：**宿主不解析它的内容**，只把 plugins/<id>/ui/ 当静态目录挂上去。
+                    为什么用 iframe 而不是渲染它的 React 组件——见 server/index.ts 里
+                    /plugin-ui 路由上那段注释（一句话：编辑器是预构建产物，静态 import 会变成
+                    "装完看不到，得先跑 vite build"）。
+                  */}
+                  {p.hasUi && uiOf === p.id ? (
+                    <div className="plg-ui-panel">
+                      <div className="plg-ui-bar">
+                        <span>
+                          以下是插件 <b>{p.name}</b> 自带的界面，内容和能力都由插件提供
+                        </span>
+                        <button className="ghost plg-mini" onClick={() => setUiOf(null)}>
+                          收起
+                        </button>
+                      </div>
+                      <iframe
+                        ref={uiFrame}
+                        className="plg-ui-frame"
+                        title={`${p.name} 界面`}
+                        src={`/plugin-ui/${encodeURIComponent(p.id)}/index.html`}
+                        /*
+                         * allow-same-origin 是必须的：插件页面要 fetch('/api/...') 读写自己的配置。
+                         * 不给 allow-top-navigation，防止插件把整个编辑器导航走。
+                         */
+                        sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-downloads"
+                        onLoad={() => {
+                          /*
+                           * 把宿主的主题变量送进去：插件可以照着用（想要统一观感时），
+                           * 也可以完全无视。只发一次，之后由插件自己决定要不要再问。
+                           */
+                          const cs = getComputedStyle(document.documentElement);
+                          const keys = ["--bg", "--panel", "--panel-2", "--line", "--text", "--muted", "--accent", "--danger", "--radius"];
+                          const tokens: Record<string, string> = {};
+                          for (const k of keys) tokens[k] = cs.getPropertyValue(k).trim();
+                          uiFrame.current?.contentWindow?.postMessage(
+                            { type: "studio:init", pluginId: p.id, theme: "dark", tokens },
+                            "*",
+                          );
+                        }}
+                      />
+                    </div>
+                  ) : null}
                 </div>
               );
             })}

@@ -126,6 +126,7 @@ const HOW_TO = [
   "  scene3d/presets.json 3D 图形配方   → list_graph_presets 多几套起手图，set_graph_scene 一套换上",
   "  scene3d/passes.json  3D 后期效果   → list_plugin_passes 多几个（受控 GLSL），写进 post.passes 才上镜",
   "  plugin.ts 的 ttsProviders → 语音 provider（适配任意厂商，list_tts_providers 查）",
+  "  ui/index.html        自带界面      → 「插件」对话框里多一个「打开界面」，页面里可调 /api/* 与 /api/plugin-config/<id>",
   "  scenes/<type>.json + <type>.tsx  场景组件 → 选择器里多一种画面（改了要重新打包）",
   "  plugin.ts            钩子/工具/处理器 → 说意见、改字、清洗素材，或加一个 MCP 工具",
   "  package.json + dist/ 完整工程        → 同上，但可以带自己的 dependencies / 构建脚本 / 原生模块",

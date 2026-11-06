@@ -2,7 +2,8 @@ import { serve } from "@hono/node-server";
 import { getConnInfo } from "@hono/node-server/conninfo";
 import { serveStatic } from "@hono/node-server/serve-static";
 import { cleanupLegacyBundles } from "./bundle-cache";
-import { serveFiles } from "./static.service";
+import { mimeOf, serveFiles } from "./static.service";
+import { getPluginConfig, savePluginConfig } from "./plugin-config.service";
 import { Hono, type Context } from "hono";
 import { streamSSE } from "hono/streaming";
 import fs from "node:fs";
@@ -1254,9 +1255,93 @@ app.get("/api/plugins", async (c) => {
          * 不是错误，但必须让用户看见"它现在什么都没干"。
          */
         templateOnly: hasExampleEntry(p.dir),
+        /**
+         * 有没有自带界面（`plugins/<名>/ui/index.html`）。
+         *
+         * 每次都扫一遍而不是缓存：装完插件刷新面板就要看得见，
+         * 而一次 existsSync 的代价可以忽略。
+         */
+        hasUi: fs.existsSync(path.join(p.dir, "ui", "index.html")),
       };
     });
     return c.json({ plugins, roots: pluginRoots(), trashDir: PLUGIN_TRASH_DIR, orphans: scanOrphanDirs() });
+  } catch (err) {
+    return fail(c, err);
+  }
+});
+
+/* ─────────────────── 插件自制界面：静态服务 + 配置存储 ─────────────────── */
+
+/**
+ * `plugins/<名>/ui/` 当静态目录服务。
+ *
+ * ## 为什么是 iframe + 静态文件，而不是把 React 组件打进编辑器
+ *
+ * 编辑器吃的是预构建产物 `dist/web`，只有 `npm run build` 才更新。插件 UI 若走
+ * 静态 import，用户装完插件在编辑器里**什么也看不到**，还得会跑 vite build——这对插件
+ * 生态是硬伤。静态文件则由本服务直接读盘，改完刷新即生效。
+ *
+ * 附带好处：插件可以用任意技术栈（甚至不用框架）、自带依赖、样式互不污染、
+ * 没有 React 版本冲突。
+ *
+ * ## 安全边界
+ *
+ * 只映射到该插件的 `ui` 目录，`..` 与解码后的穿越一律拒。同源 iframe 理论上能碰父窗口，
+ * 但插件本来就能在服务端跑任意代码——这不是新增的攻击面，文档里写明"插件 UI 视为可信代码"。
+ */
+app.use("/plugin-ui/:id/*", async (c) => {
+  const id = c.req.param("id");
+  const plugin = scanPlugins().find((p) => p.id === id);
+  if (!plugin) return c.notFound();
+
+  const uiDir = path.resolve(plugin.dir, "ui");
+  if (!fs.existsSync(uiDir)) return c.notFound();
+
+  const prefix = `/plugin-ui/${id}`;
+  let rel = c.req.path.slice(prefix.length) || "/";
+  try {
+    rel = decodeURIComponent(rel);
+  } catch {
+    return c.notFound();
+  }
+  if (rel.endsWith("/")) rel += "index.html";
+  // 先按段判穿越再 resolve：两道都要，`%2e%2e` 解码后才现形
+  if (rel.split("/").includes("..")) return c.notFound();
+
+  const full = path.resolve(uiDir, `.${rel.startsWith("/") ? rel : `/${rel}`}`);
+  if (full !== uiDir && !full.startsWith(uiDir + path.sep)) return c.notFound();
+
+  let stat: fs.Stats;
+  try {
+    stat = fs.statSync(full);
+  } catch {
+    return c.notFound();
+  }
+  if (!stat.isFile()) return c.notFound();
+
+  /*
+   * 不缓存：插件作者改完页面一刷新就要看到效果。
+   * 这类文件都很小，省这点带宽不值当"改了没反应"的困惑。
+   */
+  return c.body(fs.readFileSync(full), 200, {
+    "content-type": mimeOf(full),
+    "cache-control": "no-store",
+  });
+});
+
+/** 读某个插件的配置（插件页面自己 fetch，宿主不代理） */
+app.get("/api/plugin-config/:id", (c) => {
+  const id = c.req.param("id");
+  return c.json({ config: getPluginConfig(id) });
+});
+
+/** 写某个插件的配置：一层合并，返回合并后的完整配置 */
+app.put("/api/plugin-config/:id", async (c) => {
+  try {
+    const body = await c.req.json().catch(() => null);
+    const res = savePluginConfig(c.req.param("id"), body);
+    if (!res.ok) return c.json({ error: res.error }, 400);
+    return c.json({ config: res.config });
   } catch (err) {
     return fail(c, err);
   }

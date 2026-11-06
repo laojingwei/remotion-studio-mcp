@@ -65,6 +65,69 @@ plugins/我的插件/
 转场 / 特效 / 3D 几何体（`scene3d/presets.json`）**不打算做**，理由见计划文档 9.3。
 完整路线见 `docs/2026-11-05-插件化架构与实施计划.md`。
 
+## 自带界面：配置页、检查按钮、什么都能写
+
+插件最清楚自己需要什么配置（TTS 要 appid+token、图床要 region+bucket、模型要选路径），
+所以界面也由插件提供。宿主只做三件事：**把页面挂出来、给一个存配置的地方、把配色告诉它**。
+
+```
+plugins/<名>/ui/index.html     ← 入口（必需）
+plugins/<名>/ui/*              ← 同目录下的 js/css/图片都能取
+```
+
+打开编辑器 → 顶栏「插件」→ 该插件条目上会出现「打开界面」按钮，点开就是你的页面。
+
+### 页面里能做什么
+
+**任何东西。** 原生 HTML/JS、Vue、自己构建的产物、图表库、文件选择器——宿主不解析你的内容。
+它只是一个 iframe。
+
+三样最常用的能力：
+
+```js
+// 1. 读自己的配置（存在 data/plugin-config.json，不进工程、不会被分享）
+const { config } = await (await fetch(`/api/plugin-config/${pluginId}`)).json();
+
+// 2. 存（一层 key 合并，单插件上限 64KB）
+await fetch(`/api/plugin-config/${pluginId}`, {
+  method: "PUT",
+  headers: { "content-type": "application/json" },
+  body: JSON.stringify({ endpoint, token }),
+});
+
+// 3. 调宿主任何 API（同源，直接 fetch）
+const providers = await (await fetch("/api/tts/providers")).json();
+```
+
+`pluginId` 别写死，从 URL 取：`decodeURIComponent(location.pathname.split("/")[2])`——
+同一份页面可能被复制成另一个插件。
+
+### 跟宿主配色
+
+宿主在 iframe `onload` 后会 postMessage 一次：
+
+```js
+window.addEventListener("message", (ev) => {
+  if (ev.data?.type !== "studio:init") return;
+  for (const [k, v] of Object.entries(ev.data.tokens)) {
+    document.documentElement.style.setProperty(k, v);
+  }
+});
+// tokens: --bg --panel --panel-2 --line --text --muted --accent --danger --radius
+```
+
+想要"像编辑器的一部分"就照着用；想完全自定义就无视它，宿主不会干涉。
+
+### 必须先知道的三件事
+
+1. **改完刷新就生效**，不用重新构建编辑器（这也是为什么用 iframe 而不是把你的 React 组件
+   打进编辑器：编辑器是预构建产物，静态 import 会导致"装完看不到，得先跑 vite build"）。
+2. **iframe 有 `allow-same-origin`**——因为要 `fetch('/api/...')`。所以你的页面能访问父窗口。
+   插件本来就能在服务端跑任意代码，这里不算新增攻击面，但请别做会让用户困惑的事。
+3. **不要覆盖整个编辑器**：没给 `allow-top-navigation`，你的页面无法把顶层窗口导航走。
+
+完整可运行的例子见 `plugins/_example-ui/`（读配置 / 存配置 / 调宿主 API / 跟随配色，四件事都有）。
+
 ## 插件可以是一个完整工程
 
 上面那种「一个 `plugin.ts`」适合几十行的小规则。但真实插件常常是一个 npm 包或 git 仓库：

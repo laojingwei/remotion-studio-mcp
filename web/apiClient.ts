@@ -1180,6 +1180,8 @@ export type PluginItem = {
   hooks: string[];
   /** 目录里只有 `plugin.ts.example` 这种模板，还没启用 */
   templateOnly: boolean;
+  /** 有没有自带界面（plugins/<名>/ui/index.html） */
+  hasUi: boolean;
   buildScript: string | null;
   depCount: number;
   canRepair: boolean;

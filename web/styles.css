@@ -8494,12 +8494,43 @@ select.tts-input {
 
 .plg-item {
   display: flex;
+  flex-wrap: wrap; /* 插件界面要占整行，不能被 actions 挤到右边 */
   gap: 10px;
   align-items: flex-start;
   padding: 10px;
   border-radius: 10px;
   border: 1px solid var(--line);
   background: var(--panel-2);
+}
+
+/* ── 插件自制界面（iframe）──
+   宿主只给一个容器和一条说明条，里面全归插件。
+   高度固定 460px 并可滚动：插件内容长短不可控，让 iframe 自己撑开会把整个对话框
+   顶成无限长（还带一层嵌套滚动）；插件真需要更高，可以在页面里发 studio:resize。 */
+.plg-ui-panel {
+  flex: 0 0 100%;
+  margin-top: 4px;
+  border-top: 1px dashed var(--line);
+  padding-top: 8px;
+}
+
+.plg-ui-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  font-size: 11px;
+  color: var(--muted);
+  margin-bottom: 6px;
+}
+
+.plg-ui-frame {
+  display: block;
+  width: 100%;
+  height: 460px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--bg);
 }
 
 .plg-item.is-off {

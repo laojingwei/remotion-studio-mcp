@@ -80,6 +80,9 @@ memory/
 !/plugins/_example-media/**
 !/plugins/_example-engineering/
 !/plugins/_example-engineering/**
+# 自带界面的最小示例（作者照抄就能跑：读配置 / 存配置 / 调宿主 API / 跟随配色）
+!/plugins/_example-ui/
+!/plugins/_example-ui/**
 
 # 放行**不等于什么都要**。
 #

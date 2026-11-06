@@ -2622,6 +2622,47 @@ await testAsync("语音 provider：内置 id 不可占、缺 synthesize 要报�
   resetTtsProviders();
 });
 
+/* ──────────────── 插件自制界面：配置存储（2026-11-06） ──────────────── */
+
+const { getPluginConfig, savePluginConfig, pluginConfigStats } = await import("../server/plugin-config.service");
+
+/**
+ * 插件配置是"插件自己决定的任意 JSON"，宿主只保证**能存、能按 key 合并、不炸**。
+ *
+ * 这里守的是三条最容易出事的：合并语义（别把别家的 key 清了）、
+ * 大小上限（防插件把缓存塞进来拖慢每次读）、坏输入不抛（面板会因此白屏）。
+ */
+test("插件配置：写入 / 按 key 合并 / 大小上限 / 坏输入不炸", () => {
+  const r1 = savePluginConfig("ui-demo", { endpoint: "https://a.test", token: "t1" });
+  assert.equal(r1.ok, true);
+  assert.equal(getPluginConfig("ui-demo").token, "t1");
+
+  // 第二次只改一个 key：之前的必须还在（面板一次只改一栏）
+  const r2 = savePluginConfig("ui-demo", { voice: "v1" });
+  assert.equal(r2.ok, true);
+  const cfg = getPluginConfig("ui-demo");
+  assert.equal(cfg.token, "t1", "合并不能清掉已有的 key");
+  assert.equal(cfg.voice, "v1");
+
+  // 不同插件互不影响
+  savePluginConfig("other", { x: 1 });
+  assert.equal(getPluginConfig("ui-demo").x, undefined);
+  assert.equal(getPluginConfig("other").x, 1);
+  assert.ok(pluginConfigStats().plugins.includes("ui-demo"));
+
+  // 超过 64KB 要拒（不是截断：截断出来的 JSON 是坏的）
+  const big = savePluginConfig("ui-demo", { blob: "x".repeat(70 * 1024) });
+  assert.equal(big.ok, false);
+  assert.match(String((big as { error: string }).error), /太大/);
+  assert.equal(getPluginConfig("ui-demo").blob, undefined, "被拒之后不能留下半截");
+
+  // 坏输入：数组 / null / 非法 id
+  assert.equal(savePluginConfig("ui-demo", [1, 2, 3] as never).ok, false);
+  assert.equal(savePluginConfig("ui-demo", null as never).ok, false);
+  assert.equal(savePluginConfig("../evil", { a: 1 }).ok, false, "id 里的路径字符要拒");
+  assert.deepEqual(getPluginConfig("../evil"), {}, "读非法 id 返回空对象而不是抛");
+});
+
 /* ────────────────────────── 收尾 ────────────────────────── */
 fs.rmSync(TMP, { recursive: true, force: true });
 
