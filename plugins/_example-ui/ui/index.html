@@ -1,0 +1,170 @@
+<!doctype html>
+<html lang="zh">
+<head>
+<meta charset="utf-8" />
+<title>示例插件界面</title>
+<style>
+  /*
+   * 配色：宿主会在加载后 postMessage 一份它自己的 CSS 变量（studio:init）。
+   * 想和编辑器观感一致就照着用；不想管就写死颜色，宿主不会干涉。
+   */
+  :root {
+    --bg: #fff; --panel: #f6f6f7; --panel-2: #eeeef0; --line: rgba(0,0,0,.14);
+    --text: #111; --muted: #666; --accent: #4c8d00; --radius: 8px;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; padding: 14px; background: var(--bg); color: var(--text);
+    font: 13px/1.6 "Segoe UI", "Microsoft YaHei", system-ui, sans-serif;
+  }
+  h1 { font-size: 13px; margin: 0 0 4px; letter-spacing: .04em; }
+  p.hint { margin: 0 0 14px; color: var(--muted); font-size: 12px; }
+  .row { display: flex; align-items: center; gap: 10px; margin-bottom: 10px; }
+  .row > label { flex: 0 0 88px; color: var(--muted); font-size: 12px; }
+  .row > input { flex: 1; }
+  input {
+    background: var(--panel); color: var(--text); border: 1px solid var(--line);
+    border-radius: var(--radius); padding: 7px 9px; font: inherit; outline: none;
+  }
+  input:focus { border-color: var(--accent); }
+  button {
+    background: var(--panel-2); color: var(--text); border: 1px solid var(--line);
+    border-radius: var(--radius); padding: 7px 12px; font: inherit; cursor: pointer;
+  }
+  button.primary { background: var(--accent); color: #0b0b0b; border-color: transparent; font-weight: 600; }
+  button:disabled { opacity: .5; cursor: default; }
+  .bar { display: flex; gap: 8px; margin-top: 12px; }
+  #status { margin-top: 12px; font-size: 12px; color: var(--muted); white-space: pre-wrap; }
+  #status.ok { color: var(--accent); }
+  #status.bad { color: #d33; }
+  code { background: var(--panel-2); padding: 1px 4px; border-radius: 4px; }
+</style>
+</head>
+<body>
+  <!--
+    这个页面是**插件自己的**，宿主不解析内容。它做三件事，正好是插件界面最常见的三件事：
+      1. 读写自己的配置（GET/PUT /api/plugin-config/<插件id>）
+      2. 调宿主的能力（这里拿 /api/tts/providers 举例）
+      3. 跟随宿主配色（接收 studio:init 里的 CSS 变量）
+      4. 请求宿主调整浮窗（studio:resize / studio:close，可选）
+  -->
+  <h1>示例插件 · 设置</h1>
+  <p class="hint">
+    这个页面完全由插件提供，宿主把它装进一个可拖动、可缩放的浮窗里，并给一个存配置的地方。
+    窗口里的一切——布局、宽度、按钮——都由这个页面决定。
+  </p>
+
+  <div class="row">
+    <label>服务端点</label>
+    <input id="endpoint" placeholder="https://api.example.com/v1/tts" />
+  </div>
+  <div class="row">
+    <label>密钥</label>
+    <input id="token" type="password" placeholder="只存在本机 data/plugin-config.json" />
+  </div>
+  <div class="row">
+    <label>音色</label>
+    <input id="voice" placeholder="例如 zh_female_1" />
+  </div>
+
+  <div class="bar">
+    <button class="primary" id="save">保存</button>
+    <button id="reload">重新读取</button>
+    <button id="check">检查宿主 API</button>
+    <button id="taller">让浮窗更高</button>
+  </div>
+
+  <div id="status"></div>
+
+<script>
+  /*
+   * 插件 id 从 URL 里取：/plugin-ui/<id>/index.html
+   * 不要写死——同一份页面可能被复制成另一个插件。
+   */
+  const pluginId = decodeURIComponent(location.pathname.split("/")[2] || "");
+  const $ = (id) => document.getElementById(id);
+  const fields = ["endpoint", "token", "voice"];
+
+  function say(text, kind) {
+    const el = $("status");
+    el.textContent = text;
+    el.className = kind || "";
+  }
+
+  async function load() {
+    try {
+      const res = await fetch(`/api/plugin-config/${encodeURIComponent(pluginId)}`);
+      const { config } = await res.json();
+      for (const k of fields) $(k).value = config?.[k] ?? "";
+      say("已读取配置" + (config && Object.keys(config).length ? "" : "（还是空的）"));
+    } catch (e) {
+      say("读取失败：" + e.message, "bad");
+    }
+  }
+
+  async function save() {
+    const patch = {};
+    for (const k of fields) patch[k] = $(k).value;
+    try {
+      const res = await fetch(`/api/plugin-config/${encodeURIComponent(pluginId)}`, {
+        method: "PUT",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(patch),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || res.status);
+      say("已保存：" + Object.keys(data.config).join("、"), "ok");
+    } catch (e) {
+      say("保存失败：" + e.message, "bad");
+    }
+  }
+
+  /** 调宿主 API 的例子：任何 /api/* 都能用（同源） */
+  async function check() {
+    say("检查中…");
+    try {
+      const res = await fetch("/api/tts/providers");
+      const data = await res.json();
+      const names = (data.providers || []).map((p) => p.id);
+      say(
+        "宿主在线。语音 provider：" +
+          ["openai(内置)"].concat(names).join(" / ") +
+          (data.errors && data.errors.length ? "\n有 " + data.errors.length + " 个 provider 加载失败" : ""),
+        "ok",
+      );
+    } catch (e) {
+      say("调不通宿主 API：" + e.message, "bad");
+    }
+  }
+
+  /*
+   * 内容变多时可以请宿主把浮窗调高（高度会被夹在屏幕内）。
+   * 同理，`{ type: "studio:close" }` 可以让用户点完「保存」就把窗口收掉。
+   * 两条都是可选的：不发，用户也能自己拖、自己关。
+   */
+  function taller() {
+    parent.postMessage({ type: "studio:resize", height: 720 }, "*");
+    say("已请求宿主把窗口调到 720 高（会被屏幕边界夹住）");
+  }
+
+  $("save").addEventListener("click", save);
+  $("reload").addEventListener("click", load);
+  $("check").addEventListener("click", check);
+  $("taller").addEventListener("click", taller);
+
+  /* 宿主加载完成后会发一次主题变量，照着用就能和编辑器观感一致。
+     如果你的页面用异步框架初始化（监听建得晚），建好监听后发一条
+     parent.postMessage({ type: "studio:hello" }, "*")，宿主会立刻补发一次。 */
+  window.addEventListener("message", (ev) => {
+    const msg = ev.data;
+    if (!msg || msg.type !== "studio:init") return;
+    document.documentElement.dataset.theme = msg.theme || "";
+    for (const [k, v] of Object.entries(msg.tokens || {})) {
+      if (v) document.documentElement.style.setProperty(k, v);
+    }
+  });
+
+  void load();
+</script>
+</body>
+</html>

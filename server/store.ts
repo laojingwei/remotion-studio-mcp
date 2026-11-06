@@ -5,11 +5,24 @@ import path from "node:path";
 import type { Project } from "../shared/schema";
 import { createSeedProject } from "../shared/ops";
 import { migrateOverlaysToScenes, projectSchema } from "../shared/schema";
-import { TRANSITION_TYPES } from "../shared/transitions";
+import { TRANSITION_TYPES, allTransitionIds } from "../shared/transitions";
 
 export const DATA_DIR = PROJECTS_ROOT;
 export const OUT_DIR = path.join(PROJECT_ROOT, "out");
-export const PUBLIC_DIR = path.join(PROJECT_ROOT, "public");
+
+/**
+ * 静态素材目录（`/assets/*` 的实体位置）。
+ *
+ * 和 `STUDIO_DATA_ROOT` 一样支持覆盖：测试要能完全不碰仓库里的 `public/`。
+ * 这不是洁癖——`public/assets/projects/<id>/` 下的测试残留会一直堆着，而且
+ * 本机有 safe-delete 钩子（单轮删超过 50 个文件会被整批拒绝），
+ * 测试想在项目目录里"先清空再断言"根本做不到，删除被静默拒绝后报表会指向
+ * 完全错误的方向（"6 !== 2"）。指到临时目录就都没了。
+ *
+ * 生产环境不设这个变量，行为与以前完全一致。
+ */
+const publicOverride = process.env.STUDIO_PUBLIC_DIR?.trim();
+export const PUBLIC_DIR = publicOverride ? path.resolve(publicOverride) : path.join(PROJECT_ROOT, "public");
 
 /**
  * 悬空链接自愈：data / out / public 有可能是指向外部工作区（如 D:\Remotion workspace）的符号链接。
@@ -168,8 +181,14 @@ export function repairKnownDirtyValues(project: Record<string, unknown>): boolea
       // 先试大小写归一：glitch 在 2026-11 转场扩容后成了合法类型，历史数据里
       // 写成 "GLITCH"/"Glitch" 的应该保留原意，而不是被当成脏值重置成 blur
       const lower = type.toLowerCase();
-      if (TRANSITION_TYPES.includes(type as (typeof TRANSITION_TYPES)[number])) continue;
-      if (TRANSITION_TYPES.includes(lower as (typeof TRANSITION_TYPES)[number])) {
+      /*
+       * 注意这里用 `allTransitionIds()` 而不是内置常量表：
+       * 插件转场的 id 也在合法集合里，用常量表会把它们当成脏值重置成 blur
+       * —— 表现出来是"装了转场插件，一打开旧工程就被改回模糊"。
+       */
+      const ids = allTransitionIds();
+      if (ids.includes(type)) continue;
+      if (ids.includes(lower)) {
         tr.type = lower;
         changed = true;
         continue;

@@ -220,8 +220,16 @@ export type EffectClip = z.infer<typeof effectClipSchema>;
 /* ────────────────────────────── 场景 ────────────────────────────── */
 
 export const transitionSchema = z.object({
-  type: z.enum(TRANSITION_TYPES),
+  /*
+   * 不用 `z.enum(TRANSITION_TYPES)`：插件转场的 id 编译期不存在。
+   * 合法性在 `normalizeTransition`（写入时，列出可用项）与渲染端（取不到回退 fade）两处管，
+   * 和 `look` / `post.passes` 同一套取舍——严格校验放写入端，渲染端宽容，
+   * 这样插件被删之后老工程仍然打得开。
+   */
+  type: z.string(),
   durationInFrames: z.number().int().min(0),
+  /** 插件转场的参数（内置转场忽略）。键名见转场的 meta.params */
+  params: z.record(z.union([z.number(), z.string()])).optional(),
 });
 export type Transition = z.infer<typeof transitionSchema>;
 

@@ -25,7 +25,17 @@ export const TRANSITION_TYPES = [
   "diagonal",
 ] as const;
 
-export type TransitionType = (typeof TRANSITION_TYPES)[number];
+/** 内置 12 种（面板/文档里列的就是这些） */
+export type BuiltinTransitionType = (typeof TRANSITION_TYPES)[number];
+
+/**
+ * 合法的转场 id：内置 12 种 + 插件注册的任意 id。
+ *
+ * 用 `| (string & {})` 而不是纯 `string`：内置名字保住自动补全与拼写检查，
+ * 插件 id 又不被挡住。真正的校验在 `normalizeTransition`（写入时，会列出可用项）
+ * 和 `computeStyle`（渲染时，取不到就回退 fade 并告警）。
+ */
+export type TransitionType = BuiltinTransitionType | (string & {});
 
 export const TRANSITION_OPTIONS: { key: TransitionType; label: string; hint: string }[] = [
   { key: "none", label: "硬切", hint: "直接切" },
@@ -44,6 +54,218 @@ export const TRANSITION_OPTIONS: { key: TransitionType; label: string; hint: str
 
 export type TransitionStyle = Record<string, string | number>;
 
+/* ───────────────────────── 插件转场（2026-11-06） ───────────────────────── */
+
+/**
+ * 插件转场的上下文。
+ *
+ * ## 为什么 `phase` 要传，而反向播放由宿主做
+ *
+ * 内置的出场是"反向播放同一套转场"（`exitStyle` 里就是 `(1-p)` 再调本函数）。
+ * 所以插件**只写一个方向**就是对的：宿主在 out 阶段把 p 反过来传进来。
+ * `phase` 额外给那些"进出场不该对称"的效果留口子（比如出场时放大而不是缩小），
+ * 但不需要区分方向的插件可以完全无视它。
+ */
+export type PluginTransitionContext = {
+  phase: "in" | "out";
+  /** 当前帧（场景内，出场窗口内也从 0 起）——要稳定的逐帧变化就用它 */
+  frame: number;
+  durationInFrames: number;
+  sceneDurationInFrames: number;
+  /** 工程里给这次转场的参数（`transitionIn.params`），缺省是空对象 */
+  params: Record<string, string | number>;
+};
+
+export type PluginTransitionParam = {
+  key: string;
+  label?: string;
+  min?: number;
+  max?: number;
+  default?: number | string;
+};
+
+export type PluginTransitionMeta = {
+  label?: string;
+  hint?: string;
+  /** 参数表：编辑器据此渲染表单，agent 据此知道能调什么 */
+  params?: PluginTransitionParam[];
+};
+
+export type PluginTransitionImpl = (p: number, ctx: PluginTransitionContext) => TransitionStyle;
+
+type PluginTransitionDef = {
+  id: string;
+  label: string;
+  hint: string;
+  meta: PluginTransitionMeta;
+  /** 服务端只有 id（它不执行插件代码），此时为空 */
+  style?: PluginTransitionImpl;
+};
+
+const EXTRA_TRANSITIONS = new Map<string, PluginTransitionDef>();
+
+const TRANSITION_ID_RE = /^[a-z0-9][a-z0-9-]*$/;
+
+/**
+ * 转场返回值只取这些 CSS 属性。
+ *
+ * 为什么要白名单：转场函数被 `Object.assign` 到场次的 style 上，而那个 style 同时管
+ * **布局**。插件返回 `position: fixed` / `width` 之类会把整片排版搞坏，且表现出来的
+ * 不是"转场怪"而是"版面错"，极难归因。要整层自定义 DOM 的，那是插件场景组件的活。
+ */
+const ALLOWED_STYLE_KEYS = new Set([
+  "transform",
+  "transformOrigin",
+  "opacity",
+  "filter",
+  "backdropFilter",
+  "clipPath",
+  "maskImage",
+  "WebkitMaskImage",
+  "maskSize",
+  "maskPosition",
+  "backgroundColor",
+  "background",
+  "boxShadow",
+  "mixBlendMode",
+  "borderRadius",
+]);
+
+const warnedStyle = new Set<string>();
+
+/** 过滤插件返回值：只留白名单内的字符串/数字属性，其余丢弃并各警告一次 */
+function sanitizePluginStyle(id: string, raw: unknown): TransitionStyle {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
+    warnOnce(`transition:${id}:shape`, `[plugin-transition] ${id} 的返回值不是样式对象，已忽略（画面按无转场处理）`);
+    return {};
+  }
+  const out: TransitionStyle = {};
+  for (const [k, v] of Object.entries(raw as Record<string, unknown>)) {
+    if (!ALLOWED_STYLE_KEYS.has(k)) {
+      warnOnce(`transition:${id}:key:${k}`, `[plugin-transition] ${id} 返回了不支持的属性 ${k}（已丢弃；转场只能改视觉，不能改布局）`);
+      continue;
+    }
+    if (typeof v !== "string" && typeof v !== "number") {
+      warnOnce(`transition:${id}:val:${k}`, `[plugin-transition] ${id} 的 ${k} 既不是字符串也不是数字（已丢弃）`);
+      continue;
+    }
+    // 外部资源会让渲染端抓不到图（成片里那块就是空的），且是不受控的网络请求
+    if (typeof v === "string" && /url\s*\(/i.test(v)) {
+      warnOnce(`transition:${id}:url:${k}`, `[plugin-transition] ${id} 的 ${k} 里用了 url()（已丢弃；转场不能引用外部资源）`);
+      continue;
+    }
+    out[k] = v as string | number;
+  }
+  return out;
+}
+
+function warnOnce(key: string, msg: string) {
+  if (warnedStyle.has(key)) return;
+  warnedStyle.add(key);
+  console.warn(msg);
+}
+
+/** 由插件加载器调用（渲染端/编辑器）：带实现 */
+export function registerPluginTransition(
+  id: string,
+  mod: unknown,
+  from?: string,
+): { ok: boolean; reason?: string } {
+  const key = String(id ?? "").trim();
+  if (!TRANSITION_ID_RE.test(key) || key.length > 40) {
+    return { ok: false, reason: `id「${key || "(空)"}」不合法：只能小写字母、数字、短横线，≤40 字` };
+  }
+  if ((TRANSITION_TYPES as readonly string[]).includes(key)) {
+    return { ok: false, reason: `id「${key}」与内置转场重名（内置优先，换个 id）` };
+  }
+  const m = (mod ?? {}) as { default?: unknown; meta?: PluginTransitionMeta };
+  if (typeof m.default !== "function") {
+    return { ok: false, reason: `「${key}」没有 export default 一个函数（(p, ctx) => 样式对象）` };
+  }
+  const meta = m.meta && typeof m.meta === "object" ? m.meta : {};
+  EXTRA_TRANSITIONS.set(key, {
+    id: key,
+    label: String(meta.label ?? key),
+    hint: String(meta.hint ?? ""),
+    meta,
+    style: m.default as PluginTransitionImpl,
+  });
+  void from;
+  return { ok: true };
+}
+
+/**
+ * 服务端占位注册：只登记 id（服务端不执行插件代码，只需要知道"这个 id 合法"）。
+ *
+ * 渲染端/编辑器会用真实实现覆盖它。两边注册互不冲突：`registerPluginTransition`
+ * 直接 set，后到者生效。
+ */
+export function registerTransitionId(id: string, label?: string): void {
+  const key = String(id ?? "").trim();
+  if (!key || (TRANSITION_TYPES as readonly string[]).includes(key)) return;
+  const prev = EXTRA_TRANSITIONS.get(key);
+  EXTRA_TRANSITIONS.set(key, {
+    id: key,
+    label: label ?? prev?.label ?? key,
+    hint: prev?.hint ?? "",
+    meta: prev?.meta ?? {},
+    style: prev?.style,
+  });
+}
+
+/** 注销（插件停用/删文件时用）；内置的删不掉 */
+export const unregisterPluginTransition = (id: string): boolean => EXTRA_TRANSITIONS.delete(String(id ?? "").trim());
+
+export const pluginTransitionIds = (): string[] => [...EXTRA_TRANSITIONS.keys()];
+
+/** 全部合法转场 id：内置在前，插件按注册顺序 */
+export const allTransitionIds = (): string[] => [...TRANSITION_TYPES, ...EXTRA_TRANSITIONS.keys()];
+
+/** 面板/文档用的完整选项表（内置 + 插件） */
+export const allTransitionOptions = (): { key: string; label: string; hint: string; params: PluginTransitionParam[] }[] => [
+  ...TRANSITION_OPTIONS.map((o) => ({ ...o, params: [] as PluginTransitionParam[] })),
+  ...[...EXTRA_TRANSITIONS.values()].map((d) => ({
+    key: d.id,
+    label: d.label,
+    hint: d.hint,
+    params: d.meta.params ?? [],
+  })),
+];
+
+/** id → 中文短名（插件没给就用 id） */
+export const transitionLabelOf = (id: string): string => {
+  const builtin = TRANSITION_OPTIONS.find((o) => o.key === id);
+  if (builtin) return builtin.label;
+  return EXTRA_TRANSITIONS.get(String(id ?? "").trim())?.label ?? id;
+};
+
+/**
+ * 跑插件转场。
+ *
+ * 这里 `try/catch` 是**有用**的（和 GLSL pass 不同：那边编译失败不抛，只有黑屏）——
+ * 插件函数是普通 JS，抛了就能接住。接住之后回退成 fade 的样式，
+ * 保证"插件写崩了，这一场还是淡入淡出"，而不是整片渲不出来。
+ */
+function runPluginTransition(
+  def: PluginTransitionDef,
+  p: number,
+  ctx: PluginTransitionContext,
+): TransitionStyle {
+  if (typeof def.style !== "function") {
+    warnOnce(`transition:${def.id}:noimpl`, `[plugin-transition] ${def.id} 没有实现（可能只在服务端注册过），已回退为淡入`);
+    return { opacity: p };
+  }
+  try {
+    return sanitizePluginStyle(def.id, def.style(p, ctx));
+  } catch (err) {
+    warnOnce(
+      `transition:${def.id}:throw`,
+      `[plugin-transition] ${def.id} 报错（已回退为淡入）：${err instanceof Error ? err.message : String(err)}`,
+    );
+    return { opacity: p };
+  }
+}
+
 const clamp01 = (n: number) => Math.max(0, Math.min(1, n));
 const lerp = (a: number, b: number, t: number) => a + (b - a) * t;
 
@@ -58,9 +280,44 @@ export function transitionStyle(
   frame: number,
   durationInFrames: number,
   sceneDurationInFrames = durationInFrames,
+  params?: Record<string, string | number>,
+): TransitionStyle {
+  return computeStyle(type, frame, durationInFrames, sceneDurationInFrames, params, "in");
+}
+
+/**
+ * 真正的计算：内置走原来的 switch（一个像素都没改），插件走注册表。
+ *
+ * 单独拆出来是因为出场也要用它、而且必须能告诉插件"这是 out 阶段"。
+ * `transitionStyle` 只是 `phase: "in"` 的薄包装，签名保持向后兼容。
+ */
+function computeStyle(
+  type: TransitionType,
+  frame: number,
+  durationInFrames: number,
+  sceneDurationInFrames: number,
+  params: Record<string, string | number> | undefined,
+  phase: "in" | "out",
 ): TransitionStyle {
   const d = Math.max(1, durationInFrames);
   const p = clamp01(frame / d);
+
+  /*
+   * 插件优先判断：内置 12 种是白名单常量，插件 id 只可能落在注册表里。
+   * 两边都不认识时（插件被删、工程里还留着 id）走最后的 `fade` 分支 ——
+   * 画面照出、只是效果退回叠化，不会因为一个已经卸掉的插件打不开工程。
+   */
+  const plug = EXTRA_TRANSITIONS.get(type);
+  if (plug) {
+    return runPluginTransition(plug, p, {
+      phase,
+      frame,
+      durationInFrames: d,
+      sceneDurationInFrames,
+      params: params ?? {},
+    });
+  }
+
   const fadeIn = p;
 
   switch (type) {
@@ -209,7 +466,10 @@ export function exitWindow(opts: {
  * @param outWindowLen 出场窗口长度（= exitWindow().len）
  */
 export function exitStyle(
-  outT: { type: TransitionType; durationInFrames: number } | null | undefined,
+  outT:
+    | { type: TransitionType; durationInFrames: number; params?: Record<string, string | number> }
+    | null
+    | undefined,
   framesIntoOut: number,
   outWindowLen: number,
   sceneDurationInFrames = outWindowLen,
@@ -219,7 +479,7 @@ export function exitStyle(
   const hasOut = !!outT && outT.type !== "none";
   // 出场 = 反向播放同一套转场：进度从 1 走到 0
   const base: TransitionStyle = hasOut
-    ? transitionStyle(outT!.type, Math.round((1 - p) * len), len, sceneDurationInFrames)
+    ? computeStyle(outT!.type, Math.round((1 - p) * len), len, sceneDurationInFrames, outT!.params, "out")
     : {};
   return { ...base, opacity: p >= 1 ? 0 : 1 - p };
 }

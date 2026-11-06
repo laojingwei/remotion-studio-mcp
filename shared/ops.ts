@@ -25,10 +25,10 @@ import {
 import { describeSceneBox, normalizeSceneBox, type SceneBox } from "./sceneBox";
 import { droppedProps, getMeta, MIN_SCENE_FRAMES, normalizeProps } from "./sceneMetas";
 import { dslIssues, dslSchema, dslWarnings, nodeSchema, type DslNode, type Scene3DDsl } from "./scene3dDsl";
-import { WORLD_SKIES, findWorldSky, hdriPath } from "./worldPresets";
+import { allWorldSkies, findWorldSky, hdriPath } from "./worldPresets";
 import { hasAnimatedChain, reparentLocalTrs, type Trs } from "./scene3dTransform";
 import { effectLabel, effectSummaryText } from "./effects";
-import { TRANSITION_TYPES } from "./transitions";
+import { TRANSITION_TYPES, allTransitionIds } from "./transitions";
 import { BACKDROP_TYPES, isBackdropType, isPeriodicBackdrop } from "./sceneKinds";
 import {
   animLandingIssues,
@@ -566,11 +566,14 @@ export function normalizeTransition(raw: unknown, label = "transition"): Transit
   if (typeof raw !== "object" || raw === null || Array.isArray(raw)) {
     throw new Error(`${label} 必须是 {type, durationInFrames} 对象（清除请传 null）`);
   }
-  const o = raw as { type?: unknown; durationInFrames?: unknown };
+  const o = raw as { type?: unknown; durationInFrames?: unknown; params?: unknown };
   const type = String(o.type ?? "");
-  if (!(TRANSITION_TYPES as readonly string[]).includes(type)) {
+  if (!allTransitionIds().includes(type)) {
+    const ids = allTransitionIds();
     throw new Error(
-      `${label}.type 不合法：${JSON.stringify(o.type)}（可选：${TRANSITION_TYPES.join(" / ")}）`,
+      `${label}.type 不合法：${JSON.stringify(o.type)}（可选：${ids.join(" / ")}` +
+        (ids.length > TRANSITION_TYPES.length ? "；带插件的用 list_transition_plugins 查详情" : "") +
+        "）",
     );
   }
   const fallback = type === "none" ? 0 : 12;
@@ -578,7 +581,24 @@ export function normalizeTransition(raw: unknown, label = "transition"): Transit
   if (!Number.isFinite(dur) || dur < 0) {
     throw new Error(`${label}.durationInFrames 必须是非负数字（收到 ${JSON.stringify(o.durationInFrames)}）`);
   }
-  return { type: type as Transition["type"], durationInFrames: Math.round(dur) };
+  /*
+   * params 只对插件转场有意义（内置转场没有任何参数）。这里只做"形状"筛选：
+   * 值必须能变成字符串或数字，别把嵌套对象塞进样式计算里。
+   */
+  let params: Record<string, string | number> | undefined;
+  if (o.params && typeof o.params === "object" && !Array.isArray(o.params)) {
+    const clean: Record<string, string | number> = {};
+    for (const [k, v] of Object.entries(o.params as Record<string, unknown>)) {
+      if (typeof v === "number" && Number.isFinite(v)) clean[k] = v;
+      else if (typeof v === "string") clean[k] = v;
+    }
+    if (Object.keys(clean).length) params = clean;
+  }
+  return {
+    type: type as Transition["type"],
+    durationInFrames: Math.round(dur),
+    ...(params ? { params } : {}),
+  };
 }
 
 /** 「你是不是想写 X」：字段拼错是 agent 最常见的错法，报错带上建议能省一轮试错 */
@@ -2104,7 +2124,7 @@ export function applyOps(project: Project, ops: Op[]): OpResult {
           if (!sky) {
             throw new Error(
               `set_graph_world：没有这个世界预设「${presetId}」。` +
-                `可选：${WORLD_SKIES.map((s) => s.id).join("、")}（详情用 list_world_skies）`,
+                `可选：${allWorldSkies().map((s) => s.id).join("、")}（详情用 list_world_skies）`,
             );
           }
           const override = isPlainObject(op.world) ? { ...op.world } : {};

@@ -1,0 +1,32 @@
+{
+  "name": "@example/rhythm-check",
+  "version": "1.0.0",
+  "description": "示例：一个完整的工程化插件（自己的构建脚本、源码目录、产物）",
+  "type": "module",
+  "main": "./dist/index.mjs",
+  "exports": {
+    ".": {
+      "import": "./dist/index.mjs",
+      "default": "./dist/index.mjs"
+    }
+  },
+  "files": ["dist"],
+  "scripts": {
+    "build": "esbuild src/index.ts --bundle --format=esm --platform=node --target=node20 --outfile=dist/index.mjs"
+  },
+  "devDependencies": {
+    "esbuild": "^0.25.0"
+  },
+  "peerDependencies": {
+    "remotion": "*"
+  },
+  "peerDependenciesMeta": {
+    "remotion": { "optional": true }
+  },
+  "remotionStudio": {
+    "apiVersion": 1,
+    "provides": ["hooks"],
+    "permissions": []
+  },
+  "keywords": ["remotion-studio", "plugin"]
+}

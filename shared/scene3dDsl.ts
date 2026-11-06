@@ -677,6 +677,54 @@ export const dslSchema = z.object({
         .default("aces")
         .describe("aces=电影感滚降（默认）；none=逐像素还原色值（要和 2D 精确对色时才用）"),
       exposure: z.number().min(0.4).max(3).default(1.25).describe("曝光（仅 tonemap=aces 时生效）"),
+      /**
+       * 三个"收尾"效果，都在 OutputPass 之后（sRGB 空间）做——
+       * 在那里乘一个系数就是眼睛看到的效果，不用反推线性空间。
+       *
+       * 默认全关：这些是**口味**，不是默认审美。开着它们不会让画面更好，
+       * 只会在特定题材下更像那个题材。
+       */
+      vignette: z
+        .number()
+        .min(0)
+        .max(1)
+        .optional()
+        .describe("暗角：0=关（默认）。0.3 轻微、0.6 明显、1 很重。把视线收到中心，压住四角杂物"),
+      chroma: z
+        .number()
+        .min(0)
+        .max(1)
+        .optional()
+        .describe("色差（边缘彩色错位）：0=关（默认）。0.15 轻微、0.3 明显。科技/故障感用；**超过 0.35 字会花**"),
+      grain: z
+        .number()
+        .min(0)
+        .max(1)
+        .optional()
+        .describe("胶片颗粒：0=关（默认）。0.2 轻微质感、0.5 明显。深色大幅渐变加一点能避免色带（静止颗粒，不逐帧变化）"),
+      /**
+       * 插件贡献的后期 pass。按数组顺序叠加，全部挂在 OutputPass 之后
+       * （sRGB 空间、和内置三个收尾效果同一位置，所以"透传 pass"不会改画面）。
+       *
+       * id 的存在性**不在这里校验**：这份 schema 同时被服务端与渲染端使用，
+       * 两边注册表可能不同步。写错 id 的行为是"渲染时跳过并告警"，
+       * 而 `set_graph_scene` 会在写入前就报错并列出可用的 id ——
+       * 严格校验放在那边，是为了让老工程在插件被删后仍然能打开。
+       */
+      passes: z
+        .array(
+          z.object({
+            id: z.string().describe("插件 pass 的 id（list_plugin_passes 查）"),
+            intensity: z.number().min(0).max(1).optional().describe("强度 0–1，作为 uAmount 传进 shader"),
+            params: z
+              .record(z.number())
+              .optional()
+              .describe("覆盖该 pass 自己的可调参数（名字见 list_plugin_passes）；越界会被钳进声明范围"),
+          }),
+        )
+        .max(6)
+        .optional()
+        .describe("插件 3D 后期 pass，按顺序叠加（最多 6 个）。不写=不用任何插件后期"),
     })
     .optional(),
 });

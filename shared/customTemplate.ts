@@ -103,11 +103,21 @@ export function summarizeCustomTemplate(tpl: CustomTemplate): TemplateCard {
  * v0.98 起素材分层存放（`projects/<工程id>/` 与 `library/`），所以允许子目录；
  * 但"允许子目录"绝不等于"允许穿越"。
  */
+/**
+ * 相对路径是否安全（能拼在 public/assets 下面）。
+ *
+ * 白名单里带 `@` 是因为**处理产物的命名**：插件改过的素材写成 `abc@x1y2z.png`，
+ * `@` 后面是处理器指纹。不用 `-` 或 `.` 分隔是因为这两种字符在原文件名里本来就有，
+ * 混在一起分不清哪段是加工标记；`@` 在文件名与 URL path 里都合法，视觉上也一眼可辨。
+ *
+ * 放宽一个字符不改变安全语义：防的还是路径穿越（`.` / `..` / 反斜杠 / 双斜杠），
+ * 而 `@` 没有任何路径含义。
+ */
 export function isSafeAssetRel(rel: string): boolean {
   if (!rel || rel.includes("\\") || rel.includes("//")) return false;
   return rel
     .split("/")
-    .every((seg) => seg !== "." && seg !== ".." && !seg.startsWith(".") && /^[\w.-]+$/.test(seg));
+    .every((seg) => seg !== "." && seg !== ".." && !seg.startsWith(".") && /^[\w.@-]+$/.test(seg));
 }
 
 /** `/assets/projects/p_x/a.png` → `projects/p_x/a.png`；不合法返回 null */

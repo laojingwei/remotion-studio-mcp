@@ -1,0 +1,75 @@
+/**
+ * 文本处理插件示例：「团队口径」。
+ *
+ * 用法：把这个文件改名成 `plugin.ts`（去掉 `.example`），之后每次写字幕 / 写稿
+ * 都会先过一遍这里，再把结果写进工程。**不用重启，也不改任何已有内容**——
+ * 它只作用于"新写进来的字"；想把老工程也过一遍，调 `transform_project_text`。
+ *
+ * ## 三条必须守住的规矩（不守会出事）
+ *
+ * 1. **必须幂等**：处理两次的结果要和处理一次一样。
+ *    反例：`text.replace("视频", "短视频")` —— 第二次会变成"短短视频"。
+ *    写替换表时，替换后的词不能再次命中左边的规则。
+ *
+ * 2. **只改字，不改结构**：不要在这里加换行、拆句子、加序号。
+ *    断句是宿主 `normalizeSubtitle` 的活，你插一手会让每屏字数算错。
+ *
+ * 3. **宁可少改，不要猜**：拿不准的地方原样返回。
+ *    这段代码在用户每次保存时都会跑，改错了会一遍遍改错。
+ *
+ * ## 返回值
+ *
+ * 直接返回字符串，或 `{ text }`。返回空字符串会被宿主拒收（防止一句话把字幕清空）。
+ */
+
+/** 术语表：左列是"别再这么说"，右列是"统一这么说"。顺序从长到短，避免"产品"先被替换掉 */
+const GLOSSARY: [RegExp, string][] = [
+  [/我们的产品|咱们的产品|本产品/g, "星河 OS"],
+  [/用户们/g, "用户"],
+  [/进行一个\S{0,4}的操作/g, "操作"],
+  [/基本上来说|总的来说就是/g, "总的来说"],
+  [/非常非常/g, "很"],
+];
+
+/** 句首口头禅：只在每行开头删，不动句子中间（中间删会把话删断） */
+const FILLER = /^(然后|就是说|其实吧|那个|那么)[，,、]?\s*/;
+
+/** 全角数字 → 半角。字幕里全角数字看着比汉字还宽，排版会跳 */
+const toHalfWidthDigits = (s: string) => s.replace(/[０-９]/g, (c) => String.fromCharCode(c.charCodeAt(0) - 0xfee0));
+
+export default {
+  "text:transform"(ctx: { text: string; kind: "subtitle" | "script" | "brief" }) {
+    /*
+     * 需求契约不碰。
+     * brief 里的字是用户和 agent 对齐用的（"必须说清的事""禁用词"），
+     * 被品牌词表改写会让对齐结果和用户原话对不上。
+     */
+    if (ctx.kind === "brief") return ctx.text;
+
+    let out = ctx.text;
+
+    // 术语：逐条替换，全部是"替换后不再命中"的写法，保证幂等
+    for (const [re, to] of GLOSSARY) out = out.replace(re, to);
+
+    // 口头禅：逐行处理（subtitle 是多行存储的，一行一屏）
+    out = out
+      .split("\n")
+      .map((line) => {
+        // 循环删到删不动为止：一句里可能连着两个口头禅（「然后就是说……」）。
+        // 只删一次的话，第二次保存会再删掉一个 —— 结果就依赖"保存了几次"，非幂等。
+        let prev = line;
+        let cur = line.replace(FILLER, "");
+        while (cur !== prev) {
+          prev = cur;
+          cur = cur.replace(FILLER, "");
+        }
+        return cur;
+      })
+      .join("\n");
+
+    out = toHalfWidthDigits(out);
+
+    // 兜底：全删空了就原样返回。宁可没效果，也不要把用户的字弄没
+    return out.trim() ? out : ctx.text;
+  },
+};

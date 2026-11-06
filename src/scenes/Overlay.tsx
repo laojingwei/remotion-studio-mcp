@@ -74,7 +74,7 @@ const OneElement: React.FC<{ el: OverlayElement }> = ({ el }) => {
   const exitT = el.exit;
   const exitDur = exitT && exitT.type !== "none" ? exitT.durationInFrames : 0;
   const enterStyle: Record<string, string | number> =
-    enterDur > 0 ? transitionStyle(enterT!.type, frame, enterDur, totalDur) : {};
+    enterDur > 0 ? transitionStyle(enterT!.type, frame, enterDur, totalDur, enterT!.params) : {};
   const exitStyle: Record<string, string | number> =
     exitDur > 0
       ? transitionStyle(

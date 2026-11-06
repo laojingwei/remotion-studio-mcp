@@ -22,7 +22,7 @@ import { loadUploadFile } from "./upload-path";
 import { recallAll, remember, type MemoryKind } from "./memory.service";
 import { ROOT as PROJECT_ROOT } from "./root";
 import { BACKDROP_TYPES } from "../shared/sceneKinds";
-import { BRIEF_STEPS, CONFIRM_GROUPS, CORE_STEPS, briefCoverage, briefProgress, briefToText, confirmBrief, legacyFieldNotice, readBrief, recomputeDesignLock, saveBrief, sceneCountHint, stepMissingFields, type Brief } from "./brief.service";
+import { CONFIRM_GROUPS, briefCoverage, briefProgress, briefToText, confirmBrief, legacyFieldNotice, readBrief, recomputeDesignLock, saveBrief, sceneCountHint, stepMissingFields, type Brief } from "./brief.service";
 import { listAnnotations, resolveAnnotations } from "./annotation.service";
 import { FORM_SPECS, designLockSummary, lockViolations, normalizeForm } from "../shared/designLock";
 import { auditBriefAgainstProject, auditToText } from "./brief-audit.service";
@@ -31,7 +31,7 @@ import { pickPreviewRange } from "../shared/previewWindow";
 import { densitySummary, projectDensity, rhythmIssues } from "../shared/density";
 import { readScript, saveScript, confirmScript, scriptToText, estimateSeconds, scriptChars, SCRIPT_TYPES, type Script } from "./script.service";
 import { readReview, markReviewRequested, markReviewConfirmed, markNeedsWork, markSelfRender, markProbe, markChosenStyle, reviewToText } from "./review.service";
-import { listStyles, presetOf, readStyle, styleSummary } from "./styles.service";
+import { listStyles, presetOf, readStyle, stylePresetIssues, styleSummary } from "./styles.service";
 import { readStoryboard, saveStoryboard, storyboardToText, type Storyboard } from "./storyboard.service";
 import { readTiming, saveTiming } from "./narration-timing.service";
 import {
@@ -42,7 +42,7 @@ import {
   resolveChanges,
   type LooseScene,
 } from "./revise.service";
-import { ELEMENT_LIBRARY, elementFromLibrary } from "../shared/elementLibrary";
+import { allLibraryItems, elementFromLibrary } from "../shared/elementLibrary";
 import { getMeta, normalizeProps, describeTypeDeep } from "../shared/sceneMetas";
 import {
   assetIdOf,
@@ -130,6 +130,11 @@ import { SCRIPT_TOOLS } from "./tools/script";
 import { STORYBOARD_TOOLS } from "./tools/storyboard";
 import { CLEANUP_TOOLS } from "./tools/cleanup";
 import { RESOURCE_TOOLS } from "./tools/resources";
+import { PLUGIN_TOOLS } from "./tools/plugin";
+import { ensurePluginScenes } from "./plugin/scene-meta";
+import { ensurePluginHooks, runTextPipeline, textStepsToNote } from "./plugin/hooks";
+import { ensurePluginTools } from "./plugin/plugin-tools";
+import { pluginTools } from "./plugin/tool-registry";
 
 // 老调用方（server/index.ts）从这里引，保持导出面不变
 export { validateToolArgs } from "./tools/_shared";
@@ -180,6 +185,7 @@ const TOOLS: ToolDef[] = [
       const nl = String.fromCharCode(10);
       const lines: string[] = [
         "# 创作流程（接单 → 成片）",
+        "插件：现有能力满足不了需求时，可在合适时机建议把这部分做成插件（别打断当前流程）——写法见 docs/PLUGIN-GUIDE.md（18 节，含 9 份示例），装进 plugins/ 即生效",
         "铁律：标【闸口】的 9 个节点一个都不能跳（跳过必返工）；没标的步骤可合并提速，但省之前先跟用户说一句。",
         "【闸口】① 工程归属　② 9 步真的问了用户　③ brief 用户点头　④ 稿件用户点头　⑤ **风格样张用户挑**　⑥ 分镜提案用户选　⑦ 风格帧用户过目　⑧ 观感规格齐 + 用户到编辑器看片　⑨ 交付前自检",
         "⑤⑥ 在用户明确说「直接做 / 别问了」时可跳（跳过要在最后说明「这版没做风格帧确认」）；①②③④⑦⑧ 永不跳。",
@@ -639,13 +645,16 @@ const TOOLS: ToolDef[] = [
       const list = listStyles();
       const nl = String.fromCharCode(10);
       const ready = list.filter((x) => x.hasPreset).length;
+      // 插件的 styles/presets.json 写坏不再静默消失：把问题带出来，作者才能修
+      const issues = stylePresetIssues();
       return (
         `共 ${list.length} 种风格（${ready} 种可一键套用）：` +
         nl +
         list
           // 全都有预设时不再逐行打「可一键套用」——43 个一样的标记只是噪音，只标例外
           .map((x) => `- ${x.slug}：${x.name}${x.hasPreset ? "" : "（仅规则，套不上）"}`)
-          .join(nl)
+          .join(nl) +
+        (issues.length ? `${nl}${nl}⚠ 插件预设问题：${nl}${issues.map((i) => `- ${i}`).join(nl)}` : "")
       );
     },
   },
@@ -1627,7 +1636,7 @@ const TOOLS: ToolDef[] = [
     retiredTo: "set_transitions",
     shape: {
       sceneId: z.string().describe("给哪一幕设转场（get_project 里的场景 id）"),
-      type: z.enum(TRANSITION_TYPES).describe("转场类型（可选值见描述）"),
+      type: z.string().describe("转场类型（内置 12 种 + 插件注册的 id；完整清单用 list_transitions）"),
       durationInFrames: z.number().optional().describe("转场时长（帧），不传默认 12，建议 8–20"),
       direction: z.enum(["in", "out"]).optional().describe("in=入场（默认），out=出场"),
       projectId: z.string().optional().describe("要操作的工程 id，不传 = 当前默认工程（list_projects 查）"),
@@ -1636,6 +1645,47 @@ const TOOLS: ToolDef[] = [
       const target = TOOLS.find((t) => t.name === "set_transitions")!;
       const out = await target.run({ ...a, sceneIds: [a.sceneId] });
       return `（提示：「set_transition」已并入 set_transitions——单幕/批量/逐幕都是它，本次已按新工具执行，以后请直接用 set_transitions）\n${out}`;
+    },
+  },
+  {
+    name: "list_transitions",
+    description:
+      "列出**所有可用的转场**：内置 12 种 + 插件注册的（插件放在 `plugins/<名>/transitions/<id>.ts`）。\n" +
+      "内置那 12 种的 hint 就是「什么感觉、什么时候用」；插件转场会额外列出它自己的可调参数（名字 / 范围 / 默认值）。\n" +
+      "什么时候查：① 用户说「想要 XX 过渡」而你不确定有没有；② 要用插件转场但不知道参数怎么填。\n" +
+      "⚠ 插件转场的**出场是自动反向**的（宿主用 1-p 再调一次），所以它只需要写一个方向；\n" +
+      "⚠ 插件转场写崩了（抛错/返回非法样式）会**退回淡入淡出**并告警，不会让整片渲不出来——\n" +
+      "   但效果对不对只能抽帧看，别只看名字就下结论。",
+    shape: {},
+    run: async () => {
+      const { syncPluginTransitions } = await import("./plugin/content-sync");
+      const synced = syncPluginTransitions();
+      const { allTransitionOptions, pluginTransitionIds } = await import("../shared/transitions");
+      const list = allTransitionOptions();
+      const pluginIds = new Set(pluginTransitionIds());
+
+      const out: string[] = [];
+      if (synced.issues.length) {
+        out.push("⚠ 有转场没能加载：");
+        for (const i of synced.issues) out.push(`  · ${i}`);
+        out.push("");
+      }
+      out.push(`转场（共 ${list.length} 种：内置 ${list.length - pluginIds.size} + 插件 ${pluginIds.size}）`);
+      for (const t of list) {
+        out.push(`· ${t.key}（${t.label}）${pluginIds.has(t.key) ? " 〔插件〕" : ""}`);
+        if (t.hint) out.push(`  ${t.hint}`);
+        if (t.params.length) {
+          out.push(
+            `  可调：${t.params
+              .map((d) => `${d.key}${d.min !== undefined && d.max !== undefined ? ` ${d.min}–${d.max}` : ""}（默认 ${d.default ?? "—"}）`)
+              .join("、")}`,
+          );
+        }
+      }
+      out.push("");
+      out.push('用法：set_transitions { sceneId 或 sceneIds, type: "id", durationInFrames: 12, params: {...} }');
+      out.push("⚠ 接缝长度 = 本幕的 durationInFrames；两幕重叠期间上一幕会半透明压在新幕上，抽帧看到「两行大字叠着」是正常的。");
+      return out.join("\n");
     },
   },
   {
@@ -1648,8 +1698,12 @@ const TOOLS: ToolDef[] = [
       "下一幕在它上面渐显。所以这 N 帧里两幕同时可见——**上一幕的最后一个画面（含大字、结论数字）会半透明地压在新幕上**。" +
       "抽帧看到「两个大字叠在一起」通常就是这个，不是渲染错；不想要就缩短转场、把大字提前淡出，或给下一幕硬切。",
     shape: {
-      type: z.enum(TRANSITION_TYPES).optional().describe("转场类型；none=清除（给了 items 时可省略）"),
+      type: z.string().optional().describe("转场类型（内置 + 插件 id，见 list_transitions）；none=清除（给了 items 时可省略）"),
       durationInFrames: z.number().int().min(0).max(120).optional().describe("转场时长（帧），默认 12"),
+      params: z
+        .record(z.union([z.number(), z.string()]))
+        .optional()
+        .describe("插件转场的参数（内置转场忽略）。键名与默认值用 list_transitions 查"),
       direction: z.enum(["in", "out", "both"]).optional().describe("in=入场（默认），out=出场，both=两者都设"),
       sceneIds: z.array(z.string()).optional().describe("只设这些场景；不传=全部场景"),
       items: z
@@ -1657,12 +1711,20 @@ const TOOLS: ToolDef[] = [
           z.object({
             sceneId: z.string(),
             in: z
-              .object({ type: z.enum(TRANSITION_TYPES), durationInFrames: z.number().int().min(0).max(120) })
+              .object({
+                type: z.string(),
+                durationInFrames: z.number().int().min(0).max(120),
+                params: z.record(z.union([z.number(), z.string()])).optional().describe("插件转场的参数"),
+              })
               .nullable()
               .optional()
               .describe("这一幕的入场（null = 清除）"),
             out: z
-              .object({ type: z.enum(TRANSITION_TYPES), durationInFrames: z.number().int().min(0).max(120) })
+              .object({
+                type: z.string(),
+                durationInFrames: z.number().int().min(0).max(120),
+                params: z.record(z.union([z.number(), z.string()])).optional().describe("插件转场的参数"),
+              })
               .nullable()
               .optional()
               .describe("这一幕的出场（null = 清除）"),
@@ -1711,7 +1773,14 @@ const TOOLS: ToolDef[] = [
       }
 
       if (!a.type) throw new Error("要么给 type（统一套），要么给 items（逐幕指定）");
-      const t = a.type === "none" ? null : { type: a.type, durationInFrames: a.durationInFrames ?? TRANSITION_DEFAULT_FRAMES };
+      const t =
+        a.type === "none"
+          ? null
+          : {
+              type: a.type,
+              durationInFrames: a.durationInFrames ?? TRANSITION_DEFAULT_FRAMES,
+              ...(a.params && Object.keys(a.params).length ? { params: a.params } : {}),
+            };
       const dir = a.direction ?? "in";
       const patch =
         dir === "out"
@@ -2193,7 +2262,10 @@ const TOOLS: ToolDef[] = [
     name: "tts_check",
     description:
       "语音服务预检。默认只探连通性（快）；deep=true 会真合成一句极短语音，验证 key/model/voice/format 全对（约 1–3 秒，产物不留）。\n" +
-      "**开工做配音之前先调它**，比跑到第 6 步才发现服务没启动便宜得多。",
+      "**开工做配音之前先调它**，比跑到第 6 步才发现服务没启动便宜得多。\n" +
+      "当前用的是插件 provider（list_tts_providers 里标「当前使用」的那家）时没有本机地址可探：" +
+      "插件提供了自检方法（check）就浅层直接跑它（key/余额是否可用，通常只消耗极小额度）；" +
+      "没提供自检方法的，默认只回报「用的是哪家」，要验整条链路就传 deep=true 真调一次厂商。",
     shape: {
       deep: z.boolean().optional().describe("true = 连真合成一起验"),
     },
@@ -2211,12 +2283,24 @@ const TOOLS: ToolDef[] = [
         const stageTip: Record<string, string> = {
           config: "配置问题：用 get_tts_config 看当前地址，set_tts_config 改",
           reach: "服务没起来：先把本地 TTS 服务拉起来再重试",
-          synth: "服务在跑但合成失败：多半是 model / voice / format 名字不对，或用 set_tts_config 检查 apiKey",
+          check:
+            "插件自检未通过：按上面的错误原文处理（多半是 key 没配 / key 错 / 余额不足）；" +
+            "配好了再调一次本工具确认",
+          synth:
+            "合成失败：内置 provider 多半是 model / voice / format 名字不对或 apiKey 错；" +
+            "插件 provider 看它要的鉴权字段填没填（list_tts_providers 看 configFields）",
         };
         return (
           `❌ 预检失败（阶段：${data.stage}）${nl}${data.error}` +
+          (data.stage === "synth" && data.provider && data.provider !== "openai"
+            ? `${nl}当前 provider：${data.provider}（插件提供）`
+            : "") +
           (stageTip[data.stage] ? `${nl}建议：${stageTip[data.stage]}` : "")
         );
+      }
+      if (data.stage === "provider") {
+        const checked = /自检通过/.test(data.detail ?? "");
+        return `${checked ? "✅" : "ℹ️"} ${data.detail}${nl}当前 provider：${data.provider}（插件提供，配置在它自己的界面里）`;
       }
       if (data.stage === "reach") {
         return (
@@ -2224,10 +2308,17 @@ const TOOLS: ToolDef[] = [
           `${data.detail}${nl}要确认配置真的对，再调一次 deep=true。`
         );
       }
+      /*
+       * deep 成功：内置 provider 有地址/连通耗时，插件 provider 只有合成耗时
+       * （跳过 HEAD 探测，所以 origin 是空的）——别把空字段当"地址丢了"报出去。
+       */
+      const where = data.origin
+        ? `地址：${data.origin}　连通 ${data.reachMs}ms　合成 ${data.synthMs}ms`
+        : `来源：插件 provider「${data.provider}」　合成 ${data.synthMs}ms`;
       return (
         `✅ 语音服务可用（完整链路）${nl}` +
-        `地址：${data.origin}　连通 ${data.reachMs}ms　合成 ${data.synthMs}ms${nl}` +
-        `音色：${data.voice ?? "默认"}　模型：${data.model ?? "默认"}　产出 ${data.bytes} 字节 ${data.format}（预检文件已清理）`
+        `${where}${nl}` +
+        `音色：${data.voice ?? "默认"}　产出 ${data.bytes} 字节 ${data.format}（预检文件已清理）`
       );
     },
   },
@@ -2551,11 +2642,83 @@ const TOOLS: ToolDef[] = [
     },
   },
   {
+    name: "list_tts_providers",
+    description:
+      "列出可用的**语音合成 provider**：内置的 openai 兼容实现 + 插件适配的厂商（火山/阿里/腾讯/私有部署……）。\n" +
+      "每个 provider 会列出它要哪些配置字段（`configFields`）——每家鉴权方式不同，宿主不猜，由插件声明。\n" +
+      "用法：① 选一家 → `set_tts_config { provider: \"id\", providers: { \"id\": { 字段: 值 } } }`；\n" +
+      "      ② 然后照常 `tts_synthesize` / `tts_narration`，不用改调用参数。\n" +
+      "⚠ 插件 provider 报错时**不会静默退回内置**（那会让\"配错了但出片了\"变成最难查的坑），\n" +
+      "   所以看到合成失败先看 provider 的鉴权字段填对没有。",
+    shape: {},
+    run: async () => {
+      await ensureServer();
+      const res = await fetch(`${BASE}/api/tts/providers`);
+      const data = (await res.json()) as {
+        providers?: { id: string; label: string; hint?: string; pluginId: string; configFields: { key: string; label?: string; secret?: boolean; required?: boolean }[]; hasVoices: boolean }[];
+        errors?: string[];
+        error?: string;
+      };
+      if (!res.ok) throw new Error(data.error ?? "读取 provider 列表失败");
+
+      let current = "openai";
+      try {
+        const cfg = (await (await fetch(`${BASE}/api/tts/config`)).json()) as { config: { provider?: string } };
+        current = cfg.config.provider ?? "openai";
+      } catch {
+        /* 读不到就当默认 */
+      }
+
+      const out: string[] = [];
+      if (data.errors?.length) {
+        out.push("⚠ 有 provider 没能加载：");
+        for (const e of data.errors) out.push(`  · ${e}`);
+        out.push("");
+      }
+      out.push(`内置：openai（OpenAI 兼容协议，endpoint 可在 set_tts_config 里改）${current === "openai" ? " ← 当前使用" : ""}`);
+      const list = data.providers ?? [];
+      if (!list.length) {
+        out.push("");
+        out.push("没有插件提供 provider。放法：插件的 plugin.ts 里导出 ttsProviders 对象，");
+        out.push('  例如 export const ttsProviders = { "my-tts": { meta: {...}, synthesize: async (req) => ({ audio }) } }');
+        out.push("字段与返回值见 plugins/README.md 的「语音合成」一节。");
+        return out.join("\n");
+      }
+      out.push("");
+      out.push(`插件 provider（${list.length} 个）：`);
+      for (const p of list) {
+        out.push(`· ${p.id}（${p.label}）${current === p.id ? " ← 当前使用" : ""} · 来自插件 ${p.pluginId}`);
+        if (p.hint) out.push(`  ${p.hint}`);
+        if (p.configFields.length) {
+          out.push(
+            `  需要配置：${p.configFields
+              .map((f) => `${f.key}${f.required ? "（必填）" : ""}${f.secret ? "［密钥］" : ""}`)
+              .join("、")}`,
+          );
+        } else {
+          out.push("  不需要配置");
+        }
+        if (p.hasVoices) out.push("  能列音色（由插件向厂商查询）");
+      }
+      out.push("");
+      out.push('切到某家：set_tts_config { provider: "id", providers: { "id": { 字段: 值 } } }');
+      return out.join("\n");
+    },
+  },
+  {
     name: "set_tts_config",
     description:
-      "修改 TTS 配置（endpoint/apiKey/model/voice/format/speed/customBody），只传要改的字段。",
+      "修改 TTS 配置，只传要改的字段。\n" +
+      "- 用内置实现（默认）：填 endpoint/apiKey/model/voice/format/speed/customBody\n" +
+      "- 用插件 provider：填 provider=插件给的 id + providers[id] 里它要的那些字段（字段名见 list_tts_providers）\n" +
+      "各家的鉴权/请求体都不一样，宿主不猜——插件声明什么字段就填什么。",
     shape: {
-      endpoint: z.string().optional().describe("语音服务完整 URL"),
+      provider: z.string().optional().describe("用哪个 provider：'openai'=内置（默认），或插件提供的 id（list_tts_providers 查）"),
+      providers: z
+        .record(z.record(z.string()))
+        .optional()
+        .describe('各 provider 的自由配置，例如 { "volc-tts": { "appid": "xxx", "token": "yyy" } }。会按 provider 合并，不会清掉别家'),
+      endpoint: z.string().optional().describe("语音服务完整 URL（仅内置 openai provider 用）"),
       apiKey: z.string().optional().describe("Bearer token，没有就留空"),
       model: z.string().optional(),
       voice: z.string().optional().describe("默认音色"),
@@ -2572,13 +2735,14 @@ const TOOLS: ToolDef[] = [
         headers: { "content-type": "application/json" },
         body: JSON.stringify(patch),
       });
-      const data = (await res.json()) as { config: { endpoint: string } };
-      return `已保存 TTS 配置：${data.config.endpoint}`;
+      const data = (await res.json()) as { config: { endpoint: string; provider: string } };
+      return `已保存 TTS 配置。当前 provider：${data.config.provider}` +
+        (data.config.provider === "openai" ? `（内置，endpoint=${data.config.endpoint}）` : "（插件提供）");
     },
   },
   {
     name: "tts_synthesize",
-    description: `把文本合成语音（走配置好的本地 TTS 服务），音频存进 assets；addAs=track 直接加音效轨，music 替换背景音乐，sceneId 放进指定场景。
+    description: `把文本合成语音（走当前配置的语音来源：内置服务或插件 provider，见 get_tts_config 的 provider），音频存进 assets；addAs=track 直接加音效轨，music 替换背景音乐，sceneId 放进指定场景。
 
 【传入文本的格式很重要，直接决定读音】
 - 默认自动转义（escape=true）：90% → 百分之九十、2026-10-25 → 2026年10月25日、1234565 → 一百二十三万四千五百六十五；已经写成中文读法的文本不会被转坏。
@@ -3741,8 +3905,13 @@ const TOOLS: ToolDef[] = [
         return `已清空「${scene.name}」的字幕${nl}${res.summary.join(nl)}`;
       }
 
+      /*
+       * 插件文本处理链，**在拆分之前**跑：拆完再改会破坏每屏字数，
+       * 前面 normalizeSubtitle 算的分配就白算了。
+       */
+      const tp = runTextPipeline(a.text, { kind: "subtitle", projectId: p.id, sceneId: a.sceneId });
       const max = subtitleMaxChars(scene as any);
-      const norm = normalizeSubtitle(a.text, { maxChars: max });
+      const norm = normalizeSubtitle(tp.text, { maxChars: max });
       const res = await api<any>(`/api/projects/${p.id}/ops`, {
         method: "POST",
         body: JSON.stringify({
@@ -3755,6 +3924,9 @@ const TOOLS: ToolDef[] = [
         .join(nl);
       return (
         `「${scene.name}」字幕已写入：${norm.lines.length} 屏（每屏 ≤ ${max} 字，${norm.before} 字→${norm.after} 字）${nl}${preview}` +
+        // 字被插件改过就必须说：不说的话用户会以为自己的原话原样上屏了
+        (tp.changed ? `${nl}插件处理：${textStepsToNote(tp)}` : "") +
+        (tp.warnings.length ? `${nl}⚠️ ${tp.warnings.join(`${nl}⚠️ `)}` : "") +
         (norm.warnings.length ? `${nl}⚠️ ${norm.warnings.join(`${nl}⚠️ `)}` : "") +
         `${nl}${res.summary.join(nl)}${nl}下一步：preview_frames 抽这一帧看一眼字幕有没有压主体/出安全区`
       );
@@ -5175,12 +5347,13 @@ const TOOLS: ToolDef[] = [
   {
     name: "list_element_library",
     description:
-      "列出可用的元素素材：内置素材库（图标 / 形状 / 标签）+「我的素材」里已入库的图片。拿到 id 后用 add_element 的 libraryId 放进场景。两边都没有合适的，可以直接用 add_element 的 svg / text / imageSrc 自己造。",
-    shape: { category: z.string().optional().describe("按分类筛选：标记 / 箭头 / 形状 / 符号 / 标签") },
+      "列出可用的元素素材：内置素材库（图标 / 形状 / 标签）+ 插件贡献的元素 +「我的素材」里已入库的图片。拿到 id 后用 add_element 的 libraryId 放进场景。两边都没有合适的，可以直接用 add_element 的 svg / text / imageSrc 自己造。",
+    shape: { category: z.string().optional().describe("按分类筛选：标记 / 箭头 / 形状 / 符号 / 标签（插件可带自己的分类）") },
     run: async (a) => {
       await ensureServer();
       const lines: string[] = [];
-      const items = ELEMENT_LIBRARY.filter((i) => !a.category || i.cat === a.category);
+      // 插件贡献的元素也要在这里出现，否则 agent 只能用面板里看得到、工具里查不到的 id
+      const items = allLibraryItems().filter((i) => !a.category || i.cat === a.category);
       if (items.length) {
         const cats = [...new Set(items.map((i) => i.cat))];
         lines.push(
@@ -5556,6 +5729,8 @@ const TOOLS: ToolDef[] = [
   ...STORYBOARD_TOOLS,
   ...CLEANUP_TOOLS,
   ...RESOURCE_TOOLS,
+  /* 插件管理：看装了什么、拨开关。插件本身不需要工具安装（拷个文件夹就行） */
+  ...PLUGIN_TOOLS,
 
   /* ───────────── 工具门面：按需发现与执行（其余工具经这两层调用） ───────────── */
   {
@@ -5572,7 +5747,9 @@ const TOOLS: ToolDef[] = [
         .describe("按名字精确取某几个工具的完整文档（含参数表）——all=true 之后第二步就用它"),
     },
     run: async (a) => {
-      const others = TOOLS.filter((d) => !CORE_TOOL_NAMES.has(d.name) && !d.retiredTo);
+      // 插件工具和内置工具一起参与搜索：对 agent 来说它们没有区别，
+      // 分开列会变成"装了插件但搜不到"这种最难解释的状态
+      const others = [...TOOLS, ...pluginTools()].filter((d) => !CORE_TOOL_NAMES.has(d.name) && !d.retiredTo);
       if (a.names?.length) {
         const wanted: string[] = a.names;
         const picked = wanted
@@ -5657,7 +5834,8 @@ const TOOLS: ToolDef[] = [
     run: async (a) => {
       const name = a.name;
       if (!name || name === "tool_call") throw new Error("tool_call 不能调用自身");
-      const def = TOOLS.find((t) => t.name === name);
+      // 内置优先：插件工具撞名在注册时就被拦掉了，这里是兜底
+      const def = TOOLS.find((t) => t.name === name) ?? pluginTools().find((t) => t.name === name);
       if (!def) throw new Error(`没有工具「${name}」。先 tool_search 找（传 all=true 看全量目录），注意拼写`);
       let out = await def.run(validateToolArgs(def, (a.args ?? {}) as Record<string, unknown>) as never);
       // 门面模式下所有工具都从这里过：脏提醒必须挂在这儿，注册层的包装覆盖不到
@@ -5806,6 +5984,46 @@ export function buildMcpServer(): McpServer {
   const exposeAll = exposeAllTools();
   for (const def of TOOLS) {
     const handler = async (args: Record<string, any>) => {
+      /**
+       * 先把插件场景同步进 SCENE_METAS。
+       *
+       * 为什么放在每个工具的入口而不是启动时做一次：stdio 代理（mcp-proxy）是**独立进程**，
+       * 它有自己的 SCENE_METAS；`list_scene_types` / `add_scene` 里的 `getMeta` 跑在这个进程里。
+       * 启动时同步一次的话，运行中新装的插件对它永远不可见，表现为
+       * 「编辑器里能选、agent 说没有这个类型」。
+       *
+       * 成本可控：ensurePluginScenes 带指纹缓存，插件没变时只是十几次 stat。
+       * 插件算崩了也不该挡住工具调用，所以吞掉异常。
+       */
+      try {
+        ensurePluginScenes();
+      } catch (err) {
+        console.warn("[plugin] 场景同步失败（不影响工具调用）：", err);
+      }
+
+      /*
+       * 钩子同理，而且这里更必要：`audit_project` / `save_brief` / `apply_ops`
+       * 这些工具直接跑在代理进程里，钩子不加载就等于没装。
+       * await 是必须的——工具入口本来就是 async，而钩子的调用点（同步路径）
+       * 只能消费"已经 import 完"的结果。
+       */
+      try {
+        await ensurePluginHooks();
+      } catch (err) {
+        console.warn("[plugin] 钩子加载失败（不影响工具调用）：", err);
+      }
+
+      /*
+       * 插件工具：必须在 tool_search 之前加载完，否则用户刚装的工具搜不到。
+       * 两者读同一个入口文件（共享 esbuild 产物缓存），所以这里只是把
+       * 模块里的 tools 数组变成 ToolDef 并登记，不会重复打包。
+       */
+      try {
+        await ensurePluginTools();
+      } catch (err) {
+        console.warn("[plugin] 工具加载失败（不影响工具调用）：", err);
+      }
+
       /**
        * 日志记真实工具名：门面模式下所有调用都经 tool_call，
        * 只记 "tool_call" 会让统计全是同一个名字，等于没记。

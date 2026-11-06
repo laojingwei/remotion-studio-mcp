@@ -1,0 +1,10 @@
+{
+  "apiVersion": 1,
+  "id": "quality-gatekeeper",
+  "name": "画质守门员",
+  "version": "1.0.0",
+  "description": "自检时补几条宿主管不到的规矩：单幕太短、字幕太长、画面类型连着撞。只提意见，不改数据。",
+  "author": "remotion-studio 示例",
+  "provides": ["hooks"],
+  "permissions": []
+}

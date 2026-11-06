@@ -73,6 +73,22 @@ import { FrameInFrameScene } from "./frameinframe/FrameInFrame";
 import { LayeredScene } from "./layered/Layered";
 
 /**
+ * 注册一个插件场景组件。幂等：同 type 只认第一个（与 registerSceneMeta 一致）。
+ *
+ * 为什么组件也要"运行时注册"：组件只能通过**生成文件的静态 import** 进 bundle
+ * （webpack 静态分析，运行时 require 一个任意路径会直接失败），
+ * 而生成文件的 import 语句在模块顶层执行，所以注册也必须发生在模块顶层——
+ * 调用点就是生成文件自己，见 `src/_plugins.generated.ts`。
+ */
+export function registerSceneComponent(type: string, Comp: React.FC<any>): { ok: boolean; reason?: string } {
+  if (SCENE_COMPONENTS[type]) {
+    return { ok: false, reason: `组件 type「${type}」已被占用` };
+  }
+  SCENE_COMPONENTS[type] = Comp;
+  return { ok: true };
+}
+
+/**
  * 场景组件注册表：type → 渲染组件
  * 新增场景三步：写 shared/sceneMetas 的 meta、写组件、在这里登记。
  */

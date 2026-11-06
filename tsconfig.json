@@ -16,7 +16,8 @@
     "types": ["node", "vite/client"],
     "baseUrl": ".",
     "paths": {
-      "@shared/*": ["shared/*"]
+      "@shared/*": ["shared/*"],
+      "@studio/sdk": ["./src/sdk.ts"]
     }
   },
   "include": ["src", "server", "shared", "web", "vite.config.ts"]

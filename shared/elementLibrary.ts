@@ -10,7 +10,14 @@ import type { OverlayElement } from "./schema";
  *  - viewBox 统一 0 0 24 24，stroke 项由外层给 `fill:none; stroke:currentColor`
  *  - size 是「短边百分比」：图形算宽度，文字算字号
  */
-export type ElementCategory = "标记" | "箭头" | "形状" | "符号" | "标签";
+export type BuiltinElementCategory = "标记" | "箭头" | "形状" | "符号" | "标签";
+
+/**
+ * 分类。内置是上面那 5 个，但**插件可以自带分类**（比如「品牌图标」）——
+ * 强行塞进这 5 个里，作者只能选个最不贴切的，用户也找不到自己的东西。
+ * `(string & {})` 的写法保住内置名的自动补全，同时不挡住任意字符串。
+ */
+export type ElementCategory = BuiltinElementCategory | (string & {});
 
 export type LibraryItem = {
   id: string;
@@ -108,7 +115,107 @@ export const ELEMENT_LIBRARY: LibraryItem[] = [
 
 export const LIBRARY_CATS: ElementCategory[] = ["标记", "箭头", "形状", "符号", "标签"];
 
-export const getLibraryItem = (id: string) => ELEMENT_LIBRARY.find((x) => x.id === id);
+/* ─────────────────────── 插件贡献的元素 ─────────────────────── */
+
+/**
+ * 插件注册的元素。
+ *
+ * 和天空/模板同一个套路：`shared/` 不读 fs，服务端（或生成文件）注入。
+ * 这条额外重要：元素会被**烘焙进 element**（`elementFromLibrary` 把 svg 内容拷进元素），
+ * 所以四种调用点（面板、预览、两条时间轴）都不需要"再去哪儿查一下"——只要注册表里有，
+ * 就已经是自包含的数据。
+ *
+ * 注册来源有两个，都走同一个 `registerLibraryItem`：
+ *  - 服务端：`server/plugin/content-sync.ts` 读 `plugins/<插件>/elements/` 下的 json（给 MCP 工具用）
+ *  - 编辑器/渲染：`src/_plugins.generated.ts`（web 是独立 bundle，只能靠生成文件）
+ */
+const EXTRA_LIBRARY: LibraryItem[] = [];
+/** id → 来源（插件 id）。插件间重名冲突检查用；同源重注册（文件改了）允许替换 */
+const EL_SOURCE = new Map<string, string>();
+
+const ITEM_ID_RE = /^[a-z0-9][a-z0-9-]*$/;
+/** svg 标记里出现这些就当坏数据：不是安全边界（插件本来就是任意代码），是"渲染会崩"的护栏 */
+const BAD_SVG = /<script|onload=|onclick=/i;
+
+/**
+ * 校验并登记一个插件元素。
+ *
+ * 只卡"放上去会出问题"的字段。分类不限制——作者自己定，面板会把新分类自动加成筛选项。
+ */
+export function registerLibraryItem(item: unknown, source = ""): { ok: boolean; reason?: string } {
+  if (!item || typeof item !== "object" || Array.isArray(item)) {
+    return { ok: false, reason: "元素要是一个对象" };
+  }
+  const it = item as Partial<LibraryItem>;
+  const id = typeof it.id === "string" ? it.id.trim() : "";
+  if (!ITEM_ID_RE.test(id)) {
+    return { ok: false, reason: `id「${id || "(空)"}」不合法：只能小写字母、数字、短横线` };
+  }
+  if (ELEMENT_LIBRARY.some((x) => x.id === id)) {
+    return { ok: false, reason: `id「${id}」与内置元素重名（内置优先，换个 id）` };
+  }
+  // 插件之间不许静默顶掉：同 id 先到先得，后来者必须换（与 passes 同一语义）
+  {
+    const owner = EL_SOURCE.get(id);
+    if (owner && source && owner !== source) {
+      return { ok: false, reason: `id「${id}」已被插件 ${owner} 占用，换个 id` };
+    }
+  }
+  if (!it.name || typeof it.name !== "string") return { ok: false, reason: `「${id}」缺 name` };
+  if (!it.cat || typeof it.cat !== "string") return { ok: false, reason: `「${id}」缺 cat（分类，可自定义）` };
+  if (it.kind !== "svg" && it.kind !== "text") return { ok: false, reason: `「${id}」的 kind 必须是 svg 或 text` };
+  if (typeof it.size !== "number" || !Number.isFinite(it.size) || it.size <= 0 || it.size > 100) {
+    return { ok: false, reason: `「${id}」的 size 要是 0–100 的数字（短边百分比）` };
+  }
+  if (it.kind === "svg") {
+    if (!it.svg || typeof it.svg !== "string") return { ok: false, reason: `「${id}」是 svg 但缺 svg 标记` };
+    if (BAD_SVG.test(it.svg)) return { ok: false, reason: `「${id}」的 svg 里不能有 script / onload / onclick` };
+  } else if (!it.text || typeof it.text !== "string") {
+    return { ok: false, reason: `「${id}」是 text 但缺 text` };
+  }
+
+  const clean: LibraryItem = {
+    id,
+    name: it.name,
+    cat: it.cat,
+    kind: it.kind,
+    size: it.size,
+    ...(it.svg ? { svg: it.svg } : {}),
+    ...(it.viewBox ? { viewBox: it.viewBox } : {}),
+    ...(it.stroke !== undefined ? { stroke: it.stroke } : {}),
+    ...(it.strokeWidth !== undefined ? { strokeWidth: it.strokeWidth } : {}),
+    ...(it.text ? { text: it.text } : {}),
+    ...(it.bg ? { bg: it.bg } : {}),
+    ...(it.weight !== undefined ? { weight: it.weight } : {}),
+    ...(it.fill ? { fill: it.fill } : {}),
+  };
+  const at = EXTRA_LIBRARY.findIndex((x) => x.id === id);
+  if (at >= 0) EXTRA_LIBRARY[at] = clean;
+  else EXTRA_LIBRARY.push(clean);
+  if (source) EL_SOURCE.set(id, source);
+  return { ok: true };
+}
+
+/** 注销一个插件元素（插件停用/删除时用）；内置的删不掉 */
+export function unregisterLibraryItem(id: string): boolean {
+  const at = EXTRA_LIBRARY.findIndex((x) => x.id === id);
+  if (at < 0) return false;
+  EXTRA_LIBRARY.splice(at, 1);
+  EL_SOURCE.delete(id);
+  return true;
+}
+
+/** 内置 + 插件，全部元素。**消费点一律用这个，不要直接用 `ELEMENT_LIBRARY`** */
+export const allLibraryItems = (): LibraryItem[] => [...ELEMENT_LIBRARY, ...EXTRA_LIBRARY];
+
+/** 筛选用分类：内置 5 个在前，插件自带的按注册顺序追加（去重） */
+export const allLibraryCats = (): ElementCategory[] => {
+  const out: ElementCategory[] = [...LIBRARY_CATS];
+  for (const it of EXTRA_LIBRARY) if (!out.includes(it.cat)) out.push(it.cat);
+  return out;
+};
+
+export const getLibraryItem = (id: string) => allLibraryItems().find((x) => x.id === id);
 
 /**
  * 素材 → 元素数据。

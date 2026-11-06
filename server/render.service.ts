@@ -3,13 +3,21 @@ import { ROOT as PROJECT_ROOT } from "./root";
 import fs from "node:fs";
 import { fileURLToPath } from "node:url";
 import { bundle } from "@remotion/bundler";
-import { makeCancelSignal, openBrowser, renderMedia, renderStill, selectComposition } from "@remotion/renderer";
+import {
+  makeCancelSignal,
+  openBrowser,
+  renderMedia,
+  renderStill,
+  selectComposition,
+  type BrowserLog,
+} from "@remotion/renderer";
 import type { Project } from "../shared/schema";
 import type { VideoConfig } from "remotion";
 import { totalDuration } from "../shared/schema";
 import { PUBLIC_DIR } from "./store";
 import { bundleOutDir, cleanupLegacyBundles } from "./bundle-cache";
 import { cleanupOutputs, ensureOutDir, outDirOf, projectOutDir } from "./outputs.service";
+import { generatePluginEntry } from "./plugin/gen-entry";
 
 let serveUrlPromise: Promise<string> | null = null;
 
@@ -117,13 +125,30 @@ const cleanLegacyOnce = () => {
 /** 打包一次并缓存，后续所有渲染复用；源码变更时自动失效重打包 */
 export async function getServeUrl(): Promise<string> {
   cleanLegacyOnce();
-  const sig = sourceSignature();
+  let sig = sourceSignature();
   if (serveUrlPromise && lastSignature !== null && sig !== lastSignature) {
+    /**
+     * 插件变了 → **必须先重新生成入口，再打包**。
+     *
+     * 反过来的顺序（先打包再生成）会把上一版组件打进 bundle：
+     * 现象是"改了插件、渲染出来还是旧的"，而预览里已经是新的——
+     * 这种"预览对、成片错"是最难自查的一类问题。
+     */
+    const gen = generatePluginEntry();
+    for (const issue of gen.issues) console.log(`[render] 插件提示：${issue}`);
+    if (gen.changed) {
+      console.log(`[render] 插件场景变更，已重新生成入口（${gen.count} 个）`);
+      // 生成文件本身在 src/ 下，重算签名，避免下一次又判成"变了"再打一次
+      sig = sourceSignature();
+    }
     console.log("[render] 检测到场景源码变更，重新打包…");
     resetBundle();
   }
   if (!serveUrlPromise) {
-    lastSignature = sig;
+    // 首次打包前也生成一次：服务刚启动时生成文件可能落后于磁盘上的插件
+    const gen = generatePluginEntry();
+    if (gen.changed) console.log(`[render] 已生成插件入口（${gen.count} 个场景）`);
+    lastSignature = sourceSignature();
     const outDir = bundleOutDir(PROJECT_ROOT);
     // 没有渲染在用旧产物才整目录删掉重打；有就就地覆盖，旧散件下次再清
     if (activeRenders === 0) {
@@ -137,6 +162,23 @@ export async function getServeUrl(): Promise<string> {
       entryPoint: path.join(PROJECT_ROOT, "src", "index.ts"),
       publicDir: PUBLIC_DIR,
       outDir,
+      /**
+       * 插件 SDK 的别名。
+       *
+       * 插件组件写在 `plugins/` 下，用相对路径 import 宿主的 `src/` 会随目录深度失效，
+       * 所以给它一个稳定入口（vite 侧有一份等价配置，见 vite.config.ts）。
+       * 注意必须给**绝对路径**：webpack 的 alias 不做相对解析。
+       */
+      webpackOverride: (config) => ({
+        ...config,
+        resolve: {
+          ...config.resolve,
+          alias: {
+            ...(config.resolve?.alias ?? {}),
+            "@studio/sdk": path.join(PROJECT_ROOT, "src", "sdk.ts").split(path.sep).join("/"),
+          },
+        },
+      }),
       onProgress: (p: number) => {
         bundleProgress = p;
       },
@@ -156,10 +198,15 @@ export async function getServeUrl(): Promise<string> {
   return url;
 }
 
-/** src/ 与 shared/ 下所有文件的 mtime 和，用作"代码是否变了"的指纹 */
+/**
+ * src/ 、shared/ 与 plugins/ 下所有文件的 mtime 和，用作"代码是否变了"的指纹。
+ *
+ * **plugins/ 必须在里面**：插件场景是代码，改了不重打包的话，
+ * 预览（走 vite 实时读）是新的、成片（走 bundle）是旧的 —— 最难自查的一种不一致。
+ */
 function sourceSignature(): number {
   let sum = 0;
-  for (const dir of ["src", "shared"]) {
+  for (const dir of ["src", "shared", "plugins"]) {
     const root = path.join(PROJECT_ROOT, dir);
     if (!fs.existsSync(root)) continue;
     for (const entry of fs.readdirSync(root, { recursive: true, withFileTypes: true })) {
@@ -311,6 +358,58 @@ export type StillResult = {
 };
 
 /** 关键帧截图：agent 视觉自检 + 人类验收都用它 */
+/* ─────────────────── 渲染超时 & 插件后期 pass 的告警回收 ─────────────────── */
+
+/**
+ * `delayRender` 等待上限 —— **不是整片总时长**。
+ *
+ * Remotion 这个选项的原话是「渲染最多可以等多久来 resolve 所有 `delayRender()` 调用」，
+ * 默认 30000ms。它在**每帧等页面就绪**的地方生效，所以它能兜住"某帧永远准备不好"
+ * （典型就是着色器把 GL 调用卡住、JS 回不来），但兜不住"整体算得太久"。
+ *
+ * 实测记一笔（2026-11-06）：把它设成 7000 去渲一条 62 秒才渲完的视频，
+ * **照常渲完**——这直接证明它是单帧等待上限、不是总时长。别再按"总超时"去理解它。
+ *
+ * 为什么还要显式写：默认值在报错里不出现，用户看到一句 "Timed out" 无从下手；
+ * 写进代码 + 环境变量可调，报错时才能给出"多少秒、怎么调、怀疑谁"。
+ */
+const DEFAULT_DELAY_RENDER_MS = 30_000; // Remotion 自己的默认值，保持一致
+/**
+ * 可用环境变量覆盖：`STUDIO_STILL_TIMEOUT_MS` / `STUDIO_CLIP_TIMEOUT_MS` / `STUDIO_VIDEO_TIMEOUT_MS`。
+ * 存在的理由：慢机器上 30 秒等一帧大字排版+纹理解码可能不够；也让"参数确实接通了"
+ * 能被一条命令验证（Remotion 会拒绝 <7000 的值，报错里带着传入的数字）。
+ */
+const envMs = (name: string, fallback: number) => {
+  const n = Number(process.env[name]);
+  return Number.isFinite(n) && n > 0 ? n : fallback;
+};
+// Remotion 自己会把 <7000ms 的值当成参数错误直接抛，所以要夹住
+const MIN_TIMEOUT_MS = 7_000;
+const TIMEOUT_STILL_MS = Math.max(MIN_TIMEOUT_MS, envMs("STUDIO_STILL_TIMEOUT_MS", DEFAULT_DELAY_RENDER_MS));
+const TIMEOUT_CLIP_MS = Math.max(MIN_TIMEOUT_MS, envMs("STUDIO_CLIP_TIMEOUT_MS", DEFAULT_DELAY_RENDER_MS));
+const TIMEOUT_VIDEO_MS = Math.max(MIN_TIMEOUT_MS, envMs("STUDIO_VIDEO_TIMEOUT_MS", DEFAULT_DELAY_RENDER_MS));
+
+/**
+ * 插件后期 pass 的告警标签。
+ *
+ * 渲染发生在 headless Chrome 里，那边 `console.warn` 没人看得见 —— 而
+ * "某个 pass 编译不过、已被跳过"恰恰是**必须**告诉用户的一句话（否则画面少一层效果，
+ * 用户会以为是我们的渲染坏了）。所以靠 `onBrowserLog` 捞回来。
+ *
+ * 标签要和 `src/scenes/scene3d/bloom.ts` 的 `PASS_TAG` 一致。
+ */
+const PLUGIN_PASS_TAG = "[plugin-pass]";
+
+/** 收集一次渲染里的插件 pass 告警（去重，跨画幅共用同一个 sink） */
+function browserLogSink(sink: string[]) {
+  return (log: BrowserLog) => {
+    const text = typeof log?.text === "string" ? log.text : "";
+    if (!text.includes(PLUGIN_PASS_TAG)) return;
+    const line = text.replace(/\s+/g, " ").trim();
+    if (line && !sink.includes(line)) sink.push(line);
+  };
+}
+
 export async function renderStills(
   project: Project,
   frame?: number,
@@ -321,8 +420,17 @@ export async function renderStills(
   /** "cover" = 封面候选，落到 covers/ 目录。
    *  以前封面和关键帧同目录同命名，产物列表里根本分不出哪张是封面。 */
   purpose?: "cover",
-): Promise<StillResult[]> {
-  return withActiveRender(async () => stillsInner(project, frame, formats, tag, purpose));
+): Promise<{ stills: StillResult[]; warnings: string[] }> {
+  return withActiveRender(async () => {
+    const warnings: string[] = [];
+    try {
+      const stills = await stillsInner(project, frame, formats, tag, purpose, warnings);
+      return { stills, warnings };
+    } catch (err) {
+      // 抽帧的超时以前只会原样抛 "Timed out"，看不出是自己插件的 shader 卡住了
+      throw explainRenderError(err);
+    }
+  });
 }
 
 async function stillsInner(
@@ -331,6 +439,8 @@ async function stillsInner(
   formats?: string[],
   tag?: string,
   purpose?: "cover",
+  /** 出参：回收浏览器里的插件后期告警（headless 里的 console.warn 没人看得见） */
+  warnings: string[] = [],
 ): Promise<StillResult[]> {
   const stillDir = purpose === "cover" ? ensureOutDir(project.id, "cover") : ensureStillDir(project.id);
   const serveUrl = await getServeUrl();
@@ -362,6 +472,9 @@ async function stillsInner(
       overwrite: true,
       imageFormat: "png",
       scale: 0.5,
+      // 兜底：卡住的 shader 会让这一帧永远等下去（以前没有任何超时）
+      timeoutInMilliseconds: TIMEOUT_STILL_MS,
+      onBrowserLog: browserLogSink(warnings),
     });
     // 目录名必须跟着 purpose 走：封面写 covers/，URL 还写 stills/ 就是 404
     const dirName = purpose === "cover" ? "covers" : "stills";
@@ -388,6 +501,8 @@ export type RenderTask = {
   fileName?: string;
   outputs: { format: string; url: string }[];
   error?: string;
+  /** 渲染过程中被回收的插件后期告警（"某个 pass 编不过已跳过"这类），要让人看得见 */
+  warnings?: string[];
   createdAt: number;
   /** 最后一次状态变化时间（结束时间可能就是它），给编辑器算「已经跑了多久」 */
   updatedAt?: number;
@@ -433,6 +548,24 @@ function explainRenderError(err: unknown): Error {
       "渲染器打不开打包产物（页面里没有 Remotion 入口）。最常见原因是 **3000 端口被别的进程占用**：" +
         "Remotion 的静态服务从 3000 起找空闲端口，撞上别人的页面就会加载到外来的 HTML。\n" +
         "排查：netstat -ano | findstr :3000 → 关掉那个进程（例如另一个 remotion studio）再渲。\n" +
+        `原始报错：${msg.slice(0, 240)}`,
+    );
+  }
+  /*
+   * 超时单独翻译。Remotion 的原话是 "Rendering timed out after Xms"，
+   * 但真正让人无从下手的是"为什么会超时"——而 90% 的新增原因是插件后期 pass
+   * （死循环的 for、超高次数的采样）。把这条线索直接给出来。
+   */
+  if (/timed out|timeout/i.test(msg)) {
+    /*
+     * 这是"某一帧迟迟准备不好"，不是"整片渲太久"（后者不会报这个错）。
+     * 最可能的新增原因就是插件后期 pass 把 GL 调用卡住了——所以先让人去关它。
+     */
+    return new Error(
+      `有一帧超过 ${Math.round(TIMEOUT_VIDEO_MS / 1000)} 秒还没准备好，渲染中止（Remotion 的 delayRender 等待上限）。\n` +
+        "常见原因：① 插件的后期 pass 里有死循环 / 超大循环 / 巨量采样；② 场景里有加载不出来的素材；③ 浏览器卡住。\n" +
+        "先试：set_graph_scene { post: { passes: [] } } 清掉插件后期，再渲一次——好了就说明问题在某个 pass。\n" +
+        "慢机器上可以调大：环境变量 STUDIO_VIDEO_TIMEOUT_MS / STUDIO_STILL_TIMEOUT_MS（毫秒，最小 7000）。\n" +
         `原始报错：${msg.slice(0, 240)}`,
     );
   }
@@ -550,6 +683,12 @@ async function runTaskInner(task: RenderTask, project: Project) {
     const serveUrl = await getServeUrl();
     if (isCancelled(task)) return;
 
+    /*
+     * 跨画幅共用一个 sink：同一个 pass 编不过会在每个画幅各报一次，
+     * 去重后回执里只留一条（画面少一层效果这句话说三遍只会让人以为坏了三处）。
+     */
+    const passWarnings: string[] = [];
+
     for (const key of task.formats) {
       // 排队期间被取消的任务在这里直接跳过，不浪费一次渲染
       if (isCancelled(task)) return;
@@ -599,6 +738,8 @@ async function runTaskInner(task: RenderTask, project: Project) {
         videoBitrate: BITRATE[task.quality] ?? BITRATE.standard,
         outputLocation: path.join(outDirOf(task.projectId, "video"), file),
         concurrency: 1,
+        timeoutInMilliseconds: TIMEOUT_VIDEO_MS,
+        onBrowserLog: browserLogSink(passWarnings),
         onProgress: ({ progress }: { progress: number }) => {
           // 取消后不再更新进度，避免界面又跳回 30%
           if (isCancelled(task)) return;
@@ -608,6 +749,7 @@ async function runTaskInner(task: RenderTask, project: Project) {
       });
       if (isCancelled(task)) return;
       task.outputs.push({ format: key, url: `/out/projects/${task.projectId}/videos/${file}` });
+      if (passWarnings.length) task.warnings = [...passWarnings];
       task.updatedAt = Date.now();
     }
 
@@ -725,6 +867,8 @@ async function renderPreviewClipInner(
   const output = path.join(dir, file);
 
   const t1 = Date.now();
+  /** 插件后期告警（"某个 pass 编不过已跳过"），随返回值回给调用方 */
+  const passWarnings: string[] = [];
   await renderMedia({
     puppeteerInstance,
     browserExecutable: BROWSER?.path,
@@ -740,6 +884,8 @@ async function renderPreviewClipInner(
     frameRange: [start, end],
     outputLocation: output,
     concurrency: 1,
+    timeoutInMilliseconds: TIMEOUT_CLIP_MS,
+    onBrowserLog: browserLogSink(passWarnings),
   });
 
   return {
@@ -753,5 +899,6 @@ async function renderPreviewClipInner(
     withAudio,
     bundleMs,
     renderMs: Date.now() - t1,
+    ...(passWarnings.length ? { warnings: passWarnings } : {}),
   };
 }

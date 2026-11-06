@@ -1,0 +1,836 @@
+/**
+ * 钩子总线：让插件在宿主流程里插一脚。
+ *
+ * ## 这一层解决什么
+ *
+ * 前几批插件只能「加东西」：多一篇指南、多一种风格、多一个场景。
+ * 但很多真正有价值的能力是「看一眼再说话」——比如画质守门员：
+ * 它不改任何数据，只是在自检时指出"这里字号太小了"。
+ *
+ * 所以钩子的语义统一是 **只读入参 → 返回文本意见**：
+ *
+ *   audit:rules    自检时补充检查项
+ *   ops:review     每次写入后复盘这一批操作
+ *   brief:derive   设计锁推导时补充规则说明
+ *
+ * ## 三个刻意的约束
+ *
+ * **1. 同步。**
+ * `applyOps` 与 `auditBriefAgainstProject` 都是同步函数，钩子必须跟着同步，
+ * 否则就得把整条写入路径改成异步——那是为了插件把宿主翻一遍，代价不成比例。
+ * 代价是插件不能发网络请求、不能读大文件。这正好也是我们想要的形态：
+ * 需要 IO 的事应该在插件自己的工具里做，而不是卡在用户每次保存工程的时候。
+ *
+ * **2. 不发能力。**
+ * 插件拿到的是数据（brief / project / ops），返回的是字符串。宿主不把
+ * fs、fetch、子进程交给它。所以钩子插件**不需要声明任何权限**——
+ * 这一批的权限执法（project:write / render / exec）留给真正需要能力的工具类插件。
+ *
+ * **3. 但代码就是代码。**
+ * `plugin.ts` 是被 `import()` 执行的**任意代码**，顶层就能 `fs.rmSync`。
+ * 钩子 API 的"只读"约束是**约定**，不是沙箱。装一个代码插件 = 在这台机器上
+ * 装一个程序，这一点在 plugins/README.md 里明写了，不能让"声明式权限"
+ * 给人一种被隔离的错觉。
+ *
+ * ## 为什么不缓存模块，以及为什么用 esbuild 打包
+ *
+ * 最直觉的做法是 `import(url + "?v=" + mtime)`——Node 的 ESM 缓存按 URL 区分，
+ * 换个 query 就该是全新求值。实测**只在项目根目录内成立**：
+ *
+ *   项目内 .ts   → 由 tsx 转译，query 生效，改了立刻是新的
+ *   项目外 .ts   → 走 Node 原生类型剥离，模块缓存按**文件路径**去重、忽略 query
+ *
+ * 项目外的插件目录（以前那个用户级 `~/.remotion-studio/plugins/`，现已删除）就是这样。
+ * 现象是「改了插件没反应，重启才好」——和上一批 `presetsCache` 那个坑同源，
+ * 而且更难查（重启后又能复现一次"好像好了"）。
+ * 用户级目录删掉之后这个差异本身不会再现，但产物打包这条路留着：
+ * 它同时解决了 TS 转译与 `import "./helper"` 相对依赖，与目录在哪无关。
+ *
+ * 所以改成：用 esbuild 把入口连同相对依赖打成一个 `.mjs`，文件名带内容指纹，
+ * 落到临时目录再 import。路径变了就是新模块，跟运行时是什么无关；
+ * 顺带还能支持 TS 与 `import "./helper"`。
+ * 只在文件变了才打包（几十毫秒），没变时只是一个 stat。
+ */
+
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import { pathToFileURL } from "node:url";
+import { activePlugins, type DiscoveredPlugin } from "./discovery";
+import { CACHE_DIR, SCRIPT_ENTRIES, entryCacheTag, loadPluginEntry, resolvePluginEntry } from "./entry";
+import { ffmpegPath } from "../ffmpeg";
+
+/* ─────────────────────────── 钩子定义 ─────────────────────────── */
+
+export const HOOK_KINDS = [
+  "audit:rules",
+  "ops:before",
+  "ops:review",
+  "brief:derive",
+  "text:transform",
+  "media:process",
+] as const;
+export type HookKind = (typeof HOOK_KINDS)[number];
+
+/** 钩子的中文说明（`list_plugins` 与文档共用） */
+export const HOOK_LABEL: Record<HookKind, string> = {
+  "audit:rules": "自检补充检查项",
+  "ops:before": "写入前把关（可否决）",
+  "ops:review": "写入后复盘",
+  "brief:derive": "设计锁补充规则",
+  "text:transform": "文本处理（字幕/稿件）",
+  "media:process": "文件处理（图/音/视频）",
+};
+
+/**
+ * 异步钩子：跑在 I/O 路径上（上传、批量重处理），一次可能几百毫秒。
+ *
+ * 它们**不能**走 `runHook`——那个是同步的，为保存工程服务。两者混用会让
+ * "为什么这次保存要 3 秒"变成一个无法定位的问题。所以名单显式分开，
+ * `runHook` 遇到异步钩子直接报错，而不是悄悄拿回一个 Promise 当垃圾数据。
+ */
+export const ASYNC_HOOK_KINDS = ["media:process"] as const;
+
+export type HookContext = {
+  "audit:rules": {
+    /** 需求契约（只读，已深冻结） */
+    brief: Record<string, unknown>;
+    /** 工程快照（只读，已深冻结） */
+    project: Record<string, unknown>;
+    /** 设计锁；没定形态时为 null */
+    lock: Record<string, unknown> | null;
+  };
+  /**
+   * 写入**前**的把关：只给否决权，不给改写权。
+   *
+   * 返回 `blocking` 非空 = 这批 op 被拒，工程一个字都不动（rev 不涨、撤销栈干净、
+   * 历史里没有这一笔）。**没有 `after`**——因为还不存在写入后的世界。
+   *
+   * 为什么不给"改 op"的能力：那等于让插件在落盘前改一份即将写入的工程，
+   * 一个写错的插件会把用户的数据改坏，而且撤销栈里看不出是谁改的。
+   * 想修正内容用 `text:transform`（文本）或 `ops:review` 的意见（人看着改）。
+   */
+  "ops:before": {
+    /** 写入前的工程（只读，已深冻结） */
+    before: Record<string, unknown>;
+    /** 这一批 op 原文（只读，已深冻结） */
+    ops: Record<string, unknown>[];
+  };
+  "ops:review": {
+    /** 写入前的工程（只读，已深冻结） */
+    before: Record<string, unknown>;
+    /** 写入后的工程（只读，已深冻结） */
+    after: Record<string, unknown>;
+    /** 这一批 op 原文（只读，已深冻结） */
+    ops: Record<string, unknown>[];
+  };
+  "brief:derive": {
+    brief: Record<string, unknown>;
+    /** 宿主刚推导出的设计锁（只读，已深冻结） */
+    lock: Record<string, unknown>;
+  };
+  "media:process": MediaHookContext;
+  "text:transform": {
+    /** 当前文本（可能已被前一个插件处理过） */
+    text: string;
+    /** 这段文本是什么：字幕 / 稿件 / 需求契约 */
+    kind: TextKind;
+    projectId: string | null;
+    sceneId: string | null;
+  };
+};
+
+/** 文本处理的作用对象（决定插件该不该动手：术语表对字幕和稿件都适用，但对 brief 未必） */
+export type TextKind = "subtitle" | "script" | "brief";
+
+/** 插件返回值：全部可选，都是给人/给 agent 看的文字 */
+export type HookVerdict = {
+  /** 必须修（会让自检不通过）；不要滥用，它挡的是交付 */
+  blocking: string[];
+  warnings: string[];
+  /** 通过项，写"你要求的都在"这类确认 */
+  passed: string[];
+  /** 追加到设计锁的规则说明（只影响展示，不参与 lockViolations 判定） */
+  lockRules: string[];
+};
+
+const EMPTY: HookVerdict = { blocking: [], warnings: [], passed: [], lockRules: [] };
+
+/* ─────────────────────────── 文件处理 ─────────────────────────── */
+
+/** 能处理的媒体类型（跟 assets 的扩展名分类一致） */
+export type MediaKind = "image" | "audio" | "video" | "file";
+
+export type MediaHookContext = {
+  /** 原文件绝对路径。**只读**：要改就返回新 buffer，不要写这个文件 */
+  file: string;
+  /** 文件内容（宿主已读入）。原地修改不会被采纳，必须放进返回值 */
+  buffer: Buffer;
+  /** 原始文件名（带扩展名）。输出扩展名变了就在返回值里改 fileName */
+  fileName: string;
+  kind: MediaKind;
+  projectId: string | null;
+  /** 可写临时目录，处理完宿主自动删。要调外部命令就往这里输出 */
+  tmpDir: string;
+  /** ffmpeg 可执行文件路径（Remotion 自带那份）；找不到为 null */
+  ffmpeg: string | null;
+  log: (msg: string) => void;
+};
+
+/**
+ * 插件返回：
+ * - `{ buffer }`            改完了，宿主用它
+ * - `{ file: "/abs/path" }` 产物在磁盘上（spawn ffmpeg 的典型形态），宿主读走
+ * - `null` / `undefined`    不处理（比如这个格式它不认）
+ */
+export type MediaHookResult =
+  | { buffer: Buffer; fileName?: string; note?: string }
+  | { file: string; note?: string }
+  | null
+  | undefined;
+
+export type MediaStep = { pluginId: string; note: string; before: number; after: number };
+
+export type MediaPipelineResult = {
+  changed: boolean;
+  buffer: Buffer;
+  fileName: string;
+  steps: MediaStep[];
+  warnings: string[];
+};
+
+/** 单次处理的整体预算。上传接口在等它，不能让一个插件把请求挂死 */
+const MEDIA_TIMEOUT_MS = 60_000;
+/** 输出体积上限：相对输入 4 倍，且不超过 200MB。防的是"插件把 2MB 图变成 200MB" */
+const MEDIA_GROWTH = 4;
+const MEDIA_MAX_BYTES = 200 * 1024 * 1024;
+
+/** 有媒体处理器吗（消费点据此跳过整个流程，不白读文件） */
+export function hasMediaProcessor(): boolean {
+  return loaded.some((h) => h.kind === "media:process");
+}
+
+/**
+ * 跑文件处理链。与文本链同构（串联、上一个的输出是下一个的输入），
+ * 但**异步 + 有超时 + 有临时目录**——这三点是文件与文本的真正差别。
+ *
+ * ## 超时的真实边界（必须说清，不能让作者以为有保护）
+ *
+ * `Promise.race` 只能救**异步**卡住的情况（await 一个不返回的 Promise）。
+ * 插件里写 `while(true){}` 会把整个 Node 进程卡死，宿主没有任何办法中断它——
+ * 这是同一进程内跑第三方代码的固有代价，真要解决只能上 worker/子进程隔离。
+ * 所以这里的超时定位是"防止一个慢外部命令拖住上传"，不是"沙箱"。
+ *
+ * ## 为什么只有匹配到处理器时才读文件
+ *
+ * 批量重处理一个工程可能有几十个素材。如果先读一遍再判断有没有人处理，
+ * 装个只处理图片的插件也要把视频全读进内存。所以顺序是：先看有没有处理器
+ * → 有才读。没装插件时整条链的开销是零（一次数组判断）。
+ */
+export async function runMediaPipeline(input: {
+  file: string;
+  fileName: string;
+  kind: MediaKind;
+  projectId?: string | null;
+  timeoutMs?: number;
+}): Promise<MediaPipelineResult> {
+  const list = hookList("media:process");
+  const idle: MediaPipelineResult = {
+    changed: false,
+    buffer: Buffer.alloc(0),
+    fileName: input.fileName,
+    steps: [],
+    warnings: [],
+  };
+  if (!list.length) return idle;
+
+  let cur: Buffer;
+  try {
+    cur = fs.readFileSync(input.file);
+  } catch (err) {
+    return { ...idle, warnings: [`读不到文件：${errText(err)}`] };
+  }
+
+  const started = Date.now();
+  const budget = input.timeoutMs ?? MEDIA_TIMEOUT_MS;
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "studio-media-"));
+  const steps: MediaStep[] = [];
+  const warnings: string[] = [];
+  const timers: ReturnType<typeof setTimeout>[] = [];
+  let fileName = input.fileName;
+
+  try {
+    for (const h of list) {
+      const left = budget - (Date.now() - started);
+      if (left <= 0) {
+        warnings.push(`处理超时（${budget}ms），后面的插件已跳过`);
+        break;
+      }
+
+      const ctx: MediaHookContext = {
+        file: input.file,
+        buffer: cur,
+        fileName,
+        kind: input.kind,
+        projectId: input.projectId ?? null,
+        tmpDir,
+        ffmpeg: ffmpegPath(),
+        log: (m) => console.log(`[plugin:${h.pluginId}] ${m}`),
+      };
+
+      let raw: unknown;
+      try {
+        /*
+         * 用 race 兜住 async 卡死。注意它拦不住同步死循环（见函数注释）——
+         * 那会把整个进程卡住，只能靠作者自觉。
+         */
+        raw = await Promise.race([
+          Promise.resolve(h.fn(ctx)),
+          new Promise((_, rej) => {
+            const t = setTimeout(() => rej(new Error(`超过 ${budget}ms 未返回`)), left);
+            // 成功路径也要清掉计时器：不然每次处理泄漏一个最长 60s 的定时器
+            (t as unknown as { unref?: () => void }).unref?.();
+            timers.push(t);
+          }),
+        ]);
+      } catch (err) {
+        noteHookFailure(h, "media:process", err);
+        warnings.push(`插件「${h.pluginId}」处理失败，已跳过：${errText(err)}`);
+        continue;
+      }
+
+      const taken = takeMediaResult(raw, h.pluginId, warnings);
+      if (!taken) continue;
+
+      const before = cur.length;
+      if (taken.buffer.equals(cur)) continue; // 没改动就不算一步（避免回执里全是噪音）
+
+      if (!taken.buffer.length) {
+        warnings.push(`插件「${h.pluginId}」返回了空文件，已忽略（否则素材会变成 0 字节）`);
+        continue;
+      }
+      if (taken.buffer.length > before * MEDIA_GROWTH + 1024 * 1024 || taken.buffer.length > MEDIA_MAX_BYTES) {
+        warnings.push(
+          `插件「${h.pluginId}」输出体积异常（${fmtBytes(before)} → ${fmtBytes(taken.buffer.length)}），已忽略`,
+        );
+        continue;
+      }
+
+      cur = taken.buffer;
+      if (taken.fileName && taken.fileName !== fileName) fileName = taken.fileName;
+      steps.push({ pluginId: h.pluginId, note: taken.note, before, after: cur.length });
+    }
+  } finally {
+    for (const t of timers) clearTimeout(t);
+    try {
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    } catch {
+      /* 临时目录清不掉不影响结果 */
+    }
+  }
+
+  return { changed: steps.length > 0, buffer: cur, fileName, steps, warnings };
+}
+
+/** 把插件返回值统一成 { buffer, fileName, note }；不合法就记一条警告并返回 null */
+function takeMediaResult(
+  raw: unknown,
+  pluginId: string,
+  warnings: string[],
+): { buffer: Buffer; fileName?: string; note: string } | null {
+  if (raw === null || raw === undefined) return null;
+  if (typeof raw !== "object") {
+    warnings.push(`插件「${pluginId}」返回值不合法（要 { buffer } / { file } / null），已跳过`);
+    return null;
+  }
+  const r = raw as { buffer?: unknown; file?: unknown; fileName?: unknown; note?: unknown };
+  const note = typeof r.note === "string" ? r.note : "";
+
+  if (Buffer.isBuffer(r.buffer)) {
+    return { buffer: r.buffer, fileName: typeof r.fileName === "string" ? r.fileName : undefined, note };
+  }
+  if (typeof r.file === "string" && r.file.trim()) {
+    try {
+      return { buffer: fs.readFileSync(r.file), fileName: typeof r.fileName === "string" ? r.fileName : undefined, note };
+    } catch (err) {
+      warnings.push(`插件「${pluginId}」说产物在 ${r.file}，但读不到：${errText(err)}`);
+      return null;
+    }
+  }
+  warnings.push(`插件「${pluginId}」返回的对象里既没有 buffer 也没有 file，已跳过`);
+  return null;
+}
+
+const fmtBytes = (n: number): string =>
+  n >= 1024 * 1024 ? `${(n / 1024 / 1024).toFixed(1)}MB` : `${Math.max(1, Math.round(n / 1024))}KB`;
+
+/** 处理链的一句话说明（回执用；用户必须知道自己的图被谁改过） */
+export function mediaStepsToNote(r: MediaPipelineResult): string {
+  return r.steps.map((s) => `「${s.pluginId}」${fmtBytes(s.before)}→${fmtBytes(s.after)}${s.note ? `（${s.note}）` : ""}`).join("、");
+}
+
+/* ─────────────────────────── 加载状态 ─────────────────────────── */
+
+type LoadedHook = { pluginId: string; kind: HookKind; fn: (ctx: unknown) => unknown };
+
+export type HookError = { pluginId: string; message: string };
+
+export type HookStatus = {
+  /** 已注册的钩子函数条数 */
+  count: number;
+  /** 提供钩子的插件 id */
+  plugins: string[];
+  /** 加载或运行时的错误（`list_plugins` 会展示） */
+  errors: HookError[];
+  /** 性能类提示（慢钩子等）——不是错误，list_plugins 里单独一档，不标红 */
+  warnings: HookError[];
+  /** 是否至少有一个钩子（消费点据此跳过整段逻辑） */
+  active: boolean;
+};
+
+let loaded: LoadedHook[] = [];
+let errors: HookError[] = [];
+let warnings: HookError[] = [];
+let fingerprint = "";
+let loading: Promise<HookStatus> | null = null;
+/** 运行期失败计数：连续失败的钩子会被摘掉，否则坏插件会污染每一次写入 */
+const failures = new Map<LoadedHook, number>();
+const MAX_FAILURES = 3;
+/**
+ * 慢钩子阈值。曾经 30ms：在保存同步路径上 JSON 序列化一下就可能偶发超掉，
+ * 提示会常态化刷屏——提示一旦常态化就没人看了。100ms 依然是"必须改"的信号，
+ * 但不会把正常波动当问题报。
+ */
+const SLOW_MS = 100;
+
+/**
+ * 目录里有没有"待启用的示例入口"（`plugin.ts.example` 这类）。
+ *
+ * 导出给 summary 用：示例没启用**不是错误**，`list_plugins` 不该给它打警告——
+ * 一片红等于没有红，真错误就没人看了。
+ */
+export function hasExampleEntry(dir: string): boolean {
+  try {
+    return fs.readdirSync(dir).some((f) => /\.(ts|mts|mjs|js|cjs)\.example$/.test(f));
+  } catch {
+    return false;
+  }
+}
+
+/** 清掉这一轮不再使用的打包产物（改了插件就会生成新文件，不清理会一直涨） */
+function pruneCache(keep: Set<string>): void {
+  let names: string[] = [];
+  try {
+    names = fs.readdirSync(CACHE_DIR);
+  } catch {
+    return;
+  }
+  for (const n of names) {
+    const f = path.join(CACHE_DIR, n);
+    if (keep.has(f)) continue;
+    try {
+      fs.rmSync(f, { force: true });
+    } catch {
+      /* 被别的进程占着就下次再删 */
+    }
+  }
+}
+
+/**
+ * 指纹 = 所有钩子入口文件的 (路径 + mtime + size) + 启用插件集合。
+ *
+ * size 必须进指纹：编辑器同一个时间片里连存两次，mtime 可能一样，
+ * 只看 mtime 会漏掉后一次修改。
+ */
+/**
+ * 入口指纹：工具插件与钩子共用同一套判定，改了任一处两边一起重载。
+ *
+ * 用解析后的入口路径而不是"猜文件名"：工程化插件的入口在 `dist/` 里，
+ * 而它的源码在 `src/`；盯着源码目录的 mtime 是没意义的（改了源码不重新构建，
+ * 产物根本没变）。这里只认产物和 package.json —— 它们变了，运行时就该重载。
+ */
+export function entryFingerprint(list: DiscoveredPlugin[]): string {
+  const parts: string[] = [];
+  for (const p of list) {
+    if (!p.provides.includes("hooks")) continue;
+    const entry = resolvePluginEntry(p.dir);
+    if (entry.kind === "unbuilt" || !entry.file) {
+      // 未构建也要进指纹：用户补上 dist/ 之后必须触发重新加载
+      parts.push(`${p.id}@${entry.kind}@${entry.detail}`);
+      continue;
+    }
+    // 与加载产物同一口径：script 模式扫同目录源码（helper 改了也要重载），module 模式扫 dist
+    parts.push(`${p.id}:${entryCacheTag(entry.kind, entry.file, entry.detail)}`);
+  }
+  return parts.join("|");
+}
+
+/* ─────────────────────────── 返回值收敛 ─────────────────────────── */
+
+/** 单条意见的长度上限：一个插件不该能靠一句话把工具回执刷屏 */
+const MAX_ITEM = 300;
+const MAX_ITEMS = 20;
+
+function takeStrings(v: unknown): string[] {
+  if (!Array.isArray(v)) return [];
+  return v
+    .filter((x): x is string => typeof x === "string")
+    .map((x) => x.trim())
+    .filter(Boolean)
+    .slice(0, MAX_ITEMS)
+    .map((x) => (x.length > MAX_ITEM ? `${x.slice(0, MAX_ITEM)}…` : x));
+}
+
+/**
+ * 把插件返回的任意值收成 `HookVerdict`。
+ *
+ * 不信任返回结构：插件可能返回 null、字符串、或者数组而不是对象。
+ * 这里一律容忍（拿不到就当没说话），因为一个返回值写错的插件
+ * 不该让用户的保存请求失败。
+ */
+function normalize(raw: unknown): HookVerdict {
+  if (!raw || typeof raw !== "object") return { ...EMPTY };
+  const o = raw as Record<string, unknown>;
+  return {
+    blocking: takeStrings(o.blocking),
+    warnings: takeStrings(o.warnings),
+    passed: takeStrings(o.passed),
+    lockRules: takeStrings(o.lockRules),
+  };
+}
+
+/* ─────────────────────────── 加载 ─────────────────────────── */
+
+/**
+ * 加载 / 重载插件钩子。
+ *
+ * 幂等且便宜：插件没变时只做几十个 stat。所有请求入口都可以放心调用
+ * （HTTP 中间件、MCP 工具包装、测试），不会每次都重新 import。
+ */
+export async function ensurePluginHooks(): Promise<HookStatus> {
+  if (loading) return loading;
+  const list = activePlugins();
+  const next = entryFingerprint(list);
+  if (next === fingerprint) return hookStatus();
+
+  loading = (async () => {
+    const acc: LoadedHook[] = [];
+    const errs: HookError[] = [];
+    const keep = new Set<string>();
+
+    for (const p of list) {
+      if (!p.provides.includes("hooks")) continue;
+      const resolved = resolvePluginEntry(p.dir);
+      if (resolved.kind === "unbuilt") {
+        /*
+         * 带 `.example` 后缀的入口是"示例还没启用"，不是错误。
+         * 仓库里自带的示例默认都是这个状态，把它们报成加载失败会让
+         * `list_plugins` 一打开就是一片红——真正的错误就没人看了。
+         *
+         * 但**工程化插件未构建不是这种情况**：它有 package.json、有依赖、只是还没
+         * `npm run build`。对它必须说实话并给出命令，否则用户会以为插件写错了。
+         */
+        if (!hasExampleEntry(p.dir)) {
+          const hint = resolved.hint ? `${resolved.detail}。${resolved.hint}` : resolved.detail;
+          errs.push({ pluginId: p.id, message: `入口不可用：${hint}` });
+        }
+        continue;
+      }
+      let mod: Record<string, unknown>;
+      try {
+        const loaded = await loadPluginEntry(p.dir, p.id);
+        mod = loaded.mod;
+        keep.add(loaded.artifact);
+      } catch (err) {
+        errs.push({ pluginId: p.id, message: `入口加载失败：${errText(err)}` });
+        continue;
+      }
+
+      const table = (mod.default ?? mod.hooks ?? mod) as Record<string, unknown>;
+      if (!table || typeof table !== "object") {
+        errs.push({ pluginId: p.id, message: "入口没有导出对象（应 export default { \"audit:rules\": fn }）" });
+        continue;
+      }
+
+      let registered = 0;
+      for (const kind of HOOK_KINDS) {
+        const fn = table[kind];
+        if (typeof fn !== "function") continue;
+        acc.push({ pluginId: p.id, kind, fn: fn as (ctx: unknown) => unknown });
+        registered++;
+      }
+      if (!registered) {
+        /*
+         * 没有钩子不一定是错误：代码插件可以只导出 tools / ttsProviders / media 处理器
+         * （它们分别由 plugin-tools / tts-providers / 媒体管线消费，不经过这里）。
+         * 一个只有 ttsProviders 的插件在此被判"没有可识别的钩子"，用户会看到一条
+         * 假错误，还以为语音插件没装上——所以只对"什么都没导出"的插件报错。
+         */
+        const mod2 = mod as Record<string, unknown>;
+        const hasOtherExports =
+          Array.isArray(table.tools) ||
+          Array.isArray(mod2.tools) ||
+          (typeof table.ttsProviders === "object" && table.ttsProviders !== null) ||
+          (typeof mod2.ttsProviders === "object" && mod2.ttsProviders !== null) ||
+          typeof table["media:process"] === "function";
+        if (!hasOtherExports) {
+          errs.push({
+            pluginId: p.id,
+            message: `入口里没有可识别的钩子（支持：${HOOK_KINDS.join(" / ")}；只提供工具/语音的插件可忽略本条）`,
+          });
+        }
+      }
+    }
+
+    loaded = acc;
+    errors = errs;
+    failures.clear();
+    fingerprint = next;
+    pruneCache(keep);
+    return hookStatus();
+  })();
+
+  try {
+    return await loading;
+  } finally {
+    loading = null;
+  }
+}
+
+function errText(err: unknown): string {
+  if (err instanceof Error) return err.message;
+  return String(err);
+}
+
+function deepFreeze<T>(v: T): T {
+  if (v && typeof v === "object") {
+    for (const k of Object.keys(v as object)) deepFreeze((v as Record<string, unknown>)[k]);
+    Object.freeze(v);
+  }
+  return v;
+}
+
+/**
+ * 深拷贝 + 冻结。
+ *
+ * 只在**确有插件**时才做（见 `runHook` 的调用方），否则每次保存工程都多一次
+ * 全量拷贝。拷贝的理由不是性能而是边界：把宿主的活对象交给插件，
+ * 插件改一个字段就等于改了下一次写入的基础，而这种错误不会有任何报错。
+ */
+export function frozenSnapshot<T>(v: T): T {
+  return deepFreeze(structuredClone(v)) as T;
+}
+
+/* ─────────────────────────── 执行 ─────────────────────────── */
+
+/** 有没有某类钩子（消费点用它在零插件时省掉整段逻辑） */
+export function hasHook(kind: HookKind): boolean {
+  return loaded.some((h) => h.kind === kind);
+}
+
+function hookList(kind: HookKind): LoadedHook[] {
+  return loaded.filter((h) => h.kind === kind);
+}
+
+/**
+ * 记一次钩子运行失败；连续失败到阈值就把它摘掉。
+ *
+ * 为什么要摘：一个坏插件会在用户每次保存工程时打印一次堆栈，日志很快没法看，
+ * 而且它还占着同步路径的时间。摘掉之后 `list_plugins` 里仍能看到原因。
+ */
+function noteHookFailure(h: LoadedHook, kind: HookKind, err: unknown): void {
+  const n = (failures.get(h) ?? 0) + 1;
+  failures.set(h, n);
+  if (n >= MAX_FAILURES) {
+    loaded = loaded.filter((x) => x !== h);
+    errors.push({ pluginId: h.pluginId, message: `${kind} 连续失败 ${n} 次，已停用：${errText(err)}` });
+  } else {
+    errors.push({ pluginId: h.pluginId, message: `${kind} 报错（第 ${n} 次）：${errText(err)}` });
+  }
+  errors = errors.slice(-20);
+}
+
+/**
+ * 跑一类钩子，把所有人的意见合起来。
+ *
+ * **ctx 必须是快照**（`frozenSnapshot` 过的）。这里刻意不替调用方冻结：
+ * 冻结宿主的活对象（比如 `project.service` 的缓存文档）会让后续写入莫名其妙地失败，
+ * 而且报错点离肇事点很远。所以快照的责任留在调用方，成本也只在该插件存在时才付。
+ *
+ * 失败隔离：某个插件抛错只记一笔、摘掉它，其余插件照常。连续失败 3 次就永久摘除
+ * ——否则一个坏插件会在用户每次保存工程时打印一次堆栈，日志很快没法看。
+ */
+export function runHook<K extends HookKind>(kind: K, ctx: HookContext[K]): HookVerdict {
+  /*
+   * 异步钩子不能走这里。它返回的是 Promise，被当成 verdict 合并会得到
+   * 一个"什么都没说"的空结果——不报错、不生效、极难自查。宁可当场炸。
+   */
+  if ((ASYNC_HOOK_KINDS as readonly string[]).includes(kind)) {
+    throw new Error(`${kind} 是异步钩子，要用 runMediaPipeline，不能用 runHook`);
+  }
+  const list = hookList(kind);
+  if (!list.length) return { ...EMPTY };
+
+  const out: HookVerdict = { blocking: [], warnings: [], passed: [], lockRules: [] };
+
+  for (const h of list) {
+    const started = Date.now();
+    try {
+      const raw = h.fn(ctx);
+      /*
+       * thenable 检测：作者最自然的写法是把钩子写成 async（返回 Promise）。
+       * Promise 是 object，normalize 会把它收成"什么都没说"的空 verdict——
+       * 不报错、不生效、极难自查。这里当场记一笔失败，把话说明白。
+       */
+      if (raw && typeof (raw as { then?: unknown }).then === "function") {
+        throw new Error(
+          `${kind} 必须同步返回 verdict，但你的钩子返回了 Promise（是不是写成 async 了？）。` +
+            `同步钩子不许 await；确有异步需求见文档「异步钩子」一节（目前只有 media:process）`,
+        );
+      }
+      const v = normalize(raw);
+      // 归属清楚：插件报的问题必须看得出是插件报的，否则用户会以为是宿主的判断
+      out.blocking.push(...v.blocking.map((x) => `[${h.pluginId}] ${x}`));
+      out.warnings.push(...v.warnings.map((x) => `[${h.pluginId}] ${x}`));
+      out.passed.push(...v.passed.map((x) => `[${h.pluginId}] ${x}`));
+      out.lockRules.push(...v.lockRules.map((x) => `[${h.pluginId}] ${x}`));
+    } catch (err) {
+      noteHookFailure(h, kind, err);
+    }
+    const cost = Date.now() - started;
+    if (cost > SLOW_MS) {
+      /*
+       * 慢钩子是**性能提示**不是错误：30ms 在保存同步路径上很容易偶尔超掉，
+       * 记进 errors 会让 list_plugins 长期挂着"假错误"——真错误就没人看了。
+       * 与 text 管线（记 warnings）的口径保持一致。
+       */
+      warnings = [
+        ...warnings.slice(-19),
+        { pluginId: h.pluginId, message: `${kind} 耗时 ${cost}ms（应 < ${SLOW_MS}ms）—— 钩子在保存/自检的同步路径上，别做重活` },
+      ];
+    }
+  }
+
+  return out;
+}
+
+/* ─────────────────────────── 文本处理链 ─────────────────────────── */
+
+/** 单次处理的文本上限。文本链跑在保存路径上，两万字以上该走批处理而不是每次保存都过一遍 */
+const MAX_TEXT = 20000;
+/** 输出长度上限：比输入大太多基本是插件写错了（比如把整段替换成一段模板） */
+const MAX_GROWTH = 3;
+
+export type TextStep = { pluginId: string; before: number; after: number };
+
+export type TextPipelineResult = {
+  text: string;
+  changed: boolean;
+  /** 每一步实际改动的插件（按执行顺序） */
+  steps: TextStep[];
+  /** 被跳过的原因（超长、返回空、抛错）——要能回到用户眼前，不能静默 */
+  warnings: string[];
+};
+
+/**
+ * 跑一遍文本处理链（字幕 / 稿件）。
+ *
+ * 与 `runHook` 的区别：那条是"收集意见"，这条是**流水线**——上一个插件的输出是
+ * 下一个的输入，顺序有意义。所以单独一个函数，而不是复用 verdict 合并。
+ *
+ * 三道保险，每一道都对应一个真实会发生的坏情况：
+ *  1. **返回空字符串** → 整条链把用户的字幕清空了。拒收，保留上一版。
+ *  2. **输出暴涨** → 插件把一句话替换成一整段模板。拒收。
+ *  3. **抛错** → 跳过这一个，其余继续（和 `runHook` 同一套失败计数）。
+ *
+ * 还有一条**不**在这里做、但必须写进文档：**幂等**。链上的每个插件都得保证
+ * 处理两次和处理一次结果一样，否则 agent 反复保存同一句话会把字幕越改越远。
+ */
+export function runTextPipeline(
+  text: string,
+  meta: { kind: TextKind; projectId?: string | null; sceneId?: string | null },
+): TextPipelineResult {
+  const list = hookList("text:transform");
+  const base: TextPipelineResult = { text, changed: false, steps: [], warnings: [] };
+  if (!list.length) return base;
+
+  if (text.length > MAX_TEXT) {
+    return { ...base, warnings: [`文本 ${text.length} 字，超过处理上限 ${MAX_TEXT}，已跳过插件处理（太长会拖慢保存）`] };
+  }
+
+  let cur = text;
+  const steps: TextStep[] = [];
+  const warnings: string[] = [];
+
+  for (const h of list) {
+    const started = Date.now();
+    let out: unknown;
+    try {
+      out = h.fn({ text: cur, kind: meta.kind, projectId: meta.projectId ?? null, sceneId: meta.sceneId ?? null });
+    } catch (err) {
+      noteHookFailure(h, "text:transform", err);
+      warnings.push(`插件「${h.pluginId}」处理出错，已跳过：${errText(err)}`);
+      continue;
+    }
+
+    // 允许直接返回字符串，也允许 { text }
+    const next = typeof out === "string" ? out : (out as { text?: unknown } | null)?.text;
+    if (typeof next !== "string") {
+      if (out !== undefined && out !== null) warnings.push(`插件「${h.pluginId}」没返回文本（要返回 string 或 { text }），已跳过`);
+      continue;
+    }
+    if (next === cur) continue;
+
+    if (!next.trim()) {
+      warnings.push(`插件「${h.pluginId}」返回了空文本，已忽略（否则一句话就能把字幕清空）`);
+      continue;
+    }
+    if (next.length > cur.length * MAX_GROWTH + 200) {
+      warnings.push(
+        `插件「${h.pluginId}」输出长度异常（${cur.length} → ${next.length} 字），已忽略 —— 检查是不是把整段替换成了模板`,
+      );
+      continue;
+    }
+
+    steps.push({ pluginId: h.pluginId, before: cur.length, after: next.length });
+    cur = next;
+
+    const cost = Date.now() - started;
+    if (cost > SLOW_MS) {
+      warnings.push(`插件「${h.pluginId}」处理耗时 ${cost}ms（应 < ${SLOW_MS}ms）—— 它在保存路径上`);
+    }
+  }
+
+  return { text: cur, changed: cur !== text, steps, warnings };
+}
+
+/** 一步处理结果的一句话说明（工具回执用；不写的话用户不知道自己的字被谁改了） */
+export function textStepsToNote(r: TextPipelineResult): string {
+  if (!r.changed) return "";
+  return r.steps.map((s) => `「${s.pluginId}」${s.before}→${s.after} 字`).join("、");
+}
+
+/** 当前钩子状态（`list_plugins` 展示 + 测试断言） */
+export function hookStatus(): HookStatus {
+  return {
+    count: loaded.length,
+    plugins: [...new Set(loaded.map((h) => h.pluginId))].sort(),
+    errors: [...errors],
+    warnings: [...warnings],
+    active: loaded.length > 0,
+  };
+}
+
+/** 某个插件挂上了哪几类钩子（`list_plugins` 用它说清"它在哪个环节说话"） */
+export function hookKindsOf(pluginId: string): HookKind[] {
+  return [...new Set(loaded.filter((h) => h.pluginId === pluginId).map((h) => h.kind))];
+}
+
+/** 测试用：清空状态，让下一次 ensure 重新加载 */
+export function resetHookCache(): void {
+  loaded = [];
+  errors = [];
+  warnings = [];
+  fingerprint = "";
+  failures.clear();
+}

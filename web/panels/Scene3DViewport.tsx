@@ -16,7 +16,7 @@ import {
   type Scene3DLook,
   type Scene3DPreset,
 } from "../../src/scenes/scene3d/Scene3D";
-import { installBloom } from "../../src/scenes/scene3d/bloom";
+import { installBloom, postExtrasOf } from "../../src/scenes/scene3d/bloom";
 import { evalNode, nodeBaseScale } from "@shared/scene3dAnim";
 import {
   NODE_KEY_MAX,
@@ -1682,22 +1682,49 @@ const BezierHandles: React.FC<{
 };
 
 /** 辉光：和成片同一个 installBloom，只是在这里没有"截帧时序"要求，用 effect 装即可 */
-const Bloom: React.FC<{ spec: LightSpec | unknown; theme: Theme; graph: Scene3DDsl; look: Scene3DLook }> = ({
-  theme,
-  graph,
-  look,
-}) => {
+const Bloom: React.FC<{
+  spec: LightSpec | unknown;
+  theme: Theme;
+  graph: Scene3DDsl;
+  look: Scene3DLook;
+  /** 幕内帧号：插件 pass 的 uFrame 靠它，每次读最新值（不能用闭包里的 frame） */
+  frame?: React.RefObject<number>;
+  fps?: number;
+}> = ({ theme, graph, look, frame, fps }) => {
   const state = useThree();
   const handle = useRef<ReturnType<typeof installBloom> | null>(null);
 
+  /*
+   * 后期参数每帧重算（都是便宜运算），但**只装一次** composer。
+   * 重建 EffectComposer 要重新分配半浮点 RT、重编三套 shader，拖滑块时会卡；
+   * 所以下面第二个 effect 用 handle.update 就地改数值与 pass 组合。
+   */
+  const bloomOpts = bloomFor({
+    spec: resolveLook("orbit-core", look).spec,
+    background: theme.palette.background,
+    graph,
+  });
+  const postExtras = postExtrasOf(graph);
+  /** 数值指纹：对象引用每帧都新，用它当依赖才不会被当成"变了" */
+  const postKey = [
+    bloomOpts.strength,
+    bloomOpts.radius,
+    bloomOpts.threshold,
+    postExtras.vignette,
+    postExtras.chroma,
+    postExtras.grain,
+    // 插件 pass 也是后期的一部分：agent 改了 post.passes 要能在视口里立刻看到
+    JSON.stringify(graph.post?.passes ?? []),
+  ].join("|");
+  const pluginPost = {
+    uses: graph.post?.passes,
+    frame: () => frame?.current ?? 0,
+    fps: fps ?? 30,
+  };
+
   useEffect(() => {
-    const opts = bloomFor({
-      spec: resolveLook("orbit-core", look).spec,
-      background: theme.palette.background,
-      graph,
-    });
     try {
-      handle.current = installBloom(state, opts);
+      handle.current = installBloom(state, bloomOpts, postExtras, pluginPost);
     } catch {
       // 环境不支持半浮点渲染目标时降级为无辉光：画面仍然可用，只是不那么亮
       handle.current = null;
@@ -1708,6 +1735,12 @@ const Bloom: React.FC<{ spec: LightSpec | unknown; theme: Theme; graph: Scene3DD
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  useEffect(() => {
+    handle.current?.update(bloomOpts, postExtras, pluginPost);
+    // postKey 已涵盖所有数值；bloomOpts / postExtras 是每帧新对象，不能进依赖
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [postKey]);
 
   useEffect(() => {
     handle.current?.setSize(state.size.width, state.size.height);
@@ -2474,7 +2507,7 @@ export const Scene3DViewport: React.FC<{
           dot={theme.palette.accent}
           custom={Boolean(graph.lights?.length)}
         />
-        <Bloom spec={null} theme={theme} graph={graph} look={resolved.name} />
+        <Bloom spec={null} theme={theme} graph={graph} look={resolved.name} frame={frameRef} fps={fps} />
 
         {/* 编辑辅助：网格与坐标轴只在视口里画，物理上不在成片合成里 */}
         {/*

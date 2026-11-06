@@ -33,10 +33,17 @@ memory/
 
 # 本地工作笔记（复盘、整改方案、字段契约）——只在本机留档，不入库
 # 这些文件常含具体工程 ID、本机路径与阶段性结论，进仓库会变成"过期文档"
-/docs
+/docs/*
+!/docs/PLUGIN-GUIDE.md
 
 # Remotion 打包产物（bundle() 固定输出到这里，可整目录删掉重建）
 /.remotion-bundle
+
+# 插件场景入口：**构建产物**，由 scripts/gen-plugin-entry.mts 生成。
+# 里面写的是 `import * as comp0 from "../plugins/<某人的插件>/scenes/x"` ——
+# 跟着仓库走，别人 clone 下来就会指向一个不存在的目录，build 直接失败。
+# 生成时机：npm run build 的 prebuild、npm start 的构建前、scripts/gen-plugin-entry.mts。
+/src/_plugins.generated.ts
 
 # 临时提交信息文件
 .git-msg.tmp
@@ -48,3 +55,44 @@ memory/
 /.other_modules/*
 !/.other_modules/.gitkeep
 !/.other_modules/README.md
+
+# ── 插件（用户自己做的东西，不入库）─────────────────────────
+# 为什么整块忽略：插件目录里放的是"这个人/这个团队"的偏好与私有配方。
+# 如果跟着仓库走，一次 `git pull` 或 `npm update` 就能把别人的劳动覆盖掉——
+# 这是所有插件系统最常见的翻车点，也是插件必须放在仓库外或忽略区的根本原因。
+# 三个人共用一个项目时，各人的插件目录互不冲突。
+#
+# 只放行两类：目录说明，以及那份用来演示机制的示例插件。
+/plugins/*
+!/plugins/README.md
+!/plugins/_example-content/
+!/plugins/_example-content/**
+!/plugins/_example-brief/
+!/plugins/_example-brief/**
+!/plugins/_example-scene/
+!/plugins/_example-scene/**
+!/plugins/_example-audit/
+!/plugins/_example-audit/**
+!/plugins/_example-tool/
+!/plugins/_example-tool/**
+!/plugins/_example-text/
+!/plugins/_example-text/**
+!/plugins/_example-media/
+!/plugins/_example-media/**
+!/plugins/_example-engineering/
+!/plugins/_example-engineering/**
+# 自带界面的最小示例（作者照抄就能跑：读配置 / 存配置 / 调宿主 API / 跟随配色）
+!/plugins/_example-ui/
+!/plugins/_example-ui/**
+
+# 放行**不等于什么都要**。
+#
+# gitignore 是"最后一条匹配的规则胜出"，所以上面那个 `!**` 会把示例工程里的
+# node_modules 也一起放行——在示例里跑一次 `npm install`，11MB 的依赖就会冒出来
+# 变成待提交项。这三行必须写在放行之后，才能把它们重新挡住。
+#
+# 同理，`.studio-cache/` 是宿主编译源码模式插件的中间产物（见 server/plugin/entry.ts），
+# 属于本机缓存，任何插件目录下都不该入库。
+/plugins/_example-*/node_modules/
+/plugins/_example-*/.studio-cache/
+/plugins/_example-*/package-lock.json

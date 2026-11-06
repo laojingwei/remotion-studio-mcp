@@ -571,28 +571,32 @@ git push origin :refs/tags/v1.1.1       # 删远端（简写 git push origin :v1
 ### 9.4 本仓库的发版流程（照这个顺序）
 
 ```bash
-# 1. 改版本号（package.json 是唯一来源）
-npm version 1.1.2 --no-git-tag-version   # 只改文件，不自动打 tag
+# 1. 改版本号（package.json 是唯一来源；这一步会连 package-lock.json 一起同步）
+npm version 1.2.0 --no-git-tag-version   # 只改文件，不自动打 tag
 
-# 2. 更新 CHANGELOG.md，在顶部加一节 [1.1.2]
+# 2. 更新 CHANGELOG.md，在顶部加一节 [1.2.0]（漏写会红）
+#    顺手扫一遍 README 里写死的东西：版本行、工具计数、能力清单
 
-# 3. 全仓版本一致性检查（package.json / README / CHANGELOG / 工具描述）
+# 3. 全仓版本一致性检查（package.json / README / CHANGELOG / 代码里写死的版本 / lock）
 node scripts/check-version.mjs
 
 # 4. 测试（至少核心集）
 npm run typecheck
 npm run test:core                # 全量是 npm test，比较慢
 
-# 5. 提交
+# 5. 发布包内容守卫（files 白名单漏文件 / 混进本机生成物都会红）
+npm run check:package
+
+# 6. 提交
 git add -A
-git commit -m "release: 1.1.2 —— 一句话说明"
+git commit -m "release: 1.2.0 —— 一句话说明"
 git push
 
-# 6. 打标签并推送（publish.yml 监听 push tags: v*）
-git tag -a v1.1.2 -m "1.1.2：一句话说明"
-git push origin v1.1.2
+# 7. 打标签并推送（publish.yml 监听 push tags: v*）
+git tag -a v1.2.0 -m "1.2.0：一句话说明"
+git push origin v1.2.0
 
-# 7. 去 GitHub → Actions 看 publish 是否成功；
+# 8. 去 GitHub → Actions 看 publish 是否成功；
 #    成功后再去 Releases 页面基于这个 tag 补一份带说明的发布记录（不会重复发布）
 ```
 

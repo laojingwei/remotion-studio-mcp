@@ -910,6 +910,13 @@ export async function resetDemoProject(projectId = "demo"): Promise<Project> {
 /* ───────────── 文本转语音（TTS） ───────────── */
 
 export type TtsConfig = {
+  /**
+   * 用哪个语音来源：`openai` = 内置实现（endpoint/... 那些字段都是它的），
+   * 其它 = 插件提供的 provider id。**装了插件不会自动切过来**——这是显式选择。
+   */
+  provider: string;
+  /** 各插件 provider 的配置（由插件界面写，宿主合成时原样递给插件） */
+  providers?: Record<string, Record<string, string>>;
   endpoint: string;
   apiKey: string;
   model: string;
@@ -920,6 +927,28 @@ export type TtsConfig = {
   language: string;
   customBody: string;
 };
+
+/** 插件提供的语音 provider（/api/tts/providers，供「语音来源」下拉用） */
+export type TtsProviderInfo = {
+  id: string;
+  label: string;
+  hint?: string;
+  /** 来自哪个插件（打开它的界面填配置用） */
+  pluginId: string;
+  configFields: { key: string; label?: string; secret?: boolean; required?: boolean; hint?: string }[];
+  /** 插件声明能输出的音频格式（面板把它映射成选项，选中值经 format 传回插件） */
+  formats?: string[];
+  hasVoices: boolean;
+  /** 插件声明支持风格指令（instruct）；没声明时面板不显示"风格指令"输入框 */
+  hasInstruct: boolean;
+};
+
+export async function fetchTtsProviders(): Promise<{ providers: TtsProviderInfo[]; errors: string[] }> {
+  const res = await fetch("/api/tts/providers");
+  const data = await res.json();
+  if (!res.ok) throw new Error(data.error ?? "读取语音来源失败");
+  return { providers: data.providers ?? [], errors: data.errors ?? [] };
+}
 
 export async function fetchTtsConfig(): Promise<TtsConfig> {
   const res = await fetch("/api/tts/config");
@@ -960,9 +989,13 @@ export async function ttsSynthesize(
   return data;
 }
 
-/** 音色列表（Qwen3-TTS 等本地服务的 /speakers） */
-export async function fetchTtsSpeakers(): Promise<Record<string, string>> {
-  const res = await fetch("/api/tts/speakers");
+/**
+ * 音色表。内置来源 = 本地服务的 /speakers；插件来源 = 插件声明的 voices（面板只做映射）。
+ * provider 不传时服务端跟随当前配置的来源。
+ */
+export async function fetchTtsSpeakers(provider?: string): Promise<Record<string, string>> {
+  const q = provider ? `?provider=${encodeURIComponent(provider)}` : "";
+  const res = await fetch(`/api/tts/speakers${q}`);
   const data = await res.json();
   if (!res.ok) throw new Error(data.error ?? "获取音色失败");
   return (data.speakers ?? {}) as Record<string, string>;
@@ -1150,5 +1183,232 @@ export async function clearResourceDir(category: string): Promise<{ ok: true; di
   });
   const data = await res.json();
   if (!res.ok) throw new Error(data.error ?? "清除失败");
+  return data;
+}
+
+/* ─────────────────────────── 插件管理 ─────────────────────────── */
+
+export type PluginEntryInfo = {
+  kind: "module" | "script" | "unbuilt";
+  file?: string;
+  detail: string;
+  hint?: string;
+};
+
+export type PluginItem = {
+  id: string;
+  name: string;
+  version: string;
+  dir: string;
+  scope: "project";
+  pathLabel: string;
+  provides: string[];
+  enabled: boolean;
+  warnings: string[];
+  errors: string[];
+  entry: PluginEntryInfo;
+  hasPackage: boolean;
+  needsBuild: boolean;
+  /** 实际注册到的钩子（不是清单声明的） */
+  hooks: string[];
+  /** 实际注册到的插件工具名（没有就空数组） */
+  tools: string[];
+  /** 是否注册了语音 provider */
+  tts: boolean;
+  /** 目录里只有 `plugin.ts.example` 这种模板，还没启用 */
+  templateOnly: boolean;
+  /** 有没有自带界面（plugins/<名>/ui/index.html） */
+  hasUi: boolean;
+  buildScript: string | null;
+  depCount: number;
+  canRepair: boolean;
+};
+
+export type PluginStepStatus = "pending" | "running" | "done" | "skip" | "error";
+
+export type PluginStep = {
+  key: string;
+  label: string;
+  status: PluginStepStatus;
+  detail?: string;
+};
+
+export type PluginJob = {
+  id: string;
+  source: string;
+  kind: "git" | "npm" | "local";
+  targetName: string;
+  scopeRoot: string;
+  mode: "install" | "repair";
+  /** 跳过了预检（用户点了「仍然安装」） */
+  force: boolean;
+  /** NOT_A_PLUGIN = 预检认为它不是插件 */
+  code?: string;
+  status: "queued" | "running" | "done" | "error" | "canceled";
+  steps: PluginStep[];
+  logs: { t: number; stream: "out" | "err" | "sys"; text: string }[];
+  droppedLogs: number;
+  dir?: string;
+  pluginId?: string;
+  error?: string;
+  hint?: string;
+  startedAt: number;
+  endedAt?: number;
+};
+
+/** plugins/ 里"有安装痕迹但不是插件"的目录（装错了/装坏了） */
+export type OrphanDir = {
+  name: string;
+  dir: string;
+  pathLabel: string;
+  scope: "project";
+  reason: string;
+  bytes: number;
+  sizeTruncated: boolean;
+};
+
+export type PluginSourceInfo = {
+  kind: "git" | "npm" | "local" | null;
+  name?: string;
+  dir?: string;
+  exists?: boolean;
+  reason?: string;
+};
+
+export async function fetchPlugins(): Promise<{
+  plugins: PluginItem[];
+  roots: { dir: string; scope: "project"; exists: boolean }[];
+  trashDir: string;
+  orphans: OrphanDir[];
+}> {
+  const res = await jfetch("/api/plugins");
+  const data = await res.json();
+  if (!res.ok) throw new Error(data.error ?? "读取插件列表失败");
+  return data;
+}
+
+/** 来源预检：只判定类型与目标目录，不下载 */
+export async function detectPluginSource(source: string): Promise<PluginSourceInfo> {
+  const res = await jfetch(`/api/plugins/detect?source=${encodeURIComponent(source)}`);
+  const data = await res.json();
+  if (!res.ok) throw new Error(data.error ?? "识别失败");
+  return data;
+}
+
+export async function installPlugin(input: {
+  source: string;
+  name?: string;
+  /** 本次用哪个 npm 源；不传就用设置里保存的那个 */
+  registry?: string;
+  /** 跳过"是不是插件"的预检（用户已确认） */
+  force?: boolean;
+}): Promise<PluginJob> {
+  const res = await fetch("/api/plugins/install", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(input),
+  });
+  const data = await res.json();
+  if (!res.ok) throw new Error(data.error ?? "安装失败");
+  return data.job;
+}
+
+export async function fetchPluginJob(id: string): Promise<PluginJob> {
+  const res = await jfetch(`/api/plugins/jobs/${encodeURIComponent(id)}`);
+  const data = await res.json();
+  if (!res.ok) throw new Error(data.error ?? "读取安装进度失败");
+  return data.job;
+}
+
+export async function fetchPluginJobs(): Promise<PluginJob[]> {
+  const res = await jfetch("/api/plugins/jobs");
+  const data = await res.json();
+  if (!res.ok) throw new Error(data.error ?? "读取安装任务失败");
+  return data.jobs ?? [];
+}
+
+export async function cancelPluginJob(id: string): Promise<void> {
+  const res = await fetch(`/api/plugins/jobs/${encodeURIComponent(id)}/cancel`, { method: "POST" });
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({}));
+    throw new Error(data.error ?? "取消失败");
+  }
+}
+
+export async function togglePlugin(id: string, enabled: boolean): Promise<boolean> {
+  const res = await fetch(`/api/plugins/${encodeURIComponent(id)}/toggle`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ enabled }),
+  });
+  const data = await res.json();
+  if (!res.ok) throw new Error(data.error ?? "切换失败");
+  return data.enabled;
+}
+
+/**
+ * 卸载插件。
+ * 默认挪进回收站（可恢复）；purge=true 彻底删除、不可恢复——
+ * 只在用户于确认框里明确选了「永久删除」时才传。
+ */
+export async function removePlugin(
+  id: string,
+  opts: { purge?: boolean } = {},
+): Promise<{ dir: string; trash?: string; purged?: boolean }> {
+  const res = await fetch(`/api/plugins/${encodeURIComponent(id)}/remove`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ purge: opts.purge === true }),
+  });
+  const data = await res.json();
+  if (!res.ok) throw new Error(data.error ?? "卸载失败");
+  return data;
+}
+
+export async function repairPlugin(id: string): Promise<PluginJob> {
+  const res = await fetch(`/api/plugins/${encodeURIComponent(id)}/repair`, { method: "POST" });
+  const data = await res.json();
+  if (!res.ok) throw new Error(data.error ?? "重建失败");
+  return data.job;
+}
+
+/* ── 插件安装设置（npm 源） ── */
+
+export type PluginRegistryPreset = { id: string; label: string; url: string };
+
+export type PluginSettings = {
+  registry: string;
+  presets: PluginRegistryPreset[];
+  defaultRegistry: string;
+};
+
+export async function fetchPluginSettings(): Promise<PluginSettings> {
+  const res = await jfetch("/api/plugins/settings");
+  const data = await res.json();
+  if (!res.ok) throw new Error(data.error ?? "读取插件设置失败");
+  return data;
+}
+
+/** 保存 npm 源（对所有后续安装生效），返回规范化后的地址 */
+export async function savePluginRegistry(registry: string): Promise<string> {
+  const res = await fetch("/api/plugins/settings", {
+    method: "PUT",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ registry }),
+  });
+  const data = await res.json();
+  if (!res.ok) throw new Error(data.error ?? "保存失败");
+  return data.registry;
+}
+
+/** 删除一个"未识别的目录"（挪进回收站，不真删） */
+export async function removeOrphanDir(dir: string): Promise<{ dir: string; trash: string }> {
+  const res = await fetch("/api/plugins/orphans/remove", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ dir }),
+  });
+  const data = await res.json();
+  if (!res.ok) throw new Error(data.error ?? "删除失败");
   return data;
 }

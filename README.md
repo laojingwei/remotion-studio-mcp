@@ -3,7 +3,7 @@
 一份 `Project JSON`，三个消费方：**Agent 改它、用户在 Web 上拖它、Remotion 渲染它**。
 因为共用同一个数据源，agent 和用户的编辑天然互通 —— 不是后期加的功能，是架构的结果。
 
-> **版本** 1.1.3（开发线 v1.01）· **MCP 工具** 124 个（4 个常驻 + 120 个按需发现）·
+> **版本** 1.2.0（开发线 v1.02）· **MCP 工具** 132 个（4 个常驻 + 128 个按需）·
 > **变更** 每一版改了什么见 [CHANGELOG.md](CHANGELOG.md)
 > **许可** 本仓库代码 MIT，依赖里有两个非宽松（Remotion License / AGPL），见 [开源协议](#开源协议)
 
@@ -139,9 +139,11 @@ http://127.0.0.1:4380/mcp
 
 > 注意地址要带 `/mcp`：`/` 是编辑器本身的 HTTP API（REST + SSE），不是 MCP 端点。
 
-### 工具清单（124 个 = 4 常驻 + 120 按需）
+### 工具清单（132 个 = 4 常驻 + 128 按需）
 
-**门面模式**：宿主只看到 4 个常驻工具，其余 120 个用 `tool_search` 按意图现找、用 `tool_call` 执行。
+**门面模式**：宿主只看到 4 个常驻工具，其余 128 个按需调用——其中 124 个能用 `tool_search` 按意图现找，
+4 个是**退役别名**（旧名字，搜索结果里不再出现，但直接 `tool_call` 仍能命中原工具，老脚本不用改）。
+找到后用 `tool_call(name, args)` 执行。
 这样工具描述不占常驻上下文（否则光工具说明就要几万 token）。
 
 ```
@@ -173,6 +175,7 @@ get_guide(name="manual", section="…")   → 按需读指南（不常驻）
 | 风格 | `list_styles` / `get_style` / `apply_style`（一键套风格） |
 | 需求 / 分镜 | `intake`（9 步问诊）/ `save_brief` / `get_brief` / `confirm_brief` / `save_storyboard` / `get_storyboard` / `build_storyboard` / `check_project`（只读诊断） |
 | 技能 / 记忆 | `list_guides` / `remember` / `recall` |
+| 插件 | `list_plugins`（装了哪些、为什么没生效）/ `toggle_plugin`（临时停用） |
 | 协作 | `get_user_messages` / `reply_user` / `get_annotations`（逐帧批注）/ `resolve_annotation`（标已修） |
 | 自检 | `tool_stats`（最近 7 天的调用次数 / 失败率 / 高频报错，来自 `data/logs/tool-calls-*.jsonl`） |
 
@@ -221,6 +224,39 @@ get_guide(name="manual", section="…")   → 按需读指南（不常驻）
 - 坑/偏好默认全局，配方可 global 或 project
 
 创作需求用 `save_brief` / `get_brief` 落盘（`data/projects/<id>/brief.json`），创作中随时对照，不用反复问用户。
+
+### 扩展插件（给这个项目加能力）
+
+放一个文件夹就生效，**不用重启、不用重新打包**；删掉就消失。13 类贡献项全部接通：
+
+```
+plugins/我的插件/
+  skills/*.md            技能指南     → list_guides / get_guide 能读到
+  styles/*.md            风格规则     → list_styles 可见、apply_style 可套
+  styles/presets.json    风格预设     → apply_style 一键落色板/字体/转场
+  brief/steps.json       问诊步骤     → 替换或追加问诊流程
+  templates/*.json       整片模板     → 工程菜单里一键起片
+  elements/*.json        元素库       → 元素面板多几个可拖的元件
+  scene3d/skies.json     3D 天空/打光
+  scene3d/looks.json     3D 光线风格
+  scene3d/presets.json   3D 母题配方（套用=换起手图）
+  scene3d/passes.json    3D 后期 pass（受控 GLSL，写进 post.passes 才上镜）
+  transitions/<id>.ts    转场（一个函数写一个方向，出入场自动成对）
+  scenes/<type>.json+tsx 场景组件（新的画面类型，编辑器出表单、渲染端出画面）
+  ui/index.html          自带界面（浮窗挂载，读写自己的配置）
+  manifest.json          可选——只有要声明版本/权限时才写
+  plugin.ts              可选——钩子 / 工具 / 语音 provider / 文本 / 素材处理
+```
+
+一个位置：`<安装目录>/plugins/`。同一份安装下的所有工程共用它，放进去就生效
+（场景组件要重新打包一次）。没有用户级目录——那个入口装完不生效，已删除。
+`plugins/` 默认不进 git（示例插件除外），所以你的东西不会被 `git pull` 覆盖。
+
+- **装**：编辑器「插件」面板里粘 git 地址 / npm 包名 / 选本地目录，自动下载、装依赖、构建、预检
+- `list_plugins` 看装了什么、为什么没生效（写坏的 manifest 只会让那一个插件失败，服务照常）
+- `toggle_plugin(id, enabled)` 临时停用，文件不动；卸载默认进回收站（也可永久删除）
+- 写插件看 **[docs/PLUGIN-GUIDE.md](docs/PLUGIN-GUIDE.md)**（18 节，不读宿主源码也能写出合规插件）；
+  规则与示例见 [plugins/README.md](plugins/README.md)，`plugins/_example-*/` 是 9 份可直接改的样板
 
 ---
 
@@ -736,11 +772,11 @@ agent 也能用：`list_templates` 看模板（内置 + 我的），`create_proj
 - 横向滚动看长片，轨道多了整体可纵向滚动；左侧轨道头始终固定
 - 顶部标尺显示秒数；点轨道区域或拖播放头定位
 
-### 文本转语音（本地 TTS）
+### 文本转语音（TTS）
 
-顶栏「语音」→ 两个页签：
+顶栏「语音」→ 两个页签。语音来源在「配置」页切换：内置服务（OpenAI 兼容）或插件 provider（厂商适配由插件负责，装了 TTS 插件会自动出现在来源下拉）。
 
-- **配置**：服务地址（默认 OpenAI 兼容 `/v1/audio/speech`）、API Key、模型名、默认音色、格式（wav/mp3/ogg）；非标准接口可填「自定义请求体」JSON 模板（支持 `{{text}}` `{{voice}}` `{{speed}}` 占位）。配好点「测试连接」。
+- **配置**：来源切换；内置来源配服务地址（默认 `/v1/audio/speech`）、API Key、模型名、默认音色、格式（wav/mp3/ogg），非标准接口可填「自定义请求体」JSON 模板（支持 `{{text}}` `{{voice}}` `{{speed}}` 占位）；插件来源点「打开它的界面」去插件自己的配置页。配好点「测试连接」。
 - **生成**：输入文本 → 生成 → 试听 → 一键「加入音效轨」或「设为背景音乐」。
 
 配置存在 `data/tts-config.json`（本机，已 gitignore）。
@@ -982,7 +1018,7 @@ server/              唯一写入口 + 渲染队列 + MCP 代理
   bundle.service    工程包导入导出（project.json + assets + manifest）
   zip.ts            最小 zip 读写（写 stored，读兼容 deflate）
   render.service    bundle 缓存 + 素材同步 + 渲染队列
-  mcp-tools.ts      工具聚合与门面（124 个 = 4 常驻 + 120 按需）
+  mcp-tools.ts      工具聚合与门面（132 个 = 4 常驻 + 128 按需）
   mcp-proxy.ts      stdio 代理（工具调用转发给 HTTP 服务）
   skills/           18 篇技能指南（list_guides / get_guide 读）
 web/                 编辑器：预览 / 属性面板 / 时间轴 / 素材面板 / 详情浮窗
@@ -1027,9 +1063,9 @@ out/project-bundles/ 导出的工程包 zip（**不按工程删**，它是交付
 
 ---
 
-## 最近变更（v0.97 → v1.01）
+## 最近变更（v0.97 → v1.02）
 
-按"用户能感知到什么"记，细节看 `设计方案.md` 与各服务文件头部注释。
+按"用户能感知到什么"记，细节看 [CHANGELOG.md](CHANGELOG.md) 与各服务文件头部注释。
 
 | 版本 | 变化 | 你能看到什么 |
 |---|---|---|
@@ -1041,6 +1077,9 @@ out/project-bundles/ 导出的工程包 zip（**不按工程删**，它是交付
 | v1.00 | **工作空间换盘**、元素详情浮窗 | 数据可以搬去别的盘；点素材先看详情，拖动或「放入画面」才落地 |
 | v1.01 | 静态服务换成自研（MIME + Range） | **音视频在详情浮窗里能播、能拖进度**（之前播放器在但点不动） |
 | v1.01 | 节拍检测修采样率、压缩曲线逐点限幅、音频 op 字段白名单 | BPM 不再系统性偏低；压缩不再把安静段一刀砍掉，也不再在突变处削波 |
+| v1.02 | **插件系统**：13 类贡献项全部接通（技能/风格/问诊/模板/元素/3D 天空·观感·母题·后期/转场/语音/场景组件/钩子） | 往 `plugins/` 放一个文件夹就多一项能力；`list_plugins` 看得到、面板里能装能卸 |
+| v1.02 | **插件安装器 + 自带界面**：粘地址自动装；插件可以有自己的配置页（浮窗） | 不用再手改文件、手配 Key；厂商差异由插件自己管 |
+| v1.02 | **插件开发指南**随包发布 | 想看怎么写：[docs/PLUGIN-GUIDE.md](docs/PLUGIN-GUIDE.md)，9 份示例可照抄 |
 
 ### 对调用方有影响的行为变更（如果你写过脚本调这些工具）
 
@@ -1053,6 +1092,12 @@ out/project-bundles/ 导出的工程包 zip（**不按工程删**，它是交付
 5. **`delete_project` 语义**：删非当前工程不影响当前工程；删当前工程会明确告知落到哪个工程。
 6. **显式 `projectId` 只影响本次调用**，不再顺带切"当前工程"；要切用 `switch_project`。
 7. **被隐藏的工具必须走 `tool_call`**，直接调会报 `Tool X disabled`（门面模式的预期行为）。
+8. **`list_plugins` 多了一段「内容问题」**：元素/模板/3D 配置的校验失败、插件间 id 冲突都会点名。
+   以前这些只往控制台打一条日志，看到的现象是"我放的东西不见了但没报错"。
+9. **`tts_check` 对插件来源会真的探测**：插件提供了 `check()` 就直接跑（默认浅层即探，15 秒超时），
+   不再是"只回报用的是哪家、要加 `deep=true` 才真合成"。失败时错误原文会带回来。
+10. **两个插件抢同一个 id 会被拒**：天空配方/模板/元素/光线风格/图形配方统一「先到先得」，
+    后装的报「id 已被插件 X 占用」——以前是后者静默顶掉前者。
 
 ---
 

@@ -1,0 +1,158 @@
+/**
+ * 工具插件示例：给 agent 加两个能真正干活的工具。
+ *
+ * 用法：把这个文件改名成 `plugin.ts`（去掉 `.example`），不用重启——
+ * 入口文件变化会触发热更新，`tool_search("语速")` 马上就能搜到它。
+ *
+ * ## 和钩子的区别
+ *
+ * 钩子只能"看一眼说一句"，工具能"被 agent 调起来做事"——所以工具需要**权限**：
+ * `manifest.json` 里声明 `project:read` / `project:write`，没声明的调用会直接报
+ * `PermissionDenied`，而不是静默失败。
+ *
+ * 这里故意做了一个只读工具 + 一个写入工具，因为它们的形状不一样：
+ * 只读工具随便写；写入工具必须有 `dryRun` 默认值——**默认不改数据，让 agent 显式要求才改**。
+ * 插件最容易造成的伤害不是"功能不对"，是"agent 试了一下，数据变了"。
+ *
+ * ## 参数声明为什么不写 zod
+ *
+ * 插件会被打包成单文件执行，带进自己那份 zod；而宿主校验参数用的是它自己那份，
+ * 两份实例的 `instanceof` 对不上，校验会静默失效。所以这里只声明**数据**：
+ *
+ *   params: { projectId: { type: "string", required: true, desc: "..." } }
+ *
+ * 宿主用自己的 zod 建 schema。支持 string / number / boolean / enum / stringArray。
+ */
+
+/** 口播语速的合理区间（字/秒）。低于这个观众觉得拖，高于这个跟不上 */
+const SLOW = 3;
+const FAST = 6.5;
+
+type Scene = {
+  id?: string;
+  name?: string;
+  type?: string;
+  durationInFrames?: number;
+  subtitle?: string;
+  props?: Record<string, unknown>;
+};
+
+/** 数这一屏上"要读的字"：字幕 + 常见版式里的文字字段 */
+function textOf(s: Scene): string {
+  const parts: string[] = [String(s.subtitle ?? "")];
+  const p = (s.props ?? {}) as Record<string, unknown>;
+  for (const k of ["heading", "title", "text", "caption", "value", "label"]) {
+    const v = p[k];
+    if (typeof v === "string") parts.push(v);
+  }
+  if (Array.isArray(p.items)) {
+    for (const it of p.items as Record<string, unknown>[]) {
+      if (it && typeof it === "object") {
+        for (const k of ["text", "label", "value", "title"]) {
+          if (typeof it[k] === "string") parts.push(it[k] as string);
+        }
+      }
+    }
+  }
+  return parts.join(" ").replace(/\s+/g, "");
+}
+
+export default {
+  tools: [
+    /* ── 只读：语速体检 ─────────────────────────────────────── */
+    {
+      name: "scene_tools_reading_speed",
+      description:
+        "逐幕算口播语速（字/秒），挑出过快或过慢的幕。用于「观众跟不跟得上」这类判断——" +
+        "check_project 只查结构，查不出这个。只读，不改任何数据。",
+      params: {
+        projectId: { type: "string" as const, required: true, desc: "工程 id（list_projects 里能看到）" },
+      },
+      async run(args: { projectId: string }, ctx: { readProject: (id: string) => unknown }) {
+        const p = ctx.readProject(args.projectId) as { fps?: number; scenes?: Scene[] };
+        const fps = Number(p.fps) || 30;
+        const scenes = p.scenes ?? [];
+        if (!scenes.length) return `工程 ${args.projectId} 里还没有幕。`;
+
+        const rows = scenes.map((s, i) => {
+          const sec = (Number(s.durationInFrames) || 0) / fps;
+          const chars = textOf(s).length;
+          return { i, name: s.name || s.type || `第 ${i + 1} 幕`, sec, chars, rate: sec > 0 ? chars / sec : 0 };
+        });
+
+        const bad = rows.filter((r) => r.chars > 0 && (r.rate < SLOW || r.rate > FAST));
+        const totalChars = rows.reduce((n, r) => n + r.chars, 0);
+        const totalSec = rows.reduce((n, r) => n + r.sec, 0);
+
+        const head =
+          `语速体检：${rows.length} 幕 / ${totalSec.toFixed(1)}s / ${totalChars} 字` +
+          `（全片平均 ${(totalChars / Math.max(totalSec, 0.1)).toFixed(1)} 字/秒，合理区间 ${SLOW}–${FAST}）`;
+        if (!bad.length) return `${head}\n每一幕都在合理区间内 ✅`;
+
+        const lines = bad
+          .sort((a, b) => b.rate - a.rate)
+          .map((r) => {
+            const dir = r.rate > FAST ? "太快" : "太慢";
+            const fix =
+              r.rate > FAST
+                ? `减字到 ${Math.floor(r.sec * FAST)} 字以内，或加长到 ${Math.ceil(r.chars / FAST)}s`
+                : `加字到 ${Math.ceil(r.sec * SLOW)} 字以上，或缩短到 ${Math.floor(r.chars / SLOW)}s`;
+            return `  · ${r.name}：${r.sec.toFixed(1)}s / ${r.chars} 字 = ${r.rate.toFixed(1)} 字/秒（${dir}）→ ${fix}`;
+          });
+        return `${head}\n${bad.length} 幕需要调整：\n${lines.join("\n")}\n\n只看字幕与画面文字，不含配音时长。`;
+      },
+    },
+
+    /* ── 写入：批量给幕名编号 ───────────────────────────────── */
+    {
+      name: "scene_tools_number_scenes",
+      description:
+        "给所有幕名加序号前缀（01、02…），方便对稿和定位。**默认 dryRun=true 只预览不写**，" +
+        "确认后传 dryRun=false 才真的改。批量改名的场景：用户说「幕名太乱了」时用。",
+      params: {
+        projectId: { type: "string" as const, required: true, desc: "工程 id" },
+        prefix: { type: "string" as const, desc: "序号后面的分隔符，默认「空格」" },
+        dryRun: { type: "boolean" as const, default: true, desc: "true=只预览（默认），false=真的写" },
+      },
+      async run(
+        args: { projectId: string; prefix?: string; dryRun?: boolean },
+        ctx: {
+          readProject: (id: string) => unknown;
+          applyOps: (id: string, ops: unknown[]) => { rev: number; summary: string[] };
+        },
+      ) {
+        const sep = args.prefix ?? " ";
+        const p = ctx.readProject(args.projectId) as { scenes?: Scene[] };
+        const scenes = p.scenes ?? [];
+        if (!scenes.length) return `工程 ${args.projectId} 里还没有幕。`;
+
+        // 至少两位：10 幕以下的片也排成 01、02，视觉上才对得齐
+        const width = Math.max(2, String(scenes.length).length);
+        const plan = scenes.map((s, i) => {
+          const no = String(i + 1).padStart(width, "0");
+          const base = String(s.name ?? "").replace(/^\d+\s*/, "").trim() || s.type || "未命名";
+          return { id: s.id ?? "", before: s.name ?? "", after: `${no}${sep}${base}` };
+        });
+
+        const changed = plan.filter((x) => x.after !== x.before);
+        const preview = changed
+          .slice(0, 5)
+          .map((x) => `  · 「${x.before || "(空)"}」→「${x.after}」`)
+          .join("\n");
+
+        if (args.dryRun !== false) {
+          return (
+            `预览：${changed.length}/${plan.length} 幕会被改名（dryRun=true，没有写入）\n${preview}` +
+            `${changed.length > 5 ? `\n  …还有 ${changed.length - 5} 幕` : ""}\n\n确认后传 dryRun=false 执行。`
+          );
+        }
+
+        const r = ctx.applyOps(
+          args.projectId,
+          changed.map((x) => ({ op: "update_scene", sceneId: x.id, patch: { name: x.after } })),
+        );
+        return `已改名 ${changed.length} 幕，工程到 rev ${r.rev}。\n${preview}\n${r.summary.join("\n")}`;
+      },
+    },
+  ],
+};

@@ -6,10 +6,11 @@ import { AbsoluteFill, useCurrentFrame, useVideoConfig } from "remotion";
 import type { Theme } from "../../../shared/schema";
 import { useSceneLayout } from "../../layout/useSceneLayout";
 import { Editable } from "../ui";
-import { installBloom } from "./bloom";
+import { installBloom, postExtrasOf } from "./bloom";
 import { studioEnvironment, useWorldTexture } from "./env";
 import { WorldLayer, fogRange, resolveWorld } from "./World";
 import { DslScene, applyBloomMultiplier, dslCamera, dslAutoDistance } from "./DslScene";
+import { allLookIds, lookSpecOf, type LookSpec } from "../../../shared/scene3dLooks";
 import { glowTexture, hash01, luminance, metalBody, shade } from "./color";
 import type { Scene3DDsl } from "../../../shared/scene3dDsl";
 
@@ -80,85 +81,24 @@ export type Scene3DProps = {
 
 /* ─────────────────────────── 光线风格（look） ─────────────────────────── */
 
-export type Scene3DLook = "studio" | "dramatic" | "cyber" | "nature";
+/**
+ * look 的数据与注册表都在 `shared/scene3dLooks.ts`——这里只留渲染侧的判断。
+ *
+ * 为什么要搬走：服务端也要这份 id 清单（`/api/scene-types` 的字段选项），
+ * 而 `shared/` 不能 import `src/`。搬走之后 "内置 4 套 + 插件若干套" 只有一份定义。
+ */
 
-export type LightSpec = { pos: [number, number, number]; intensity: number; color: string };
+/** 类型保持原名的别名，避免这个文件里几十处引用全改 */
+export type LightSpec = import("../../../shared/scene3dLooks").LookLightSpec;
 
 /**
- * 四套光线风格。**换的是光的性格，不是配色**——颜色仍然从主题里取，
- * 所以换 look 不会让画面跳出整体色系，变的是对比度、方向、软硬和色温。
+ * 合法取值：内置 4 个 + 插件注册的任意 id。
  *
- * 为什么必须有这一层：只有一套灯的时候，6 个预设的颜色气质是同源的
- * （暗绿金属 + 橙边光），同一支片里连用两个 3D 场景，观众会觉得"又是这个东西"。
- *
- * 颜色 token：`core` / `dot` 走主题色，`warm` / `cool` / `cyber` / `sky` 是固定色，
- * 只在特定风格里出现（cyber 的青、dramatic 的暖白key），量都很小。
+ * 用 `| (string & {})` 而不是纯 `string`：内置名字保住自动补全与拼写检查，
+ * 插件 id 又不被挡住。真正的校验在 `resolveLook`（取不到就退回预设默认并告警），
+ * 以及面板的选项（`describeFields` 会把它渲染成下拉框）。
  */
-export const LOOKS: Record<
-  Scene3DLook,
-  {
-    /** 环境光；给了 hemisphere 就不用 ambientLight（自然光靠天/地两色） */
-    ambient: number;
-    hemisphere?: { sky: string; ground: string; intensity: number };
-    /** 环境贴图强度：金属的"亮"几乎全来自它，这套值决定材质是"亮铬"还是"暗铁" */
-    env: number;
-    key: LightSpec;
-    rimA: LightSpec;
-    rimB: LightSpec | null;
-    fill: LightSpec | null;
-    bloom: { strength: number; radius: number; threshold: number };
-    /** 与 2D 版式混排时的观感提示，写进 meta 的 describe 里 */
-    summary: string;
-  }
-> = {
-  /* 明亮干净的产品光：高环境、强主光、弱边光。适合"讲清楚这是什么" */
-  studio: {
-    ambient: 0.6,
-    env: 0.6,
-    key: { pos: [4.5, 6, 5], intensity: 2.6, color: "#FFFFFF" },
-    rimA: { pos: [-5, 2.5, -6], intensity: 0.8, color: "core" },
-    rimB: { pos: [5, -2, -5], intensity: 0.5, color: "dot" },
-    fill: { pos: [-3, 1.5, 4], intensity: 1.1, color: "#FFFFFF" },
-    bloom: { strength: 0.26, radius: 0.4, threshold: 0.92 },
-    summary: "明亮干净的产品光，材质看得最清楚（适合讲解、功能介绍）",
-  },
-  /* 暗色戏剧：几乎没有环境光，靠一束暖主光和冷轮廓立起来，暗部很沉 */
-  dramatic: {
-    ambient: 0.1,
-    env: 0.14,
-    key: { pos: [3.5, 5.5, 4], intensity: 2.6, color: "#FFC48A" },
-    rimA: { pos: [-5, 2, -6], intensity: 2.4, color: "dot" },
-    rimB: { pos: [4, -3, -5], intensity: 1.5, color: "cool" },
-    fill: null,
-    // 半径 0.5 而不是 0.62：半径一大，能量摊到更大的面积上，亮点反而变暗
-    // （粒子星云那张实测就是"整片淡雾 + 核心不明显"）
-    bloom: { strength: 0.72, radius: 0.5, threshold: 0.7 },
-    summary: "暗调 + 暖主光 + 冷边光，情绪最强，暗部很沉（适合开场、悬念、情绪段落）",
-  },
-  /* 冷色高对比：中性白光 + 青色边光，最"科技"，也最像参考图里的 HUD 场景 */
-  cyber: {
-    ambient: 0.08,
-    env: 0.25,
-    key: { pos: [4.5, 6, 5], intensity: 2.3, color: "#FFFFFF" },
-    rimA: { pos: [-5, 2.5, -6], intensity: 2.2, color: "core" },
-    rimB: { pos: [5, -2, -5], intensity: 1.6, color: "cyber" },
-    fill: null,
-    bloom: { strength: 0.55, radius: 0.5, threshold: 0.8 },
-    summary: "冷色高对比，边缘挂一道青光，最「科技」（适合科技、数据、未来感）",
-  },
-  /* 自然柔和：天光 + 暖阳光，没有彩色边光，材质偏"哑光实体" */
-  nature: {
-    ambient: 0,
-    hemisphere: { sky: "#CFE0FF", ground: "#6B5A3E", intensity: 1.1 },
-    env: 0.5,
-    key: { pos: [5, 7, 4], intensity: 1.9, color: "#FFF0D8" },
-    rimA: { pos: [-5, 2.5, -6], intensity: 0.55, color: "sky" },
-    rimB: null,
-    fill: { pos: [-3, 1.5, 4], intensity: 0.8, color: "#DCEBFF" },
-    bloom: { strength: 0.18, radius: 0.45, threshold: 0.94 },
-    summary: "天光 + 暖阳光，柔和自然，没有彩色边光（适合自然、生活、纪实类内容）",
-  },
-};
+export type Scene3DLook = "studio" | "dramatic" | "cyber" | "nature" | (string & {});
 
 /**
  * 预设的默认 look。**同一支片里连用多个 3D 场景时，气质才不会撞车**：
@@ -190,12 +130,18 @@ export const lightColor = (token: string, core: string, dot: string): string => 
  * look：显式给了就用显式的，auto 按预设挑。
  * 抽成函数是因为**编辑器视口也要同一套判断**（否则视口和成片的光是两回事）。
  */
-export function resolveLook(
-  preset: Scene3DPreset,
-  look: Scene3DLook | "auto",
-): { name: Scene3DLook; spec: (typeof LOOKS)[Scene3DLook] } {
-  const name = look === "auto" ? (AUTO_LOOK[preset] ?? "cyber") : look;
-  return { name, spec: LOOKS[name] };
+export function resolveLook(preset: Scene3DPreset, look: Scene3DLook | "auto"): { name: Scene3DLook; spec: LookSpec } {
+  const fallback = AUTO_LOOK[preset] ?? "cyber";
+  const want = look === "auto" ? fallback : look;
+  const spec = lookSpecOf(want);
+  if (spec) return { name: want, spec };
+  /*
+   * 取不到只可能是「工程里存的 id 现在没了」（插件被停用/删除，或手写错了）。
+   * 这里**不抛错**：抛错会让整个工程打不开/渲不出，比气质不对严重得多。
+   * 退回预设默认 + 告警，用户看到的是"这一场气质不对"，而不是"导出失败"。
+   */
+  console.warn(`[scene3d] 没有光线风格「${want}」（可用：${allLookIds().join("、")}），已退回 ${fallback}`);
+  return { name: fallback, spec: lookSpecOf(fallback)! };
 }
 
 /**
@@ -205,7 +151,7 @@ export function resolveLook(
  * 整片背景都会被当成高光叠一遍 —— 这才是浅色主题做 bloom 翻车的真正原因。
  */
 export function bloomFor(opts: {
-  spec: (typeof LOOKS)[Scene3DLook];
+  spec: LookSpec;
   background: string;
   graph?: Scene3DDsl;
 }): { strength: number; radius: number; threshold: number } {
@@ -227,7 +173,7 @@ export function bloomFor(opts: {
  * 各写一份的结局是"视口里好看、成片颜色不对"，而这类偏差只能靠肉眼发现。
  */
 export const LookLights: React.FC<{
-  spec: (typeof LOOKS)[Scene3DLook];
+  spec: LookSpec;
   core: string;
   dot: string;
   /** 场景自带 lights：look 的固定方向光会把昼夜面抹平，只留一点环境底光 */
@@ -1245,6 +1191,13 @@ export const Scene3DScene: React.FC<Scene3DProps> = ({
 }) => {
   const frame = useCurrentFrame();
   const { fps, width, height } = useVideoConfig();
+  /*
+   * 插件后期 pass 的 `uFrame` 要**每帧最新的值**，而 `installBloom` 在 `onCreated` 里
+   * 只跑一次——闭包捕获的 `frame` 永远是安装那一帧。所以用 ref 过渡：
+   * 组件每帧重渲染都会刷新 `frameRef.current`，bloom 侧每帧读它。
+   */
+  const frameRef = React.useRef(0);
+  frameRef.current = frame;
   const { h } = useSceneLayout();
   const c = theme.palette;
   const t = frame / fps;
@@ -1423,7 +1376,11 @@ export const Scene3DScene: React.FC<Scene3DProps> = ({
         onCreated={(state) => {
           setupEnvironment(state, dslLights ? lookSpec.env * 0.55 : lookSpec.env);
           try {
-            installBloom(state, bloomOpts);
+            installBloom(state, bloomOpts, postExtrasOf(graph), {
+              uses: graph?.post?.passes,
+              frame: () => frameRef.current,
+              fps,
+            });
           } catch {
             setCssBloom(true);
           }

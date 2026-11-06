@@ -32,21 +32,43 @@ function newestMtime(dir) {
 }
 
 /*
- * 三个目录都必须进检查：
- *   web/     面板 UI
- *   shared/  schema / 转场定义等两端共用代码
- *   src/     场景组件 —— 编辑器预览用 @remotion/player，场景代码**也打进 web bundle**。
+ * 四个目录都必须进检查：
+ *   web/       面板 UI
+ *   shared/    schema / 转场定义等两端共用代码
+ *   src/       场景组件 —— 编辑器预览用 @remotion/player，场景代码**也打进 web bundle**。
+ *   plugins/   插件的场景组件 / 转场源码 —— 经 src/_plugins.generated.ts 同样打进 web bundle。
  * 漏了 src/ 的后果：改场景（比如修雨幕方向）后 npm start 认为"没变化"不重建，
  * 用户看到的永远是旧组件 —— 雨幕方向修复当晚就因为漏了这个目录踩过一次。
+ * plugins/ 是同一个坑：只改 plugins/<x>/scenes/foo.tsx 时 src/ 的 mtime 不变，
+ * 之前"重启 npm start 也不重建"，与文档 §12.3 的承诺矛盾。
  */
 const distTime = fs.existsSync(DIST) ? fs.statSync(DIST).mtimeMs : 0;
 const sourceTime = Math.max(
   newestMtime(path.join(ROOT, "web")),
   newestMtime(path.join(ROOT, "shared")),
   newestMtime(path.join(ROOT, "src")),
+  fs.existsSync(path.join(ROOT, "plugins")) ? newestMtime(path.join(ROOT, "plugins")) : 0,
 );
 
 if (distTime < sourceTime) {
+  /*
+   * 先生成插件场景入口（src/_plugins.generated.ts）。
+   *
+   * 这个文件是**构建产物**，已被 gitignore：它里面写死了 `plugins/<你的插件>/scenes/x`
+   * 这种 import，跟着仓库走就会出现"clone 下来 build 失败，因为那个插件不在"。
+   * 而 `npx vite build` 不触发 npm 的 prebuild 钩子，所以必须在这里显式跑一次。
+   */
+  console.log("▸ 生成插件场景入口 …");
+  const gen = spawnSync("npx tsx scripts/gen-plugin-entry.mts", {
+    cwd: ROOT,
+    shell: true,
+    stdio: "inherit",
+  });
+  if (gen.status !== 0) {
+    console.error("✗ 生成插件场景入口失败，请检查上面的报错");
+    process.exit(1);
+  }
+
   console.log("▸ 构建编辑器前端 …");
   // DEP0190：args 数组和 shell:true 一起用会按空格拼接、不转义，Node 22+ 弃用。
   // 命令是写死的（没有任何用户输入拼进来），并成一条字符串传最干净。

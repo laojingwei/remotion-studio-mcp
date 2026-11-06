@@ -440,6 +440,22 @@ button.ghost:disabled {
   gap: 4px;
 }
 
+/* 顶栏「插件」：带文字的图标按钮。纯图标太容易被当成装饰，
+   这个功能是"装插件"的唯一入口，宁可多占 40px 也要看得见 */
+button.ghost.plugin-entry {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 5px 9px;
+  font-size: 12px;
+  line-height: 1;
+  color: var(--muted);
+}
+
+button.ghost.plugin-entry:hover {
+  color: #e8eaf2;
+}
+
 button.ghost.layout-toggle {
   padding: 5px 7px;
   display: inline-flex;
@@ -3815,6 +3831,62 @@ button.mini.add {
   outline-offset: 2px;
 }
 
+/* ── 多选一确认框（如卸载插件：回收站 vs 永久删除） ── */
+
+.confirm-choices {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 14px;
+}
+
+/* 每个选项是一张可点的"说明卡"：标题 + 后果说明，点之前就知道会发生什么 */
+.confirm-choice {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 3px;
+  width: 100%;
+  text-align: left;
+  padding: 10px 12px;
+  border-radius: 10px;
+  border: 1px solid var(--line-strong);
+  background: rgba(255, 255, 255, 0.04);
+  color: var(--text);
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.confirm-choice:hover {
+  border-color: rgba(255, 255, 255, 0.3);
+  background: rgba(255, 255, 255, 0.07);
+}
+
+.confirm-choice:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.confirm-choice-label {
+  font-weight: 600;
+}
+
+.confirm-choice-desc {
+  font-size: 11px;
+  color: var(--muted);
+  line-height: 1.55;
+}
+
+/* 危险选项（永久删除）：红字标出，但不预选——默认焦点永远在安全项上 */
+.confirm-choice.is-danger .confirm-choice-label {
+  color: #ff9a9a;
+}
+
+.confirm-choice.is-danger:hover {
+  border-color: #d94f4f;
+  background: rgba(200, 64, 64, 0.12);
+}
+
 /* ───────────────────────── 全局拖入文件 ───────────────────────── */
 
 .drop-overlay {
@@ -6001,6 +6073,23 @@ select.tts-input {
   color: var(--muted);
 }
 
+/* 语音来源：切到插件 provider 后，内置那组字段「闲着」但保留可见可编辑——
+   用户切回内置时不用重填。灰化是提醒，不是禁用。 */
+.tts-builtin.is-idle {
+  opacity: 0.55;
+}
+
+.tts-source-note {
+  margin-top: 6px;
+  font-size: 11px;
+  line-height: 1.5;
+  color: var(--muted);
+}
+
+.tts-source-note.is-warn {
+  color: var(--danger);
+}
+
 /* 音色列表 */
 .tts-speakers {
   display: flex;
@@ -8116,4 +8205,752 @@ select.tts-input {
 
 .res-cell {
   overflow: hidden;
+}
+
+/* ─────────────────────────── 插件面板 ───────────────────────────
+ * 主体是「过程」而不是表单：装插件是个会失败的多步动作，
+ * 用户需要看到卡在哪一步、哪条命令报了什么，而不是一句"安装失败"。
+ */
+.plg-dialog {
+  width: min(860px, 94vw);
+  max-height: min(88vh, 820px);
+  display: flex;
+  flex-direction: column;
+  border-radius: 12px;
+  border: 1px solid var(--line-strong);
+  background: #12121a;
+  box-shadow: 0 24px 70px rgba(0, 0, 0, 0.6);
+  overflow: hidden;
+}
+
+.plg-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 14px;
+  border-bottom: 1px solid var(--line);
+  font-size: 13px;
+}
+
+.plg-sub {
+  flex: 1;
+  font-size: 11px;
+  color: var(--muted);
+}
+
+/* 上段：安装入口/预检/任务日志。固定不滚（日志自身另有 150px 内滚上限，高度可控） */
+.plg-top {
+  flex: none;
+  padding: 14px 14px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  font-size: 12px;
+  overflow: hidden;
+  border-bottom: 1px solid var(--line);
+}
+
+/* 类型 tab 条：在滚动区之外固定着，切类型时列表在下面滚 */
+.plg-tabs {
+  flex: none;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--line);
+}
+
+.plg-tab {
+  padding: 4px 10px;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  background: transparent;
+  color: var(--muted);
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.plg-tab:hover {
+  color: var(--text);
+  border-color: var(--line-strong);
+}
+
+.plg-tab.is-on {
+  background: rgba(108, 140, 255, 0.14);
+  border-color: rgba(108, 140, 255, 0.45);
+  color: #c6d3ff;
+}
+
+.plg-tab-count {
+  margin-left: 4px;
+  font-style: normal;
+  font-size: 10px;
+  opacity: 0.65;
+}
+
+/* 下段：插件列表 + 未识别目录。唯一滚动区 */
+.plg-scroll {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 12px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  font-size: 12px;
+}
+
+.plg-intro {
+  margin: 0;
+  line-height: 1.7;
+  color: var(--muted);
+}
+
+.plg-form {
+  display: flex;
+  gap: 8px;
+}
+
+.plg-input {
+  flex: 1;
+  min-width: 0;
+  padding: 8px 10px;
+  border-radius: 8px;
+  border: 1px solid var(--line-strong);
+  background: var(--panel-2);
+  color: inherit;
+  font-family: var(--mono, ui-monospace, monospace);
+  font-size: 12px;
+}
+
+.plg-input:focus {
+  outline: none;
+  border-color: rgba(120, 160, 255, 0.6);
+}
+
+.plg-row {
+  display: flex;
+  gap: 14px;
+  align-items: center;
+}
+
+.plg-scopes {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.plg-scope-opt {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  border: 1px solid var(--line);
+  background: var(--panel-2);
+  cursor: pointer;
+}
+
+.plg-scope-opt.is-on {
+  border-color: rgba(108, 140, 255, 0.5);
+  background: rgba(108, 140, 255, 0.07);
+}
+
+.plg-scope-opt input {
+  margin-top: 2px;
+  accent-color: #6c8cff;
+}
+
+.plg-scope-text {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.plg-scope-label {
+  font-size: 12px;
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.plg-scope-label i {
+  font-style: normal;
+  font-size: 10px;
+  color: var(--muted);
+}
+
+.plg-scope-path {
+  font-size: 10px;
+  color: var(--muted);
+  font-family: var(--mono, ui-monospace, monospace);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.plg-scope-path em {
+  font-style: normal;
+  color: #d9b26a;
+}
+
+.plg-registry {
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.plg-label {
+  font-size: 11px;
+  color: var(--muted);
+  flex-shrink: 0;
+}
+
+.plg-registry-input {
+  flex: 1;
+  min-width: 200px;
+  font-size: 11px;
+  padding: 5px 8px;
+}
+
+.plg-mini.is-on {
+  border-color: rgba(108, 140, 255, 0.55);
+  color: #a9bcff;
+}
+
+.plg-detect {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  font-size: 11px;
+  color: var(--muted);
+  min-height: 18px;
+}
+
+.plg-tag {
+  padding: 1px 6px;
+  border-radius: 4px;
+  background: rgba(108, 140, 255, 0.16);
+  border: 1px solid rgba(108, 140, 255, 0.4);
+  color: #a9bcff;
+  font-size: 10px;
+}
+
+.plg-detect-name {
+  color: inherit;
+}
+
+.plg-path {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--mono, ui-monospace, monospace);
+  opacity: 0.7;
+}
+
+.plg-warn {
+  color: #ffc857;
+}
+
+/* 任务卡 */
+.plg-job {
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--panel-2);
+  padding: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.plg-job.done {
+  border-color: rgba(80, 200, 120, 0.45);
+}
+
+.plg-job.error {
+  border-color: rgba(255, 107, 107, 0.5);
+}
+
+.plg-job-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.plg-job-status {
+  flex: 1;
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.plg-mini {
+  font-size: 11px;
+  padding: 3px 8px;
+}
+
+.plg-mini.danger {
+  color: #ff8f8f;
+}
+
+.plg-steps {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  font-size: 11px;
+}
+
+.plg-step {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  color: var(--muted);
+}
+
+.plg-step i {
+  font-style: normal;
+  opacity: 0.8;
+}
+
+.plg-step.done {
+  color: #7fe0a0;
+}
+
+.plg-step.error {
+  color: #ff8f8f;
+}
+
+.plg-step.running {
+  color: #ffc857;
+}
+
+.plg-step.skip {
+  opacity: 0.5;
+}
+
+.plg-log {
+  max-height: 150px;
+  overflow-y: auto;
+  padding: 8px;
+  border-radius: 8px;
+  background: #0b0b12;
+  border: 1px solid var(--line);
+  font-family: var(--mono, ui-monospace, monospace);
+  font-size: 11px;
+  line-height: 1.55;
+}
+
+.plg-log-line {
+  white-space: pre-wrap;
+  word-break: break-all;
+  color: #b9bccb;
+}
+
+.plg-log-line.err {
+  color: #ff9a9a;
+}
+
+.plg-log-line.warn {
+  color: #d9b26a;
+}
+
+.plg-log-line.sys {
+  color: #7f8db3;
+}
+
+.plg-log-note {
+  font-size: 10px;
+  color: var(--muted);
+}
+
+.plg-error {
+  color: #ff8f8f;
+  line-height: 1.6;
+  white-space: pre-wrap;
+}
+
+.plg-force {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: rgba(255, 200, 87, 0.08);
+  border: 1px solid rgba(255, 200, 87, 0.3);
+  font-size: 11px;
+  color: #d9b26a;
+}
+
+.plg-force span {
+  flex: 1;
+  line-height: 1.55;
+}
+
+.plg-ok {
+  color: #7fe0a0;
+  line-height: 1.6;
+  word-break: break-all;
+}
+
+.plg-msg {
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: rgba(108, 140, 255, 0.1);
+  border: 1px solid rgba(108, 140, 255, 0.3);
+  color: #a9bcff;
+  word-break: break-all;
+}
+
+/* 列表 */
+.plg-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.plg-empty {
+  color: var(--muted);
+  padding: 14px 0;
+  text-align: center;
+}
+
+.plg-item {
+  display: flex;
+  flex-wrap: wrap; /* 错误/警告行很长时允许换行，别把右边按钮挤没 */
+  gap: 10px;
+  align-items: flex-start;
+  padding: 10px;
+  border-radius: 10px;
+  border: 1px solid var(--line);
+  background: var(--panel-2);
+}
+
+/* ── 插件自制界面：浮窗 ──
+   插件的界面不嵌在「插件」对话框里：那里高度受限（内容一多就要套内层滚动），
+   而且一次只能看一个（开着 A 的设置就看不了 B 的）。
+   改成独立浮窗——可拖动、可缩放、能同时开多个、永远压在对话框之上。
+   宿主仍然只提供容器（一条标题栏 + 一个 iframe），里面的内容和按钮全归插件。 */
+.ui-win {
+  position: fixed;
+  display: flex;
+  flex-direction: column;
+  border-radius: 12px;
+  border: 1px solid var(--line-strong);
+  background: var(--panel);
+  box-shadow: 0 24px 70px rgba(0, 0, 0, 0.62);
+  overflow: hidden;
+}
+
+.ui-win-head {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 10px;
+  background: var(--panel-2);
+  border-bottom: 1px solid var(--line);
+  cursor: move;
+  user-select: none;
+  touch-action: none; /* 指针拖动时别让浏览器当成滚动/缩放手势 */
+}
+
+.ui-win.is-max .ui-win-head {
+  cursor: default;
+}
+
+.ui-win-dot {
+  flex: 0 0 auto;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--accent);
+}
+
+.ui-win-name {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text);
+  white-space: nowrap;
+}
+
+.ui-win-tag {
+  font-size: 10px;
+  color: var(--muted);
+  white-space: nowrap;
+}
+
+.ui-win-spacer {
+  flex: 1;
+}
+
+.ui-win-actions {
+  display: flex;
+  gap: 4px;
+}
+
+.ui-win-btn {
+  border: 1px solid var(--line);
+  background: transparent;
+  color: var(--muted);
+  border-radius: 6px;
+  padding: 2px 8px;
+  font-size: 11px;
+  line-height: 1.5;
+  cursor: pointer;
+}
+
+.ui-win-btn:hover {
+  color: var(--text);
+  border-color: var(--line-strong);
+  background: rgba(255, 255, 255, 0.06);
+}
+
+.ui-win-btn.is-close:hover {
+  color: var(--danger);
+  border-color: var(--danger);
+  background: rgba(255, 90, 90, 0.1);
+}
+
+.ui-win-body {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  background: var(--bg);
+}
+
+.ui-win-frame {
+  display: block;
+  width: 100%;
+  height: 100%;
+  border: 0;
+  background: var(--bg);
+  /* 加载完成前不可见（占位层盖着），完成后淡入——消除"先空白一下"的观感 */
+  opacity: 0;
+  transition: opacity 0.18s ease;
+}
+
+.ui-win-frame.is-ready {
+  opacity: 1;
+}
+
+/* 加载占位：iframe 还在路上时盖住空面板 */
+.ui-win-loading {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  font-size: 12px;
+  color: var(--muted);
+  background: var(--bg);
+}
+
+.ui-win-spin {
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  border: 2px solid var(--line-strong);
+  border-top-color: var(--accent);
+  animation: ui-win-spin 0.8s linear infinite;
+}
+
+@keyframes ui-win-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* 右下角的缩放把手：只画两条斜线，不抢注意力 */
+.ui-win-grip {
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  width: 16px;
+  height: 16px;
+  cursor: nwse-resize;
+  touch-action: none;
+}
+
+.ui-win-grip::after {
+  content: "";
+  position: absolute;
+  right: 3px;
+  bottom: 3px;
+  width: 9px;
+  height: 9px;
+  border-right: 1px solid var(--muted);
+  border-bottom: 1px solid var(--muted);
+  border-bottom-right-radius: 2px;
+  opacity: 0.55;
+}
+
+.plg-item.is-off {
+  opacity: 0.55;
+}
+
+/* 声明了钩子但一个都没注册上：不是错误，但必须一眼看出"它现在什么都没干" */
+.plg-item.is-dormant {
+  border-style: dashed;
+  border-color: rgba(255, 200, 87, 0.4);
+}
+
+.plg-hook-note {
+  margin-left: 8px;
+  font-size: 10px;
+  color: var(--muted);
+}
+
+.plg-item.is-dormant .plg-hook-note {
+  color: #d9b26a;
+}
+
+.plg-badge.warn {
+  background: rgba(255, 200, 87, 0.16);
+  color: #ffc857;
+}
+
+.plg-item.is-broken {
+  border-color: rgba(255, 200, 87, 0.45);
+}
+
+.plg-item-main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.plg-item-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.plg-ver,
+.plg-scope {
+  font-size: 10px;
+  color: var(--muted);
+}
+
+.plg-badge {
+  font-size: 10px;
+  padding: 1px 6px;
+  border-radius: 4px;
+  background: rgba(255, 255, 255, 0.08);
+  color: var(--muted);
+}
+
+.plg-badge.bad {
+  background: rgba(255, 200, 87, 0.14);
+  color: #ffc857;
+}
+
+.plg-item-sub {
+  font-size: 11px;
+  color: #c9ccda;
+}
+
+.plg-item-path {
+  font-size: 10px;
+  color: var(--muted);
+  font-family: var(--mono, ui-monospace, monospace);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.plg-item-issue {
+  font-size: 11px;
+  color: #ffc857;
+  line-height: 1.55;
+}
+
+.plg-item-warn {
+  font-size: 11px;
+  color: var(--muted);
+  line-height: 1.55;
+}
+
+.plg-item-actions {
+  display: flex;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+/* 未识别目录（装错了/装坏了留下的残骸） */
+.plg-orphans {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding-top: 4px;
+  border-top: 1px dashed var(--line);
+}
+
+.plg-section-title {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: #ffc857;
+}
+
+.plg-count {
+  font-size: 10px;
+  padding: 0 5px;
+  border-radius: 8px;
+  background: rgba(255, 200, 87, 0.16);
+}
+
+.plg-hint {
+  margin: 0;
+  font-size: 11px;
+  line-height: 1.6;
+  color: var(--muted);
+}
+
+.plg-orphan {
+  display: flex;
+  gap: 10px;
+  align-items: flex-start;
+  padding: 9px 10px;
+  border-radius: 10px;
+  border: 1px dashed rgba(255, 200, 87, 0.35);
+  background: rgba(255, 200, 87, 0.04);
+}
+
+.plg-orphan-main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.plg-orphan-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.plg-orphan-size {
+  font-size: 10px;
+  color: var(--muted);
+  font-family: var(--mono, ui-monospace, monospace);
+}
+
+.plg-foot {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 8px 14px;
+  border-top: 1px solid var(--line);
+  font-size: 10px;
+  color: var(--muted);
 }

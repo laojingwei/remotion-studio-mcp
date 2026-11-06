@@ -336,6 +336,8 @@ export const SCENE3D_TOOLS: ToolDef[] = [
     name: "set_graph_scene",
     description:
       "改 scene3d 的**场景级**设置（不是某个节点）：相机、光源、世界/地面、粒子、后期。只传要改的那几项，其余保持原样；传 null 表示清掉（恢复默认）。\n" +
+      "**graphPreset**：整套换成插件提供的图形配方（list_graph_presets 查）。"
+      + "它会**替换**现有 graph（不是合并），之后就是普通 graph，可继续用节点工具改。\n" +
       "相机：{position:[0,2,8], target:[0,0,0], fov:42, orbit:{degPerSec:6}}；" +
       "运镜段里想**锁定看向某个会动的节点**（行星、飘的物体）用 anim[].lookAt:\"节点id\"" +
       "（target 每帧重算，targetX/Y/Z 在该段失效；退出锁定=下一段不给 lookAt 且不写 from.target，镜头会自动接上）；" +
@@ -381,6 +383,13 @@ export const SCENE3D_TOOLS: ToolDef[] = [
             "dawn-field / misty-morning / overcast / golden-hour / city-night / milky-way / warehouse / apartment。" +
             "整组套用：背景图 + imageIntensity/envIntensity 标定 + 补光 + 地面 + 后期；world 里的字段可再覆盖",
         ),
+      graphPreset: z
+        .string()
+        .optional()
+        .describe(
+          "图形配方 id（list_graph_presets 查）：整套替换成插件给的 graph，等于「换一个起手图」。" +
+            "**会替换现有 graph**，其它场景级参数（world/camera/lights）照常叠加在它之上",
+        ),
       ground: z
         .record(z.any())
         .nullable()
@@ -391,12 +400,36 @@ export const SCENE3D_TOOLS: ToolDef[] = [
         .record(z.any())
         .nullable()
         .optional()
-        .describe("后期（bloom/tonemap/exposure）；null = 回到默认"),
+        .describe(
+          "后期（bloom/tonemap/exposure/vignette/chroma/grain/passes）；null = 回到默认。" +
+            "passes 是插件提供的后期效果（list_plugin_passes 查），例如 [{ id: \"vhs\", intensity: 0.6 }]",
+        ),
     },
     run: async (a) => {
       const ops: Record<string, unknown>[] = [];
+      /*
+       * 配方放最前：它替换整个 graph，后面显式给的相机/灯/世界要能覆盖配方里的设定。
+       * 先同步注册表，否则刚装的插件在 MCP 直连路径上会取不到。
+       */
+      if (a.graphPreset !== undefined) {
+        const { syncPluginGraphPresets } = await import("../plugin/content-sync");
+        syncPluginGraphPresets();
+        const { graphPresetOf, allGraphPresets } = await import("../../shared/scene3dPresets");
+        const preset = graphPresetOf(a.graphPreset);
+        if (!preset) {
+          const ids = allGraphPresets().map((p) => p.id);
+          throw new Error(
+            `没有这个图形配方「${a.graphPreset}」。` +
+              (ids.length ? `可用：${ids.join("、")}（详情用 list_graph_presets）` : "当前没有任何插件提供配方（plugins/<名>/scene3d/presets.json）"),
+          );
+        }
+        ops.push({ op: "update_scene", sceneId: a.sceneId, patch: { graph: preset.graph } });
+      }
       // 世界预设放第一个：它会把 lights/ground/post 一起换掉，后面显式给的要能覆盖它
       if (a.worldPreset !== undefined) {
+        // 插件给的配方要先在注册表里，否则 ops 层找不到 id 会报"没有这个世界预设"
+        const { syncPluginWorldSkies } = await import("../plugin/content-sync");
+        syncPluginWorldSkies();
         ops.push({
           op: "set_graph_world",
           sceneId: a.sceneId,
@@ -409,10 +442,38 @@ export const SCENE3D_TOOLS: ToolDef[] = [
       if (a.lights !== undefined) ops.push({ op: "set_graph_lights", sceneId: a.sceneId, lights: a.lights });
       if (a.ground !== undefined) ops.push({ op: "set_graph_ground", sceneId: a.sceneId, ground: a.ground });
       if (a.particles !== undefined) ops.push({ op: "set_graph_particles", sceneId: a.sceneId, particles: a.particles });
-      if (a.post !== undefined) ops.push({ op: "set_graph_post", sceneId: a.sceneId, post: a.post });
+      if (a.post !== undefined) {
+        /*
+         * 插件 pass 的 id 在这里校验，而不是在 DSL 里。
+         *
+         * DSL 那份 schema 同时被服务端与渲染端使用，两边注册表可能不同步；
+         * 而且如果写成"未知 id 就报错"，插件被删之后老工程会直接打不开。
+         * 所以：**写入时严格**（现在就告诉你写错了、列出可用的），
+         * **渲染时宽容**（跳过并告警，画面照出）。
+         */
+        const passes = (a.post as { passes?: unknown } | null)?.passes;
+        if (Array.isArray(passes) && passes.length) {
+          const { syncPluginPasses } = await import("../plugin/content-sync");
+          syncPluginPasses();
+          const { allPassIds } = await import("../../shared/scene3dPasses");
+          const ids = allPassIds();
+          const unknown = passes
+            .map((x) => String((x as { id?: unknown })?.id ?? "").trim())
+            .filter((id) => !id || !ids.includes(id));
+          if (unknown.length) {
+            throw new Error(
+              `没有这些后期 pass：${unknown.map((x) => `「${x || "(空)"}」`).join("、")}。` +
+                (ids.length
+                  ? `可用：${ids.join("、")}（详情用 list_plugin_passes）`
+                  : "当前没有插件提供后期 pass（plugins/<名>/scene3d/passes.json）"),
+            );
+          }
+        }
+        ops.push({ op: "set_graph_post", sceneId: a.sceneId, post: a.post });
+      }
       if (!ops.length) {
         throw new Error(
-          "set_graph_scene 没有要改的东西：给 camera / lights / world / worldPreset / ground / particles / post 之一",
+          "set_graph_scene 没有要改的东西：给 camera / lights / world / worldPreset / ground / particles / post / graphPreset 之一",
         );
       }
       const p = await resolveProject(a.projectId);
@@ -421,6 +482,55 @@ export const SCENE3D_TOOLS: ToolDef[] = [
         body: JSON.stringify({ actor: "agent", ops }),
       });
       return fmtSummary(res.summary);
+    },
+  },
+  {
+    name: "list_plugin_passes",
+    description:
+      "列出插件提供的 **3D 后期效果**（受控 GLSL）：VHS 扫描线、故障色偏、水波扭曲这类内置做不出来的画面处理。\n" +
+      "用 `set_graph_scene { post: { passes: [{ id, intensity }] } }` 启用，**最多 6 个**，按数组顺序叠加。\n" +
+      "什么时候用：① 用户要「复古 / 故障 / 老录像带 / 像素化 / 水波」这类质感；② 内置的 vignette/chroma/grain 不够。\n" +
+      "⚠ 这些 pass **默认不生效**，必须在 post.passes 里显式写出来。装上不会自动变，写错 id 会在写入时直接报错。\n" +
+      "⚠ 每个 pass 都要多一次全屏采样，4K 下叠三四个肉眼可感地变慢；不是非要不可就别叠。\n" +
+      "自己写一个：plugins/<名>/scene3d/passes.json，只写 fragment（写法见 get_guide('scene3d')）。\n" +
+      "编不过的 shader 会被**跳过**（画面照出、效果缺失），并在这里和渲染日志里报出来。",
+    shape: {},
+    run: async () => {
+      const { syncPluginPasses } = await import("../plugin/content-sync");
+      const synced = syncPluginPasses();
+      const { allPassDefs } = await import("../../shared/scene3dPasses");
+      const list = allPassDefs();
+
+      const out: string[] = [];
+      if (synced.issues.length) {
+        out.push("⚠ 有 pass 没能加载：");
+        for (const i of synced.issues) out.push(`  · ${i}`);
+        out.push("");
+      }
+      if (!list.length) {
+        out.push("当前没有插件提供后期效果（pass）。");
+        out.push("");
+        out.push("放法：plugins/<名>/scene3d/passes.json，内容形如");
+        out.push("  { \"passes\": [ { \"id\": \"vhs\", \"label\": \"VHS 扫描线\", \"summary\": \"老录像带\",");
+        out.push("      \"fragment\": \"uniform sampler2D tDiffuse; uniform float uFrame; varying vec2 vUv; void main(){ gl_FragColor = texture2D(tDiffuse, vUv); }\" } ] }");
+        out.push("可用 uniform：tDiffuse / uResolution / uFrame / uFps / uAmount，以及你自己在 params 里声明的数值。");
+        return out.join("\n");
+      }
+
+      out.push(`插件 3D 后期效果（${list.length} 个）`);
+      for (const d of list) {
+        out.push(`· ${d.id}（${d.label}）`);
+        if (d.summary) out.push(`  ${d.summary}`);
+        const ps = Object.entries(d.params);
+        out.push(
+          `  ${ps.length ? `可调：${ps.map(([k, v]) => `${k} ${v.min}–${v.max}（默认 ${v.default}）`).join("、")}` : "无可调参数"}` +
+            `${d.from ? ` · 来自插件 ${d.from}` : ""}`,
+        );
+      }
+      out.push("");
+      out.push('启用：set_graph_scene { sceneId: "scene_xxx", post: { passes: [{ id: "vhs", intensity: 0.6, params: { lines: 120 } }] } }');
+      out.push("⚠ 最多 6 个；intensity 不写当 1（全量）。写完**必须抽一帧看**：这类效果只有在画面里才判断得出好坏。");
+      return out.join("\n");
     },
   },
   {
@@ -442,7 +552,17 @@ export const SCENE3D_TOOLS: ToolDef[] = [
         .describe("只列某一类：season=春夏秋冬 / time=晨午昏 / night=夜景与星空 / indoor=室内"),
     },
     run: async (a) => {
-      const { WORLD_SKIES, WORLD_DIR_REL, hdriFileName, hdriDownloadUrl } = await import("../../shared/worldPresets");
+      const { allWorldSkies, worldSkySource, WORLD_DIR_REL, hdriFileName, hdriDownloadUrl } = await import(
+        "../../shared/worldPresets"
+      );
+      /*
+       * 先同步插件贡献的配方。`list_world_skies` 是最可能"刚装完插件就调"的工具，
+       * 只靠请求中间件同步的话，MCP 侧直连（不经 HTTP）就会拿到旧列表。
+       * 代价是一次指纹比对（几个 stat），没变就直接返回。
+       */
+      const { syncPluginWorldSkies } = await import("../plugin/content-sync");
+      const synced = syncPluginWorldSkies();
+      const ALL = allWorldSkies();
       const fs = await import("node:fs");
       const path = await import("node:path");
       const { PUBLIC_DIR } = await import("../store");
@@ -456,7 +576,7 @@ export const SCENE3D_TOOLS: ToolDef[] = [
         files = [];
       }
       const have = new Set(files);
-      const known = new Set(WORLD_SKIES.map((s) => hdriFileName(s.asset)));
+      const known = new Set(ALL.map((s) => hdriFileName(s.asset)));
       const extras = files.filter((f) => !known.has(f));
 
       const groupLabel: Record<string, string> = {
@@ -465,16 +585,25 @@ export const SCENE3D_TOOLS: ToolDef[] = [
         night: "夜与星空",
         indoor: "室内",
       };
-      const list = a.category ? WORLD_SKIES.filter((s) => s.category === a.category) : WORLD_SKIES;
+      const list = a.category ? ALL.filter((s) => s.category === a.category) : ALL;
       if (!list.length) throw new Error(`没有这类预设：${a.category}`);
 
-      const present = WORLD_SKIES.filter((s) => have.has(hdriFileName(s.asset))).length;
+      const present = ALL.filter((s) => have.has(hdriFileName(s.asset))).length;
       const out: string[] = [
-        `世界全景配方（${list.length} / ${WORLD_SKIES.length} 组）· 本机目录 ${dir}`,
-        `本机已有 ${present} / ${WORLD_SKIES.length} 张推荐素材` +
+        `世界全景配方（${list.length} / ${ALL.length} 组）· 本机目录 ${dir}`,
+        `本机已有 ${present} / ${ALL.length} 张推荐素材` +
           (extras.length ? `，另有 ${extras.length} 张不在配方表里的图` : ""),
         "",
       ];
+      /*
+       * 插件配方写坏了必须在这里说。不然用户看到的现象是"我明明加了天空却没有"，
+       * 而唯一的线索（哪一条不合法）只躺在服务端 stdout 里。
+       */
+      if (synced.issues.length) {
+        out.push("⚠ 有插件配方没能加载：");
+        for (const i of synced.issues) out.push(`  · ${i}`);
+        out.push("");
+      }
 
       for (const cat of ["season", "time", "night", "indoor"] as const) {
         const rows = list.filter((s) => s.category === cat);
@@ -482,7 +611,8 @@ export const SCENE3D_TOOLS: ToolDef[] = [
         out.push(`■ ${groupLabel[cat]}`);
         for (const s of rows) {
           const ok = have.has(hdriFileName(s.asset));
-          out.push(`· ${s.id}（${s.label}）  ${ok ? "✅ 已在本机" : "⛔ 缺失"}`);
+          const from = worldSkySource(s.id);
+          out.push(`· ${s.id}（${s.label}）  ${ok ? "✅ 已在本机" : "⛔ 缺失"}${from ? `  〔插件 ${from}〕` : ""}`);
           out.push(`  ${s.note}`);
           out.push(
             `  起始档位：背景 ${s.world.imageIntensity}× / 环境 ${s.world.envIntensity}× / 雾 ${s.world.haze} / 暗角 ${s.world.vignette}` +
@@ -506,6 +636,53 @@ export const SCENE3D_TOOLS: ToolDef[] = [
           `${WORLD_DIR_REL}/（.hdr 约 5–7MB，2048×1024），要么让用户提供，要么先用渐变（world.mode=gradient）顶上。`,
       );
       out.push("换完抽一帧：背景有没有过曝 / 主体还读不读得出来 / 影子方向和照片里的太阳对不对。");
+      return out.join("\n");
+    },
+  },
+  {
+    name: "list_graph_presets",
+    description:
+      "列出插件提供的**图形配方**（graph 配方）：一套现成的起手图，含几何/材质/灯光/相机，"
+      + "用 set_graph_scene { graphPreset: \"id\" } 一套换掉当前 graph，之后可继续用节点工具改。\n" +
+      "⚠ 内置的 6 个母题（orbit-core / particle-field / grid-horizon / explode-parts / waveform / globe-arc）"
+      + "**不在这里**——它们是代码画死的预置画面，用 add_scene / update_scene 的 `preset` 字段选。"
+      + "这个工具只列插件贡献的配方。\n" +
+      "什么时候用：① 想让 agent 从一套成型画面起步，而不是从空白画布搭；② 用户说「有没有现成的 XX 场景」。\n" +
+      "自己搭的话：get_graph 看当前结构、add_graph_node 加物体；配方的 JSON 写法见 get_guide('scene3d')。",
+    shape: {},
+    run: async () => {
+      const { syncPluginGraphPresets } = await import("../plugin/content-sync");
+      const synced = syncPluginGraphPresets();
+      const { allGraphPresets } = await import("../../shared/scene3dPresets");
+      const list = allGraphPresets();
+
+      const out: string[] = [];
+      if (synced.issues.length) {
+        out.push("⚠ 有配方没能加载：");
+        for (const i of synced.issues) out.push(`  · ${i}`);
+        out.push("");
+      }
+      if (!list.length) {
+        out.push("当前没有插件提供图形配方。");
+        out.push("");
+        out.push("放法：plugins/<名>/scene3d/presets.json，内容形如");
+        out.push('  { "presets": [ { "id": "my-hero", "label": "开场大件", "summary": "一句话说明适合讲什么", "graph": { "nodes": [...] } } ] }');
+        out.push("graph 的完整写法见 get_guide('scene3d')，或先用 get_graph 拿一份现成的照抄。");
+        return out.join("\n");
+      }
+
+      out.push(`插件图形配方（${list.length} 套）`);
+      for (const p of list) {
+        const nodes = Array.isArray((p.graph as { nodes?: unknown[] }).nodes) ? (p.graph as { nodes: unknown[] }).nodes.length : 0;
+        const cam = (p.graph as { camera?: { anim?: unknown[] } }).camera;
+        const anim = Array.isArray(cam?.anim) ? cam!.anim!.length : 0;
+        out.push(`· ${p.id}（${p.label}）`);
+        if (p.summary) out.push(`  ${p.summary}`);
+        out.push(`  ${nodes} 个节点${anim ? ` · 相机 ${anim} 段运镜` : " · 固定机位"}${p.from ? ` · 来自插件 ${p.from}` : ""}`);
+      }
+      out.push("");
+      out.push('套用：set_graph_scene { sceneId: "scene_xxx", graphPreset: "id" }');
+      out.push("⚠ 套用是**替换**整个 graph（不是合并）。套完抽一帧看构图，再决定要不要补光/改机位。");
       return out.join("\n");
     },
   },

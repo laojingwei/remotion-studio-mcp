@@ -46,6 +46,44 @@ const errOf = (graph: unknown): string => {
   return "";
 };
 
+/* post 的三个收尾效果：默认全关，写错范围要被拒 */
+{
+  const oneNode = [{ id: "a", geometry: { type: "sphere" } }];
+  const ok = normalizeProps("scene3d", { graph: { nodes: oneNode, post: { vignette: 0.3, chroma: 0.15, grain: 0.2 } } });
+  const post = (ok.graph as { post: Record<string, number> }).post;
+  assert.equal(post.vignette, 0.3);
+  assert.equal(post.chroma, 0.15);
+  assert.equal(post.grain, 0.2);
+  const plain = normalizeProps("scene3d", { graph: { nodes: oneNode } });
+  const p2 = (plain.graph as { post?: Record<string, number> }).post;
+  assert.equal(p2?.vignette, undefined, "不写就该是 undefined（关）");
+  assert.ok(errOf({ nodes: oneNode, post: { vignette: 1.5 } }).length > 0, "vignette 超过 1 要拒");
+  assert.ok(errOf({ nodes: oneNode, post: { grain: -0.1 } }).length > 0, "负数要拒");
+}
+
+/* post.passes：插件后期（受控 GLSL）——只校验形状，id 存在性在工具层 */
+{
+  const oneNode = [{ id: "a", geometry: { type: "sphere" } }];
+  const ok = normalizeProps("scene3d", {
+    graph: { nodes: oneNode, post: { passes: [{ id: "vhs", intensity: 0.6, params: { lines: 200 } }] } },
+  });
+  const passes = (ok.graph as { post: { passes: { id: string; intensity?: number; params?: Record<string, number> }[] } })
+    .post.passes;
+  assert.equal(passes.length, 1);
+  assert.equal(passes[0].id, "vhs");
+  assert.equal(passes[0].intensity, 0.6);
+  assert.equal(passes[0].params?.lines, 200);
+
+  // 强度越界要拒（0–1），数量上限 6
+  assert.ok(errOf({ nodes: oneNode, post: { passes: [{ id: "x", intensity: 1.5 }] } }).length > 0, "intensity 超 1 要拒");
+  const seven = Array.from({ length: 7 }, (_, i) => ({ id: `p${i}` }));
+  assert.ok(errOf({ nodes: oneNode, post: { passes: seven } }).length > 0, "超过 6 个要拒");
+
+  // 不写就是没有（不是空数组），渲染端据此不加任何 pass
+  const plain = normalizeProps("scene3d", { graph: { nodes: oneNode } });
+  assert.equal((plain.graph as { post?: { passes?: unknown } }).post?.passes, undefined);
+}
+
 console.log("[scene3d dsl] 合法输入");
 
 test("最小图能过校验，且默认值被补齐", () => {

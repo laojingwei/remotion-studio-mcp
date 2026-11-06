@@ -2,6 +2,8 @@ import fs from "node:fs";
 import { ROOT as PROJECT_ROOT } from "./root";
 import { PROJECTS_ROOT } from "./paths";
 import path from "node:path";
+import { frozenSnapshot, hasHook, runHook } from "./plugin/hooks";
+import { pluginBriefSteps } from "./plugin/brief-steps";
 import {
   deriveDesignLock,
   designLockSummary,
@@ -266,8 +268,18 @@ export type Brief = {
   /** 推导出来的设计锁（save_brief 时按 form + 档位自动生成，也可显式覆盖） */
   designLock?: DesignLock;
 
-  /** 已完成的步骤（1–9） */
+  /** 已完成的步骤（编号以当前生效的问诊模板为准，不再固定 1–9） */
   steps?: number[];
+  /**
+   * 插件问诊问到的额外内容（键 = 步骤里 `x.` 后面的部分，如 `x.competitor`）。
+   *
+   * 为什么单开一个命名空间，而不是往 Brief 上直接加字段：
+   * 1. `keyof Brief` 是编译期封闭的，插件的字段名写不进去；
+   * 2. 这些字段**不参与设计锁推导**（`recomputeDesignLock` 只读 form/density/motionLevel
+   *    等 7 个内置字段）。混在主对象里会让人误以为"填了就生效"——
+   *    而事实是填了只作记录。语义分开，才不会被误用。
+   */
+  x?: Record<string, unknown>;
   /**
    * 来源存证：哪些字段是 agent 替用户拍板的（用户没有明确回答）。
    * 存在的意义：缺了它，「9 步问诊」可以全程零交互地自己填完，
@@ -291,13 +303,36 @@ export type Brief = {
 export type BriefStep = {
   no: number;
   title: string;
-  /** [key, label]：缺失时用它提示 agent 去问 */
-  required: [keyof Brief, string][];
+  /**
+   * [key, label]：缺失时用它提示 agent 去问。
+   *
+   * key 是 `Brief` 的字段名；以 `x.` 开头的是**扩展字段**（落进 `brief.x`），
+   * 给插件定义的问诊用。校验在 `normalizeSteps` 里做，不在类型上卡死——
+   * 类型卡死会让插件永远只能问内置那 45 个字段，"用自己的问诊方式"就成了空话。
+   */
+  required: [string, string][];
   /** 建议问的问题（示范） */
   questions: string[];
+  /**
+   * 是否属于"必答主体"。默认 true。
+   *
+   * 以前这里是 `CORE_STEPS = BRIEF_STEPS.filter(s => s.no <= 9)` —— 用步号硬切，
+   * 于是"第 10 步稿件、第 11 步观感"必须排在内置的 9 步之后才不会进必答。
+   * 插件一旦改写步骤数量，`no <= 9` 就毫无意义（它可能只有 6 步，也可能有 12 步）。
+   * 改成显式标记后：**步数随便定，哪些算"必答"由数据自己说**。
+   */
+  core?: boolean;
 };
 
-export const BRIEF_STEPS: BriefStep[] = [
+/**
+ * 内置问诊的 11 步（1–9 必答，10 稿件 / 11 观感在确认后单独走）。
+ *
+ * ⚠️ 注意数组**物理顺序**里 `no: 11` 排在 `no: 10` 前面（当年先加了 11 后加的 10）。
+ * 所有逻辑都按 `no` 查（`find(s => s.no === x)`），与物理顺序无关，所以一直没出问题。
+ * 但这意味着**「数组下标 + 1」不等于步号**——插件步骤按顺序自动编号时不要照抄这个假设；
+ * 内置这份也刻意没动，改动会改变 `intake` 步骤表的展示顺序（属于无收益的行为变更）。
+ */
+const BUILTIN_STEPS: BriefStep[] = [
   {
     no: 1,
     title: "目标与受众",
@@ -397,8 +432,9 @@ export const BRIEF_STEPS: BriefStep[] = [
     questions: ["有品牌规范吗（禁用色 / logo 规则）？没有就写「无」", "需要多语言版本吗？有发布限制吗？"],
   },
   {
-    // 第 11 步同样不进 1–9 必答：它管"好不好看"，写分镜时可以还没定，
+    // 第 11 步不进必答：它管"好不好看"，写分镜时可以还没定，
     // 但请用户验收前必须齐（request_review 会拦）——验收标准没定，看片就是白看。
+    core: false,
     no: 11,
     title: "观感与规格",
     required: [
@@ -417,8 +453,9 @@ export const BRIEF_STEPS: BriefStep[] = [
     ],
   },
   {
-    // 第 10 步不进 9 步必答（briefProgress 只算 1–9，避免存量的已确认 brief 被卡住），
+    // 第 10 步不进必答（避免存量的已确认 brief 被卡住），
     // 它在 brief 确认之后单独走：先定稿件类型，再写稿、再请用户确认，然后才写分镜。
+    core: false,
     no: 10,
     title: "稿件",
     required: [["scriptType", "稿件类型（口播稿 / 屏幕文案 / 双轨 / 无稿 / 用户已给稿）"]],
@@ -429,6 +466,134 @@ export const BRIEF_STEPS: BriefStep[] = [
     ],
   },
 ];
+
+/* ─────────────────── 问诊步骤：内置 + 插件 ─────────────────── */
+
+/**
+ * 把插件给的原始 JSON 校验成 `BriefStep[]`。
+ *
+ * **编号由这里自动分配**（按数组顺序 1..n），不采信用户写的 `no`。
+ * 原因：手写编号必然出现重复（两个都写 1）或跳号（1,2,5），
+ * 而 `no` 是 `save_brief(step=N)` 与进度判定的键——重复和跳号都会让进度算错，
+ * 且错得很隐蔽（界面显示"已完成 3 步"但下一步提示是空的）。
+ * 顺序即编号，用户想调整顺序就调数组顺序。
+ */
+function normalizeSteps(raw: unknown[], label: string): { steps: BriefStep[]; issues: string[] } {
+  const issues: string[] = [];
+  const steps: BriefStep[] = [];
+
+  raw.forEach((item, i) => {
+    if (!item || typeof item !== "object" || Array.isArray(item)) {
+      issues.push(`${label}第 ${i + 1} 项不是对象，已跳过`);
+      return;
+    }
+    const o = item as Record<string, unknown>;
+    const title = typeof o.title === "string" ? o.title.trim() : "";
+    if (!title) {
+      issues.push(`${label}第 ${i + 1} 项缺 title，已跳过`);
+      return;
+    }
+
+    const required: [string, string][] = [];
+    const reqRaw = Array.isArray(o.required) ? o.required : [];
+    for (const r of reqRaw) {
+      if (!Array.isArray(r) || r.length < 2) {
+        issues.push(`「${title}」的 required 里有一项不是 [字段, 说明] 形式，已忽略`);
+        continue;
+      }
+      const key = typeof r[0] === "string" ? r[0].trim() : "";
+      if (!key) {
+        issues.push(`「${title}」的 required 里有空字段名，已忽略`);
+        continue;
+      }
+      const lb = typeof r[1] === "string" && r[1].trim() ? r[1].trim() : key;
+      required.push([key, lb]);
+    }
+
+    const questions = (Array.isArray(o.questions) ? o.questions : []).filter(
+      (q): q is string => typeof q === "string" && !!q.trim(),
+    );
+
+    steps.push({
+      no: steps.length + 1,
+      title,
+      required,
+      questions,
+      // 不写 core 就是必答；写 false 才进"确认后单独走"那批
+      core: o.core === false ? false : true,
+    });
+  });
+
+  if (!steps.length) issues.push(`${label}没有一步是合法的（每步至少要有一个 title）`);
+  return { steps, issues };
+}
+
+export type BriefStepsSource = {
+  steps: BriefStep[];
+  source: "builtin" | "plugin";
+  pluginId?: string;
+  mode?: "replace" | "append";
+  issues: string[];
+};
+
+/**
+ * 当前生效的问诊步骤（插件优先，插件坏了就回退内置）。
+ *
+ * **不做缓存**：与技能/风格一致，改完文件下一次调用就是新内容。
+ * 代价是每次要扫一遍插件目录（约 10ms 量级），所以调用方要注意
+ * **一次业务里只算一次**（`briefProgress` 就是这么做的，见其注释）。
+ */
+export function briefStepsSource(): BriefStepsSource {
+  const found = pluginBriefSteps();
+  if (!found.raw) {
+    return { steps: BUILTIN_STEPS, source: "builtin", issues: found.issues };
+  }
+
+  const label = `插件「${found.raw.pluginId}」的问诊步骤：`;
+  const parsed = normalizeSteps(found.raw.steps, label);
+  const issues = [...found.issues, ...parsed.issues];
+  if (!parsed.steps.length) {
+    return { steps: BUILTIN_STEPS, source: "builtin", issues: [...issues, "插件步骤全部不合法，已回退内置问诊"] };
+  }
+
+  if (found.raw.mode === "append") {
+    const base = BUILTIN_STEPS.length;
+    const appended = parsed.steps.map((s, i) => ({ ...s, no: base + i + 1 }));
+    return {
+      steps: [...BUILTIN_STEPS, ...appended],
+      source: "plugin",
+      pluginId: found.raw.pluginId,
+      mode: "append",
+      issues,
+    };
+  }
+
+  return {
+    steps: parsed.steps,
+    source: "plugin",
+    pluginId: found.raw.pluginId,
+    mode: "replace",
+    issues,
+  };
+}
+
+/** 当前生效的步骤（多数调用方要的就是这个） */
+export function briefSteps(): BriefStep[] {
+  return briefStepsSource().steps;
+}
+
+/**
+ * 必答主体。
+ *
+ * 以前是 `BRIEF_STEPS.filter(s => s.no <= 9)` —— 用步号硬切。
+ * 现在按 `core !== false` 判：插件定义几步就几步，哪些算"必答"由数据自己说。
+ */
+export function coreSteps(steps?: BriefStep[]): BriefStep[] {
+  return (steps ?? briefSteps()).filter((s) => s.core !== false);
+}
+
+/** 步骤数量（文案用；不要写死 9） */
+export const stepCountLabel = (steps: BriefStep[]): string => `${coreSteps(steps).length}`;
 
 /* ─────────────────── v4：四组交付 + 覆盖率闸口 ─────────────────── */
 
@@ -816,7 +981,7 @@ export function briefCoverage(brief: Brief | null, opts?: { fps?: number }): Bri
 
 /** 由 brief 重新推导设计锁（form/档位/情绪变了就重算） */
 export function recomputeDesignLock(brief: Brief): DesignLock {
-  return deriveDesignLock({
+  const lock = deriveDesignLock({
     form: brief.form,
     density: brief.density,
     motionLevel: brief.motionLevel,
@@ -825,6 +990,25 @@ export function recomputeDesignLock(brief: Brief): DesignLock {
     bgTone: brief.bgTone,
     mood: brief.mood,
   });
+
+  /*
+   * 插件补充规则（brief:derive）。
+   *
+   * 只往 `rules` 里加**说明文字**，不碰任何判定字段（maxTextElements / 白名单 / 字号）。
+   * 这条边界很重要：设计锁是验收依据，如果插件能改 maxTextElements，
+   * 那就等于第三方定义了"什么叫超标"，用户再也不知道该信谁。
+   * 想真正参与判定需要一套更谨慎的机制（带来源标记的覆盖），不在这批。
+   *
+   * 好处是插件终于能让自定义问诊字段"有用"：把 `x.competitor` 这类字段
+   * 翻译成一条验收时能看见的规则，而不是问完就躺在 brief.json 里。
+   */
+  if (!hasHook("brief:derive")) return lock;
+  const v = runHook("brief:derive", {
+    brief: frozenSnapshot(brief) as unknown as Record<string, unknown>,
+    lock: frozenSnapshot(lock) as unknown as Record<string, unknown>,
+  });
+  if (!v.lockRules.length) return lock;
+  return { ...lock, rules: [...lock.rules, ...v.lockRules] };
 }
 
 const ROOT = PROJECTS_ROOT;
@@ -847,7 +1031,9 @@ export function saveBrief(projectId: string, patch: Brief): Brief {
   const next: Brief = { ...prev };
   for (const [k, v] of Object.entries(patch)) {
     // step（单数）= 保存第几步，下沉到服务端：API 直调也能记录进度
-    if (k === "step" && typeof v === "number" && v >= 1 && v <= 9) {
+    // step 只是"打到第几步"的历史记录，不再和步数强绑：插件换一套问诊后，
+    // 旧 brief 里可能存着超出当前步数的编号，按当前步数过滤会把历史进度悄悄抹掉
+    if (k === "step" && typeof v === "number" && Number.isInteger(v) && v >= 1 && v <= 99) {
       const merged = new Set([...(next.steps ?? []), v]);
       next.steps = [...merged].sort((a, b) => a - b);
       continue;
@@ -908,13 +1094,32 @@ export function saveBrief(projectId: string, patch: Brief): Brief {
 }
 
 /** 某一步还缺哪些必填（返回给人看的 label） */
-export function stepMissingFields(stepNo: number, brief: Brief | null): string[] {
-  return stepMissingDetail(stepNo, brief).map((x) => x.label);
+export function stepMissingFields(stepNo: number, brief: Brief | null, steps?: BriefStep[]): string[] {
+  return stepMissingDetail(stepNo, brief, steps).map((x) => x.label);
 }
 
 /** 字段是否算「有了」：空数组也算没有 —— 传了 `mustInfo: []` 不该让进度条前进 */
+/**
+ * 读字段值，支持 `x.foo` 这种扩展字段路径。
+ *
+ * 为什么需要：插件定义的问诊可以问内置 45 个字段之外的东西，
+ * 那些答案落在 `brief.x` 里（见 Brief 类型的 `x` 字段）。
+ * 没有路径读取的话，`required: [["x.competitor", "竞品"]]` 永远判定为"没填"，
+ * 于是问诊会无限循环在第 1 步——这是最难自查的一类 bug（它不报错，只是问不完）。
+ */
+function readDeep(brief: Brief | null, key: string): unknown {
+  if (!brief) return undefined;
+  if (!key.includes(".")) return (brief as Record<string, unknown>)[key];
+  let cur: unknown = brief;
+  for (const seg of key.split(".")) {
+    if (cur == null || typeof cur !== "object") return undefined;
+    cur = (cur as Record<string, unknown>)[seg];
+  }
+  return cur;
+}
+
 function isFilled(brief: Brief | null, key: string): boolean {
-  const v = (brief as Record<string, unknown> | null)?.[key];
+  const v = readDeep(brief, key);
   if (v === undefined || v === null) return false;
   if (typeof v === "string") return !!v.trim();
   if (Array.isArray(v)) return v.length > 0;
@@ -923,9 +1128,16 @@ function isFilled(brief: Brief | null, key: string): boolean {
 }
 
 /** 缺哪几项，带字段名（报错要指名，不能只说"8/9"） */
-export function stepMissingDetail(stepNo: number, brief: Brief | null): { key: string; label: string }[] {
-  const step = BRIEF_STEPS.find((x) => x.no === stepNo);
-  if (!step) throw new Error(`没有第 ${stepNo} 步（1–9）`);
+export function stepMissingDetail(
+  stepNo: number,
+  brief: Brief | null,
+  steps?: BriefStep[],
+): { key: string; label: string }[] {
+  // 允许调用方传入已算好的步骤表：`briefProgress` 要遍历全部步骤，
+  // 不传的话每步都要重扫一遍插件目录（10 步 = 10 次扫描，纯浪费）
+  const all = steps ?? briefSteps();
+  const step = all.find((x) => x.no === stepNo);
+  if (!step) throw new Error(`没有第 ${stepNo} 步（现有：${all.map((s) => s.no).join("/")}）`);
   return step.required
     .filter(([key]) => !isFilled(brief, String(key)))
     .map(([key, label]) => ({ key: String(key), label: String(label) }));
@@ -951,14 +1163,34 @@ export function legacyFieldNotice(brief: Brief | null): string | null {
   );
 }
 
-/** 问诊主体只有 1–9；第 10 步（稿件）在 brief 确认之后单独走，不参与"问完没有"的判定 */
-export const CORE_STEPS = BRIEF_STEPS.filter((s) => s.no <= 9);
-
-/** 进度：按「该步必填字段是否齐」判断（steps 标记只作历史记录，不单独信任） */
-export function briefProgress(brief: Brief | null): { done: number[]; next: number | null; finished: boolean } {
-  const done = CORE_STEPS.filter((s) => stepMissingFields(s.no, brief).length === 0).map((s) => s.no);
-  const missing = CORE_STEPS.map((s) => s.no).filter((n) => !done.includes(n));
-  return { done, next: missing[0] ?? null, finished: missing.length === 0 };
+/**
+ * 进度：按「该步必填字段是否齐」判断（steps 标记只作历史记录，不单独信任）。
+ *
+ * 多返回 `total` 与 `nextTitle`，是为了让调用方（回执文案）**不必再算一次步骤表** ——
+ * 每次 `briefSteps()` 都要扫一遍插件目录，文案里写个"X/9"就多扫一次不值得。
+ */
+export function briefProgress(brief: Brief | null): {
+  done: number[];
+  next: number | null;
+  finished: boolean;
+  /** 必答步骤总数（以前写死 9） */
+  total: number;
+  /** 下一步的标题（没有下一步时不返回） */
+  nextTitle?: string;
+} {
+  // 步骤表只算一次：每调一次 briefSteps() 都要扫一遍插件目录
+  const steps = briefSteps();
+  const cores = coreSteps(steps);
+  const done = cores.filter((s) => stepMissingFields(s.no, brief, steps).length === 0).map((s) => s.no);
+  const missing = cores.map((s) => s.no).filter((n) => !done.includes(n));
+  const next = missing[0] ?? null;
+  return {
+    done,
+    next,
+    finished: missing.length === 0,
+    total: cores.length,
+    nextTitle: next === null ? undefined : steps.find((s) => s.no === next)?.title,
+  };
 }
 
 /**
@@ -971,9 +1203,10 @@ export function briefProgress(brief: Brief | null): { done: number[]; next: numb
 export function confirmGaps(
   brief: Brief | null,
 ): { stepNo: number; title: string; miss: { key: string; label: string }[] }[] {
-  return CORE_STEPS.map((s) => ({ stepNo: s.no, title: s.title, miss: stepMissingDetail(s.no, brief) })).filter(
-    (g) => g.miss.length,
-  );
+  const steps = briefSteps();
+  return coreSteps(steps)
+    .map((s) => ({ stepNo: s.no, title: s.title, miss: stepMissingDetail(s.no, brief, steps) }))
+    .filter((g) => g.miss.length);
 }
 
 /** 缺口块（save_brief 回执 / intake 总览共用一套措辞） */
@@ -1087,7 +1320,7 @@ export function confirmBrief(
       )
       .join("\n");
     throw new Error(
-      `需求还没问完（${progress.done.length}/9），还剩 ${gaps.length} 步 / ${total} 项必填：\n` +
+      `需求还没问完（${progress.done.length}/${progress.total}），还剩 ${gaps.length} 步 / ${total} 项必填：\n` +
         body +
         `\n\n字段名就是 save_brief 的参数名，一次补齐再 confirm_brief —— 反复一轮补一项只会一轮轮往下推。`,
     );
@@ -1348,8 +1581,8 @@ export function briefToText(b: Brief | null): string {
     : cov.ok && v4Ready
       ? `内容契约完整 ✅，但还不能确认——${gaps.length} 步必填项还空着（见下）`
       : progress.finished
-        ? "需求已问完 9 步 ✅（但契约还不完整，见下方）"
-        : `需求进度：${progress.done.length}/9，下一步该问第 ${progress.next} 步（${BRIEF_STEPS.find((s) => s.no === progress.next)?.title}）`;
+        ? `需求已问完 ${progress.total} 步 ✅（但契约还不完整，见下方）`
+        : `需求进度：${progress.done.length}/${progress.total}，下一步该问第 ${progress.next} 步（${progress.nextTitle ?? ""}）`;
   const lockedNote = b.confirmedAt ? `${NL}已由用户确认开工（${b.confirmedAt}）` : "";
   const covNote =
     `${NL}契约完整性：${cov.summary}` +

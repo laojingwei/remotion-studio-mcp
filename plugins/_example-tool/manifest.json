@@ -1,0 +1,10 @@
+{
+  "apiVersion": 1,
+  "id": "scene-tools",
+  "name": "场次小工具",
+  "version": "1.0.0",
+  "description": "给 agent 加两个工具：语速体检（只读）+ 批量给幕名编号（会改工程）。演示工具插件怎么写、权限怎么声明。",
+  "author": "remotion-studio 示例",
+  "provides": ["hooks"],
+  "permissions": ["project:read", "project:write"]
+}

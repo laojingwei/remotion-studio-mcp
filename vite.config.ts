@@ -11,6 +11,12 @@ export default defineConfig({
   resolve: {
     alias: {
       "@shared": path.resolve(__dirname, "shared"),
+      /*
+       * 插件 SDK 的别名。插件组件写在 `plugins/` 下，用它自己的相对路径
+       * 去 import 宿主的 `src/` 会随目录深度变化而失效，所以必须有稳定的别名。
+       * 渲染端（webpack）有一份等价的配置，见 server/render.service.ts 的 webpackOverride。
+       */
+      "@studio/sdk": path.resolve(__dirname, "src", "sdk.ts"),
     },
   },
   server: {

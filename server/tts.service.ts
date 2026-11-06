@@ -1,11 +1,12 @@
 import fs from "node:fs";
 import { spawnSync } from "node:child_process";
-import { ROOT as PROJECT_ROOT } from "./root";
 import { DATA_ROOT } from "./paths";
 import path from "node:path";
 import { assetUrlOf } from "../shared/customTemplate";
 import { escapeForTts } from "../shared/ttsText";
 import { PREVIEW_DIR, PREVIEW_REL, projectAssetDir, projectAssetRel } from "./assets.service";
+import { ffmpegPath } from "./ffmpeg";
+import { BUILTIN_TTS_PROVIDER_ID, getTtsProvider } from "./plugin/tts-providers";
 
 /**
  * 文本转语音（TTS）。
@@ -18,6 +19,15 @@ import { PREVIEW_DIR, PREVIEW_REL, projectAssetDir, projectAssetRel } from "./as
  * 配置存在 data/tts-config.json（本机，不进 git）。
  */
 export type TtsConfig = {
+  /**
+   * 用哪个 provider。
+   *  - `openai`（默认）：内置的 OpenAI 兼容实现，下面那些 endpoint/model/... 就是它的配置
+   *  - 其它：插件提供的 provider（`plugin.ts` 里 `export const ttsProviders = {...}`），
+   *    它自己的配置在 `providers[id]` 里（每家字段都不一样，宿主不猜）
+   */
+  provider: string;
+  /** 各插件 provider 的自由配置：{ "volc-tts": { appid, token } } */
+  providers: Record<string, Record<string, string>>;
   endpoint: string;
   apiKey: string;
   model: string;
@@ -32,6 +42,8 @@ export type TtsConfig = {
 };
 
 const DEFAULTS: TtsConfig = {
+  provider: BUILTIN_TTS_PROVIDER_ID,
+  providers: {},
   endpoint: "http://127.0.0.1:8091/v1/audio/speech",
   apiKey: "",
   model: "",
@@ -56,9 +68,21 @@ export function getTtsConfig(): TtsConfig {
 }
 
 export function saveTtsConfig(patch: Partial<TtsConfig>): TtsConfig {
+  const prev = getTtsConfig();
   const next: TtsConfig = {
-    ...getTtsConfig(),
+    ...prev,
     ...patch,
+    provider: String(patch.provider ?? prev.provider ?? BUILTIN_TTS_PROVIDER_ID).trim() || BUILTIN_TTS_PROVIDER_ID,
+    // 逐 provider 合并，而不是整体替换：面板一次只改一家，不该把别家的密钥清掉
+    providers: {
+      ...(prev.providers ?? {}),
+      ...Object.fromEntries(
+        Object.entries(patch.providers ?? {}).map(([id, v]) => [
+          String(id),
+          Object.fromEntries(Object.entries(v ?? {}).map(([k, x]) => [String(k), String(x ?? "")])),
+        ]),
+      ),
+    },
     format: (["mp3", "wav", "ogg"] as const).includes(patch.format as TtsConfig["format"])
       ? (patch.format as TtsConfig["format"])
       : getTtsConfig().format,
@@ -123,6 +147,15 @@ export async function synthesize(
   const language = String(opts.language ?? cfg.language ?? "Chinese").trim() || "Chinese";
   const format = (opts.format ?? cfg.format) as TtsConfig["format"];
 
+  /*
+   * 插件 provider：把"文字 → 音频"整段交给插件，宿主只管落盘与校验。
+   * 内置 openai 那条路一个字节都没动（下面是原逻辑）。
+   */
+  const providerId = String(cfg.provider ?? "").trim() || BUILTIN_TTS_PROVIDER_ID;
+  if (providerId !== BUILTIN_TTS_PROVIDER_ID) {
+    return synthesizeWithPlugin(providerId, speakText, { voice, speed, format, instruct, language, config: cfg.providers?.[providerId] ?? {}, projectId: opts.projectId });
+  }
+
   let body: Record<string, unknown>;
   if (cfg.customBody?.trim()) {
     const tpl = cfg.customBody
@@ -183,6 +216,169 @@ export async function synthesize(
 
   if (!buf.length) throw new Error("语音服务返回了空音频");
 
+  return persistAudio(buf, ext, opts);
+}
+
+/* ───────────────────── 插件 provider：适配任意厂商 ───────────────────── */
+
+/** 单次合成的超时。多数云 TTS 在 10 秒内返回，60 秒还没回来说明网络或鉴权卡住了 */
+const PLUGIN_TIMEOUT_MS = 60_000;
+/** 产物上限：20MB 足够一段 2000 字的高码率音频，超过基本是插件把 HTML 错误页当音频返回了 */
+const MAX_AUDIO_BYTES = 20 * 1024 * 1024;
+
+/**
+ * 按 magic bytes 认音频。
+ *
+ * 为什么不信 `contentType`：插件常常直接 `return { audio }` 不带类型；而厂商报错时
+ * 返回的往往是 HTML/JSON（200 但内容是 "invalid api key"）。不认一下，
+ * 这段字节会被当成音频写进工程，渲染时才在 ffmpeg 那里炸，且错误完全对不上源头。
+ */
+function sniffAudio(buf: Buffer): string | null {
+  if (buf.length < 16) return null;
+  const head = buf.subarray(0, 4).toString("latin1");
+  if (head === "RIFF" && buf.subarray(8, 12).toString("latin1") === "WAVE") return "wav";
+  if (head === "OggS") return "ogg";
+  if (head === "ID3") return "mp3";
+  if (buf[0] === 0xff && (buf[1] & 0xe0) === 0xe0) return "mp3";
+  if (buf.subarray(4, 8).toString("latin1") === "ftyp") return "m4a";
+  if (head === "ADIF") return "aac";
+  return null;
+}
+
+async function synthesizeWithPlugin(
+  providerId: string,
+  text: string,
+  req: {
+    voice: string;
+    speed: number;
+    format: string;
+    instruct?: string;
+    language?: string;
+    config: Record<string, string>;
+    projectId?: string;
+  },
+): Promise<TtsResult> {
+  const provider = await getTtsProvider(providerId);
+  if (!provider) {
+    const { providers } = await import("./plugin/tts-providers").then((m) => m.ttsProviderCatalog());
+    const ids = [`${BUILTIN_TTS_PROVIDER_ID}（内置）`, ...providers.map((p) => `${p.id}（${p.label}）`)];
+    throw new Error(
+      `没有这个语音 provider：「${providerId}」。可用：${ids.join(" / ")}。` +
+        `插件提供的 provider 写在 plugin.ts 的 ttsProviders 里（用 list_tts_providers 查详情）`,
+    );
+  }
+
+  // 必填项先查：缺 key 时让厂商返回 401，用户只会看到一句看不懂的英文
+  const missing = (provider.meta.configFields ?? [])
+    .filter((f) => f.required && !String(req.config[f.key] ?? "").trim())
+    .map((f) => f.label ?? f.key);
+  if (missing.length) {
+    throw new Error(
+      `provider「${provider.label}」还缺配置：${missing.join("、")}。` +
+        `用 set_tts_config { provider: "${provider.id}", providers: { "${provider.id}": { ... } } } 填`,
+    );
+  }
+
+  /*
+   * format 与声明对账：meta.formats 是 provider 自己声明的输出集合，全局 cfg.format
+   * 是用户上一家选的——切 provider 后带着 mp3 去问只出 wav 的插件，每次合成都会失败。
+   * 与其让作者在插件里报一句干巴巴的错，宿主先对账并给出可执行的指引。
+   */
+  const declared = provider.meta.formats ?? [];
+  const wanted = String(req.format ?? "").trim();
+  if (declared.length && wanted && !declared.includes(wanted)) {
+    throw new Error(
+      `provider「${provider.label}」只支持输出 ${declared.join("/")}，当前配置是 ${wanted}。` +
+        `在语音面板「输出格式」里改一下，或 set_tts_config { format: "${declared[0]}" }`,
+    );
+  }
+
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), PLUGIN_TIMEOUT_MS);
+  let raceTimer: ReturnType<typeof setTimeout> | undefined;
+  let out: Awaited<ReturnType<typeof provider.mod.synthesize>>;
+  try {
+    out = await Promise.race([
+      Promise.resolve(
+        provider.mod.synthesize({
+          text,
+          voice: req.voice,
+          speed: req.speed,
+          format: req.format,
+          instruct: req.instruct,
+          language: req.language,
+          config: req.config,
+          signal: ctrl.signal,
+        }),
+      ),
+      /*
+       * 第二道闸：插件没透传 signal（很常见），只有 AbortController 杀不掉它。
+       * 这里再 race 一个计时器，保证"插件永远不返回"不会把整个合成请求挂住。
+       */
+      new Promise<never>((_, reject) => {
+        raceTimer = setTimeout(() => reject(new Error(`超过 ${PLUGIN_TIMEOUT_MS / 1000} 秒没有返回`)), PLUGIN_TIMEOUT_MS + 3_000);
+      }),
+    ]);
+  } catch (err) {
+    // 不静默回退内置：悄悄换 provider 会让"配错了但出片了"变成最难查的坑
+    let msg = err instanceof Error ? err.message : String(err);
+    /*
+     * 语义翻译：插件**乖乖透传了 signal** 时超时抛的是 AbortError——不含"超时"二字，
+     * 越守规矩的插件报错越难懂。这里统一翻成人话。
+     */
+    if (err instanceof Error && err.name === "AbortError") {
+      msg = `宿主超时中断（${PLUGIN_TIMEOUT_MS / 1000} 秒没有返回）——如果插件里做了长轮询，检查 signal 是否透传给 fetch`;
+    }
+    throw new Error(`provider「${provider.label}」（插件 ${provider.pluginId}）合成失败：${msg}`);
+  } finally {
+    clearTimeout(timer);
+    if (raceTimer) clearTimeout(raceTimer);
+  }
+
+  let buf: Buffer;
+  if (out && typeof out === "object" && "file" in out && typeof out.file === "string") {
+    if (!fs.existsSync(out.file)) {
+      throw new Error(`provider「${provider.label}」返回的文件不存在：${out.file}`);
+    }
+    buf = fs.readFileSync(out.file);
+  } else if (out && typeof out === "object" && "audio" in out) {
+    const a = (out as { audio: Uint8Array | ArrayBuffer }).audio;
+    buf = Buffer.isBuffer(a) ? a : Buffer.from(a instanceof ArrayBuffer ? new Uint8Array(a) : a);
+  } else {
+    throw new Error(`provider「${provider.label}」没有返回 { audio } 或 { file }`);
+  }
+
+  if (!buf.length) throw new Error(`provider「${provider.label}」返回了空音频`);
+  if (buf.length > MAX_AUDIO_BYTES) {
+    throw new Error(
+      `provider「${provider.label}」返回了 ${(buf.length / 1024 / 1024).toFixed(1)}MB 音频，超过 ${MAX_AUDIO_BYTES / 1024 / 1024}MB 上限`,
+    );
+  }
+
+  let ext = sniffAudio(buf);
+  if (!ext) {
+    /*
+     * magic bytes 没认出来。契约里的 contentType 此前宿主完全不消费——插件认真声明了
+     * "audio/mpeg" 却还是被判"不是音频"。折中：插件**显式**声明了 audio/* 且是常见容器时
+     * 信它一次（厂商报错页不会带 audio/* 的 contentType，原来防的误判仍在）。
+     */
+    const ct = (out as { contentType?: string }).contentType?.toLowerCase() ?? "";
+    const byCt: Record<string, string> = { "audio/wav": "wav", "audio/x-wav": "wav", "audio/mpeg": "mp3", "audio/mp3": "mp3", "audio/ogg": "ogg", "audio/mp4": "m4a", "audio/aac": "aac", "audio/flac": "flac" };
+    if (ct.startsWith("audio/") && byCt[ct]) {
+      ext = byCt[ct];
+    } else {
+      throw new Error(
+        `provider「${provider.label}」返回的不是音频（前 64 字节：${JSON.stringify(buf.subarray(0, 64).toString("utf8").slice(0, 80))}）。` +
+          `多半是接口返回了错误页，检查它的鉴权与参数；如果确实是冷门音频容器，在返回值里带上 contentType: "audio/..."`,
+      );
+    }
+  }
+
+  return persistAudio(buf, ext, { projectId: req.projectId });
+}
+
+/** 音频落盘 + 响度归一，返回站内地址。内置与插件两条路共用 */
+function persistAudio(buf: Buffer, ext: string, opts: { projectId?: string }): TtsResult {
   const file = `tts-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}.${ext}`;
   const pid = opts.projectId?.trim();
   let dir: string;
@@ -202,23 +398,6 @@ export async function synthesize(
 
 /* ───────────────────────── 响度归一（E1） ───────────────────────── */
 
-/** ffmpeg 位置：环境变量 > Remotion 自带 > PATH */
-function ffmpegBin(): string {
-  const env = (process.env.FFMPEG_PATH ?? "").trim();
-  if (env && fs.existsSync(env)) return env;
-  if (process.platform === "win32") {
-    const bundled = path.join(
-      PROJECT_ROOT,
-      "node_modules",
-      "@remotion",
-      "compositor-win32-x64-msvc",
-      "ffmpeg.exe",
-    );
-    if (fs.existsSync(bundled)) return bundled;
-  }
-  return "ffmpeg"; // 交给 PATH；找不到就跳过归一
-}
-
 /**
  * TTS 出来的旁白普遍 -25 ~ -27 LUFS、峰值 -8dBFS，配平时一抬就到峰值墙，
  * 用户第一反应永远是「声音太小」（复盘问题 16）。
@@ -230,10 +409,12 @@ function ffmpegBin(): string {
  */
 export function normalizeLoudness(file: string): boolean {
   if ((process.env.TTS_NORMALIZE ?? "").trim() === "0") return false;
+  const bin = ffmpegPath();
+  if (!bin) return false; // 没有 ffmpeg 就跳过，不是错误
   const tmp = `${file}.norm${path.extname(file)}`;
   try {
     const r = spawnSync(
-      ffmpegBin(),
+      bin,
       [
         "-y",
         "-hide_banner",

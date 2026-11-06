@@ -21,6 +21,7 @@ import { LogDrawer } from "./panels/LogDrawer";
 import { RenderDialog, type RenderFormat, type RenderQuality } from "./panels/RenderDialog";
 import { TtsDialog } from "./panels/TtsDialog";
 import { WorkspaceDialog } from "./panels/WorkspaceDialog";
+import { PluginsDialog } from "./panels/PluginsDialog";
 
 type RenderState = {
   id: string;
@@ -76,6 +77,21 @@ function IconSidebar({ side }: { side: "left" | "right" }) {
     <svg width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden>
       <rect x="1.6" y="2.6" width="12.8" height="10.8" rx="2.2" stroke="currentColor" strokeWidth="1.2" />
       <path d={`M${x} 2.9V13.1`} stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
+    </svg>
+  );
+}
+
+/** 顶栏「插件」按钮的图标：一块拼图 */
+function IconPlug() {
+  return (
+    <svg width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden>
+      <path
+        d="M6.2 2.2h3.6v1.6a1.3 1.3 0 1 0 2.6 0V2.2h1.4v3.4h1.6a1.3 1.3 0 1 1 0 2.6h-1.6v3.4H10.4V13a1.3 1.3 0 1 1-2.6 0v-1.4H4.4V8.2H2.8a1.3 1.3 0 1 1 0-2.6h1.6V2.2Z"
+        stroke="currentColor"
+        strokeWidth="1.15"
+        strokeLinejoin="round"
+        transform="translate(-1.2 0.6) scale(0.92)"
+      />
     </svg>
   );
 }
@@ -315,6 +331,7 @@ export default function App() {
   /** 浮框的重拉信号：抽完帧、渲染完就 +1 */
   const [outputsRefresh, setOutputsRefresh] = useState(0);
   const [workspaceOpen, setWorkspaceOpen] = useState(false);
+  const [pluginsOpen, setPluginsOpen] = useState(false);
   const [ttsOpen, setTtsOpen] = useState(false);
   const [showTpls, setShowTpls] = useState(false);
   const [formatMenu, setFormatMenu] = useState(false);
@@ -1137,6 +1154,16 @@ export default function App() {
           {agentActive ? "agent 正在编辑" : "agent 可连接"}
         </span>
 
+        {/* 插件入口单独放在顶栏：藏在「⋯」里等于没有（实际就有用户找不到） */}
+        <button
+          className="ghost plugin-entry"
+          onClick={() => setPluginsOpen(true)}
+          title="插件：安装 / 停用 / 卸载"
+        >
+          <IconPlug />
+          <span>插件</span>
+        </button>
+
         {/* 低频操作收进一个「⋯」菜单，顶栏只留折叠开关 + 渲染 */}
         <div className="topbar-more" ref={moreRef}>
           <button
@@ -1150,6 +1177,17 @@ export default function App() {
           </button>
           {moreOpen ? (
             <div className="menu topbar-more-menu" role="menu">
+              <button
+                className="menu-item"
+                role="menuitem"
+                onClick={() => {
+                  setMoreOpen(false);
+                  setPluginsOpen(true);
+                }}
+              >
+                <span>插件</span>
+                <span className="menu-meta">安装 / 停用</span>
+              </button>
               <button
                 className="menu-item"
                 role="menuitem"
@@ -1227,7 +1265,7 @@ export default function App() {
                 }}
               >
                 <span>语音</span>
-                <span className="menu-meta">本地 TTS</span>
+                <span className="menu-meta">语音合成 · 厂商可切换</span>
               </button>
             </div>
           ) : null}
@@ -1501,6 +1539,7 @@ export default function App() {
       <OutputsDialog open={outputsDialogOpen} onClose={() => setOutputsDialogOpen(false)} />
       <LogDrawer open={logOpen} onClose={() => setLogOpen(false)} />
       <WorkspaceDialog open={workspaceOpen} onClose={() => setWorkspaceOpen(false)} />
+      <PluginsDialog open={pluginsOpen} onClose={() => setPluginsOpen(false)} />
       <TtsDialog open={ttsOpen} onClose={() => setTtsOpen(false)} />
       <RenderDialog
         open={renderOpen}

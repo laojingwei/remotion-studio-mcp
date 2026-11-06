@@ -2,12 +2,57 @@ import { serve } from "@hono/node-server";
 import { getConnInfo } from "@hono/node-server/conninfo";
 import { serveStatic } from "@hono/node-server/serve-static";
 import { cleanupLegacyBundles } from "./bundle-cache";
-import { serveFiles } from "./static.service";
+import { mimeOf, serveFiles } from "./static.service";
+import { getPluginConfig, savePluginConfig } from "./plugin-config.service";
 import { Hono, type Context } from "hono";
 import { streamSSE } from "hono/streaming";
 import fs from "node:fs";
 import path from "node:path";
 import { metaList } from "../shared/sceneMetas";
+import { ensurePluginScenes, pluginSceneTypes } from "./plugin/scene-meta";
+import {
+  ensurePluginEntryFresh,
+  syncPluginElements,
+  syncPluginGraphPresets,
+  syncPluginLooks,
+  syncPluginPasses,
+  syncPluginTransitions,
+  syncPluginTemplates,
+  syncPluginWorldSkies,
+} from "./plugin/content-sync";
+import { ensurePluginHooks } from "./plugin/hooks";
+import { ensurePluginTools } from "./plugin/plugin-tools";
+import {
+  PROJECT_PLUGIN_DIR,
+  PLUGIN_TRASH_DIR,
+  cancelJob,
+  cleanupPluginStaging,
+  detectSourceKind,
+  ensureTtsProviders,
+  getJob,
+  guessTargetName,
+  listJobs,
+  hasExampleEntry,
+  hookKindsOf,
+  pluginRoots,
+  pluginToolNamesOf,
+  readPackageJson,
+  removePlugin,
+  scanOrphanDirs,
+  removeOrphanDir,
+  resolvePluginEntry,
+  scanPlugins,
+  setPluginEnabled,
+  seedExamplePluginsDisabled,
+  startInstall,
+  startRepair,
+  ttsProviderCatalog,
+  declaresCodeEntry,
+  getRegistry,
+  setRegistry,
+  REGISTRY_PRESETS,
+  DEFAULT_REGISTRY,
+} from "./plugin";
 import type { Op } from "../shared/ops";
 import { createSeedProject } from "../shared/ops";
 import type { Project } from "../shared/schema";
@@ -29,6 +74,7 @@ import {
   removeProjectAssets,
   writeProjectAsset,
 } from "./assets.service";
+import { ingestAsset, reprocessProjectAssets } from "./asset-pipeline.service";
 import {
   RESOURCE_CATEGORIES,
   browseCategory,
@@ -49,6 +95,7 @@ import {
 } from "./annotation.service";
 import { readToolCalls, toolStats } from "./tool-log.service";
 import { getTtsConfig, saveTtsConfig, synthesize } from "./tts.service";
+import { BUILTIN_TTS_PROVIDER_ID, getTtsProvider } from "./plugin/tts-providers";
 import { z } from "zod";
 import { zodToJsonSchema } from "zod-to-json-schema";
 import { TOOLS, CORE_TOOL_NAMES, exposeAllTools, validateToolArgs } from "./mcp-tools";
@@ -125,6 +172,112 @@ const HOST = process.env.HOST?.trim() || "127.0.0.1";
 const ALLOW_LAN = !["127.0.0.1", "localhost", "::1"].includes(HOST.toLowerCase());
 
 const app = new Hono();
+
+/** 插件问题只报一次，避免每个请求刷屏 */
+let ensuredOnce = false;
+/** 已上报过的 content-sync issue：改坏 → 修好 → 再改坏，每一轮**新增**都要能看见 */
+let reportedContentIssues = new Set<string>();
+let hooksReported = false;
+let toolsReported = false;
+
+/**
+ * 插件场景同步：**每个请求进来先做一次**。
+ *
+ * 为什么放在全局中间件而不是逐个端点加：用到场景表的地方远比想象中多——
+ * `/api/scene-types`（选择器）、`/api/projects/:id/ops`（add_scene 要 `getMeta`）、
+ * 渲染前校验、密度审计……漏一处的表现是「选择器里有、加进来报未知类型」，
+ * 而且只在装了插件时复现。放这里只需要想一次。
+ *
+ * 成本可控：`ensurePluginScenes` 带指纹缓存，插件没变时只是十几次 stat。
+ * 插件算崩了也不该挡住请求，所以吞掉异常、只在日志里留痕。
+ */
+app.use("*", async (_c, next) => {
+  try {
+    const res = ensurePluginScenes();
+    /*
+     * 内容型贡献项（3D 天空配方 / 整片模板）也在这里同步一次。
+     * 它们和场景一样"改了要立刻生效"，但判据不同：场景看 scenes/*.json，
+     * 内容看各自的 JSON 文件——所以 content-sync 自己算指纹，没变时只是几个 stat。
+     */
+    const sky = syncPluginWorldSkies();
+    const tpl = syncPluginTemplates();
+    const els = syncPluginElements();
+    const looks = syncPluginLooks();
+    const passes = syncPluginPasses();
+    const trans = syncPluginTransitions();
+    const gpreset = syncPluginGraphPresets();
+    /*
+     * 元素/场景要落到 `src/_plugins.generated.ts` 才能被编辑器看见（web 是独立 bundle）。
+     * 这一步保证了"装完插件打开面板就有"，而不是"等下次渲染才生效"。
+     */
+    const entry = ensurePluginEntryFresh();
+    const contentIssues = [
+      ...sky.issues,
+      ...tpl.issues,
+      ...els.issues,
+      ...looks.issues,
+      ...passes.issues,
+      ...trans.issues,
+      ...gpreset.issues,
+      ...entry.issues,
+    ];
+    /*
+     * 按 diff 上报：以前是"整个进程只报一次"——作者修好再改坏，第二轮的新 issue
+     * 永远沉默，表现就是"天空/元素突然消失，日志一个字没有"。现在只报没报过的新条目。
+     */
+    const fresh = contentIssues.filter((i) => !reportedContentIssues.has(i));
+    if (fresh.length) {
+      for (const i of fresh) {
+        reportedContentIssues.add(i);
+        console.warn(`[plugin] ${i}`);
+      }
+    }
+    if (res.issues.length && !ensuredOnce) {
+      // 只在第一次报，避免每个请求刷屏
+      ensuredOnce = true;
+      for (const i of res.issues) console.warn(`[plugin] ${i}`);
+    }
+  } catch (err) {
+    console.warn("[plugin] 场景同步失败（不影响请求）：", err);
+  }
+  await next();
+});
+
+/**
+ * 插件钩子加载：跟场景同步同一个位置、同一个理由。
+ *
+ * 钩子的调用点（自检 / 写工程 / 设计锁）全是同步函数，等不了异步加载，
+ * 所以必须在请求进来之前就把插件 import 完。放在这里而不是启动时一次，
+ * 是因为改了 `plugin.ts` 也要能立刻生效——指纹变了就重新 import。
+ *
+ * `ensurePluginHooks` 自己带 fingerprint 与 in-flight 去重，并发请求不会重复加载；
+ * 插件加载失败只记错误、不挡请求（一个坏插件不该让编辑器打不开）。
+ */
+app.use("*", async (_c, next) => {
+  try {
+    const st = await ensurePluginHooks();
+    if (st.errors.length && !hooksReported) {
+      hooksReported = true;
+      for (const e of st.errors) console.warn(`[plugin] ${e.pluginId}：${e.message}`);
+    }
+  } catch (err) {
+    console.warn("[plugin] 钩子加载失败（不影响请求）：", err);
+  }
+  /*
+   * 插件工具与钩子读同一个入口文件，放在同一处加载。
+   * 分开加载不会出错（共享 esbuild 产物缓存），只是分开写两段 init 更容易漏掉一处。
+   */
+  try {
+    const ts = await ensurePluginTools();
+    if (ts.errors.length && !toolsReported) {
+      toolsReported = true;
+      for (const e of ts.errors) console.warn(`[plugin] ${e.pluginId}：${e.message}`);
+    }
+  } catch (err) {
+    console.warn("[plugin] 工具加载失败（不影响请求）：", err);
+  }
+  await next();
+});
 
 /**
  * 写请求的安全闸：Host 必须是本机名（防 DNS rebinding），Origin 若存在也必须是本机。
@@ -221,7 +374,14 @@ app.get("/api/health", (c) => {
 /* ────────────────────────────── 场景能力 ────────────────────────────── */
 
 /** agent 的第一步：发现有哪些场景类型、每个字段是什么 */
-app.get("/api/scene-types", (c) => c.json({ types: metaList() }));
+/**
+ * 场景类型清单（编辑器选择器 + 属性面板用）。
+ *
+ * 插件场景已由上面的全局中间件同步过，这里直接用即可。
+ */
+app.get("/api/scene-types", (c) =>
+  c.json({ types: metaList(), pluginSceneCount: pluginSceneTypes().length }),
+);
 
 /* ────────────────────────────── 工程 ────────────────────────────── */
 
@@ -239,6 +399,22 @@ app.get("/api/orphans", (c) => {
 /* ───────────── 文本转语音（TTS） ───────────── */
 
 app.get("/api/tts/config", (c) => c.json({ config: getTtsConfig() }));
+
+/**
+ * 可用的语音 provider：内置 openai + 插件贡献的。
+ *
+ * 返回 `configFields` 是为了让面板/工具能**按各家自己的字段**渲染表单——
+ * 每家鉴权方式都不一样，宿主猜不出来，只能由插件声明。
+ */
+app.get("/api/tts/providers", async (c) => {
+  try {
+    const { ttsProviderCatalog } = await import("./plugin/tts-providers");
+    const cat = await ttsProviderCatalog();
+    return c.json({ builtin: "openai", ...cat });
+  } catch (err) {
+    return fail(c, err);
+  }
+});
 
 app.post("/api/tts/config", async (c) => {
   try {
@@ -271,6 +447,43 @@ app.post("/api/tts/synthesize", async (c) => {
 app.get("/api/tts/speakers", async (c) => {
   try {
     const cfg = getTtsConfig();
+    /*
+     * 音色表按来源分流：插件来源取插件**声明的** voices（静态数据，不碰厂商、不探活），
+     * 面板只做映射——和 formats 同一个原则。?provider= 显式指定（面板切来源时用），
+     * 不传则跟随当前配置的来源。
+     */
+    const providerId =
+      String(c.req.query("provider") ?? "").trim() ||
+      String(cfg.provider ?? "").trim() ||
+      BUILTIN_TTS_PROVIDER_ID;
+    const plugin = providerId !== BUILTIN_TTS_PROVIDER_ID ? await getTtsProvider(providerId).catch(() => undefined) : undefined;
+    if (plugin) {
+      if (typeof plugin.mod.voices !== "function") {
+        return c.json({ error: `插件 provider「${providerId}」没有声明音色列表（voices）` }, 400);
+      }
+      /*
+       * voices 契约允许 async（插件在 voices 里 fetch 厂商接口很常见）——
+       * 没有护栏的话它挂死，挂死的是整个 /api/tts/speakers。check 15s、synthesize 60s
+       * 都有兜底，voices 也得有；抛错带上插件名，报错才有归属。
+       */
+      let raceTimer: ReturnType<typeof setTimeout> | undefined;
+      try {
+        const voices = await Promise.race([
+          Promise.resolve(plugin.mod.voices(cfg.providers?.[providerId] ?? {})),
+          new Promise<never>((_, rej) => {
+            raceTimer = setTimeout(() => rej(new Error(`voices 超过 15 秒没有返回（插件「${plugin.pluginId}」）`)), 15_000);
+          }),
+        ]);
+        return c.json({
+          speakers: Object.fromEntries((voices ?? []).map((v) => [v.id, v.label ?? v.language ?? ""])),
+        });
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        return c.json({ error: `读取插件「${plugin.pluginId}」的音色列表失败：${msg}` }, 400);
+      } finally {
+        if (raceTimer) clearTimeout(raceTimer);
+      }
+    }
     const openai = /\/v1\/audio\/speech\/?$/.test(cfg.endpoint);
     const base = cfg.endpoint
       .replace(/\/v1\/audio\/speech\/?$/, "")
@@ -307,49 +520,118 @@ app.post("/api/tts/test", async (c) => {
  * ① 连通性（HEAD 源站）——快，能把「服务没启动」和「配置写错」区分开；
  * ② deep=true 时再真合成一句极短文本，验证 key/model/voice/format 全对。
  * 预检产物是垃圾文件，合成完立刻删。
+ *
+ * 注意①只对**内置** provider 有意义：endpoint 是内置实现的字段，插件 provider 自己
+ * 直连厂商（可能根本没有 endpoint）。以前这里不分情况一律拿 endpoint 探测，插件
+ * provider 明明可用、只要本地那个服务没起，预检就报「连不上」——然后人跑去查本机端口。
  */
+/** 插件自检（check）的超时：探测要便宜，给不到合成那么长的预算 */
+const PLUGIN_CHECK_TIMEOUT_MS = 15_000;
+
 app.post("/api/tts/check", async (c) => {
   const body = (await c.req.json().catch(() => ({}))) as { deep?: boolean };
   const cfg = getTtsConfig();
-  if (!cfg.endpoint) {
+  const providerId = String(cfg.provider ?? "").trim() || BUILTIN_TTS_PROVIDER_ID;
+  const byPlugin = providerId !== BUILTIN_TTS_PROVIDER_ID;
+
+  if (!byPlugin && !cfg.endpoint) {
     return c.json({ ok: false, stage: "config", error: "还没配置语音服务地址（工具 set_tts_config 或编辑器「语音」→ 配置）" }, 400);
   }
 
-  let origin: string;
-  try {
-    origin = new URL(cfg.endpoint).origin;
-  } catch {
-    return c.json({ ok: false, stage: "config", error: `语音服务地址不是合法 URL：${cfg.endpoint}` }, 400);
-  }
+  // 只有内置 provider 才有这两项；插件 provider 直连厂商，宿主不知道也不该假装知道
+  let origin = "";
+  let reachMs = 0;
 
-  const t0 = Date.now();
-  let reachStatus = 0;
-  try {
-    const res = await fetch(origin, { method: "HEAD", redirect: "manual", signal: AbortSignal.timeout(3000) });
-    reachStatus = res.status;
-  } catch (err: any) {
-    const code = err?.cause?.code ?? err?.code ?? "";
-    const why =
-      err?.name === "TimeoutError" || code === "UND_ERR_CONNECT_TIMEOUT"
-        ? "3 秒无响应"
-        : code === "ECONNREFUSED"
-          ? "连接被拒绝（端口没在监听）"
-          : code === "ENOTFOUND"
-            ? "域名解析失败"
-            : (err?.message ?? "连接失败");
-    return c.json({ ok: false, stage: "reach", origin, ms: Date.now() - t0, error: `${origin} 连不上：${why}` }, 400);
-  }
-  const reachMs = Date.now() - t0;
+  if (byPlugin) {
+    /*
+     * 插件 provider 的浅层探测：插件自己提供了 check 方法就直接跑它——
+     * 这回答的才是 agent 真正要的"现在能不能用"（key 有效/余额够），
+     * 而不是"用的哪家"。check 是插件声明的廉价探测（如 2 字最小合成），
+     * 同样套超时兜底；没提供 check 的才退回"只报名字 + 建议 deep"。
+     */
+    const provider = await getTtsProvider(providerId).catch(() => undefined);
+    if (provider?.mod.check) {
+      const t0 = Date.now();
+      const ctrl = new AbortController();
+      const timer = setTimeout(() => ctrl.abort(), PLUGIN_CHECK_TIMEOUT_MS);
+      try {
+        const r = await Promise.race([
+          Promise.resolve(
+            provider.mod.check({ config: cfg.providers?.[providerId] ?? {}, signal: ctrl.signal }),
+          ),
+          new Promise<never>((_, rej) =>
+            setTimeout(() => rej(new Error(`插件自检超过 ${PLUGIN_CHECK_TIMEOUT_MS / 1000} 秒没返回`)), PLUGIN_CHECK_TIMEOUT_MS + 3_000),
+          ),
+        ]);
+        const out = (r ?? {}) as { ok?: boolean; detail?: string; error?: string };
+        if (out.ok === false) {
+          return c.json(
+            { ok: false, stage: "check", provider: providerId, ms: Date.now() - t0, error: out.error ?? "插件自检未通过" },
+            400,
+          );
+        }
+        return c.json({
+          ok: true,
+          stage: "provider",
+          provider: providerId,
+          ms: Date.now() - t0,
+          detail: `插件自检通过${out.detail ? `：${out.detail}` : ""}`,
+        });
+      } catch (err) {
+        return c.json(
+          { ok: false, stage: "check", provider: providerId, ms: Date.now() - t0, error: (err as Error).message },
+          400,
+        );
+      } finally {
+        clearTimeout(timer);
+      }
+    }
+    if (!body?.deep) {
+      return c.json({
+        ok: true,
+        stage: "provider",
+        provider: providerId,
+        detail:
+          `当前用的是插件 provider「${providerId}」，它直连厂商、不走本机地址探测。` +
+          `它没提供自检方法（check），要确认整条链路就加 deep=true 真合成一句（会真的调一次厂商接口）。`,
+      });
+    }
+  } else {
+    try {
+      origin = new URL(cfg.endpoint).origin;
+    } catch {
+      return c.json({ ok: false, stage: "config", error: `语音服务地址不是合法 URL：${cfg.endpoint}` }, 400);
+    }
 
-  if (!body?.deep) {
-    return c.json({
-      ok: true,
-      stage: "reach",
-      origin,
-      reachMs,
-      status: reachStatus,
-      detail: `服务可达（HEAD ${reachStatus}）。这只证明「有东西在监听」，配置是否正确要加 deep=true 才知道`,
-    });
+    const t0 = Date.now();
+    let reachStatus = 0;
+    try {
+      const res = await fetch(origin, { method: "HEAD", redirect: "manual", signal: AbortSignal.timeout(3000) });
+      reachStatus = res.status;
+    } catch (err: any) {
+      const code = err?.cause?.code ?? err?.code ?? "";
+      const why =
+        err?.name === "TimeoutError" || code === "UND_ERR_CONNECT_TIMEOUT"
+          ? "3 秒无响应"
+          : code === "ECONNREFUSED"
+            ? "连接被拒绝（端口没在监听）"
+            : code === "ENOTFOUND"
+              ? "域名解析失败"
+              : (err?.message ?? "连接失败");
+      return c.json({ ok: false, stage: "reach", origin, ms: Date.now() - t0, error: `${origin} 连不上：${why}` }, 400);
+    }
+    reachMs = Date.now() - t0;
+
+    if (!body?.deep) {
+      return c.json({
+        ok: true,
+        stage: "reach",
+        origin,
+        reachMs,
+        status: reachStatus,
+        detail: `服务可达（HEAD ${reachStatus}）。这只证明「有东西在监听」，配置是否正确要加 deep=true 才知道`,
+      });
+    }
   }
 
   const t1 = Date.now();
@@ -364,6 +646,7 @@ app.post("/api/tts/check", async (c) => {
     return c.json({
       ok: true,
       stage: "deep",
+      provider: providerId,
       origin,
       reachMs,
       synthMs: Date.now() - t1,
@@ -374,7 +657,7 @@ app.post("/api/tts/check", async (c) => {
     });
   } catch (err) {
     return c.json(
-      { ok: false, stage: "synth", origin, reachMs, ms: Date.now() - t1, error: (err as Error).message },
+      { ok: false, stage: "synth", provider: providerId, origin, reachMs, ms: Date.now() - t1, error: (err as Error).message },
       400,
     );
   }
@@ -1042,6 +1325,292 @@ app.post("/api/workspace/reset", async (c) => {
   }
 });
 
+/* ─────────────────────────── 插件管理 ───────────────────────────
+ *
+ * 为什么插件要有 HTTP 接口，而不是"自己把文件夹拷进 plugins/"：
+ * 一个真实插件是「clone → npm install → npm run build」三步，把这三步留给用户，
+ * 等于把装插件变成开发者专属操作。这里收敛成一个动作，前端只负责显示进度。
+ *
+ * 唯一的红线：**只有显式点「安装 / 重建」才会起子进程**。扫描目录时永远不执行任何东西。
+ */
+
+/** 插件清单（编辑器插件面板用）：在 scanPlugins 的结果上补"为什么不能跑" */
+app.get("/api/plugins", async (c) => {
+  try {
+    /*
+     * 面板要说的是"**它真的做了什么**"，不是"它的清单声称做什么"。
+     *
+     * 这六个示例插件里有一半只有 `plugin.ts.example` 模板（还没改名成 plugin.ts），
+     * 清单里却写着 provides:["hooks"]。只读清单的话，界面上它们和真生效的插件长得一模一样——
+     * 用户会以为已经生效，出了问题时永远查不到"其实一个钩子都没注册"。
+     * 所以这里等一次钩子加载（幂等且便宜），把**实际注册到的钩子**一并返回。
+     */
+    await ensurePluginHooks().catch(() => {
+      /* 加载失败会体现在 hookStatus().errors 里，不影响列表本身 */
+    });
+    /*
+     * 钩子不是代码插件唯一的生效渠道：工具（tool_search/tool_call）与语音 provider
+     * 走各自的注册表。面板要判断"它到底生效没有"就得拿到**全部渠道的实际状态**——
+     * 否则一个只导出 ttsProviders 的插件会被误判成"未生效"。
+     * 两个 ensure 都幂等且便宜（指纹没变只是 stat）。
+     */
+    await ensurePluginTools().catch(() => {});
+    await ensureTtsProviders().catch(() => {});
+    const ttsByPlugin = new Set((await ttsProviderCatalog().catch(() => ({ providers: [] as { pluginId: string }[] }))).providers.map((x) => x.pluginId));
+    const plugins = scanPlugins().map((p) => {
+      const entry = resolvePluginEntry(p.dir);
+      const pkg = readPackageJson(p.dir);
+      const depCount =
+        Object.keys(pkg?.dependencies ?? {}).length + Object.keys(pkg?.devDependencies ?? {}).length;
+      return {
+        ...p,
+        entry,
+        hasPackage: !!pkg,
+        /*
+         * 只有「声明了代码入口但产物不在」才算"未构建"。
+         * 纯内容插件（只有 skills/styles，没有 package.json）也会返回 unbuilt ——
+         * 那是正常形态，不是错误，界面上不能给它挂个⚠。
+         */
+        needsBuild: entry.kind === "unbuilt" && !!pkg && declaresCodeEntry(pkg),
+        buildScript: typeof pkg?.scripts?.build === "string" ? pkg.scripts.build : null,
+        depCount,
+        // 有依赖或 build 脚本才值得提供"重建"按钮
+        canRepair: !!pkg?.scripts?.build || depCount > 0,
+        /** 实际注册到的钩子（不是清单声明的） */
+        hooks: hookKindsOf(p.id),
+        /** 实际注册到的插件工具名（tool_search 能搜到的；没有就空数组） */
+        tools: pluginToolNamesOf(p.id),
+        /** 是否注册了语音 provider（tts_synthesize / tts_narration 走它） */
+        tts: ttsByPlugin.has(p.id),
+        /**
+         * 目录里只有 `plugin.ts.example` 这种模板 —— 示例插件的"未启用"形态，
+         * 不是错误，但必须让用户看见"它现在什么都没干"。
+         */
+        templateOnly: hasExampleEntry(p.dir),
+        /**
+         * 有没有自带界面（`plugins/<名>/ui/index.html`）。
+         *
+         * 每次都扫一遍而不是缓存：装完插件刷新面板就要看得见，
+         * 而一次 existsSync 的代价可以忽略。
+         */
+        hasUi: fs.existsSync(path.join(p.dir, "ui", "index.html")),
+      };
+    });
+    return c.json({ plugins, roots: pluginRoots(), trashDir: PLUGIN_TRASH_DIR, orphans: scanOrphanDirs() });
+  } catch (err) {
+    return fail(c, err);
+  }
+});
+
+/* ─────────────────── 插件自制界面：静态服务 + 配置存储 ─────────────────── */
+
+/**
+ * `plugins/<名>/ui/` 当静态目录服务。
+ *
+ * ## 为什么是 iframe + 静态文件，而不是把 React 组件打进编辑器
+ *
+ * 编辑器吃的是预构建产物 `dist/web`，只有 `npm run build` 才更新。插件 UI 若走
+ * 静态 import，用户装完插件在编辑器里**什么也看不到**，还得会跑 vite build——这对插件
+ * 生态是硬伤。静态文件则由本服务直接读盘，改完刷新即生效。
+ *
+ * 附带好处：插件可以用任意技术栈（甚至不用框架）、自带依赖、样式互不污染、
+ * 没有 React 版本冲突。
+ *
+ * ## 安全边界
+ *
+ * 只映射到该插件的 `ui` 目录，`..` 与解码后的穿越一律拒。同源 iframe 理论上能碰父窗口，
+ * 但插件本来就能在服务端跑任意代码——这不是新增的攻击面，文档里写明"插件 UI 视为可信代码"。
+ */
+app.use("/plugin-ui/:id/*", async (c) => {
+  const id = c.req.param("id");
+  const plugin = scanPlugins().find((p) => p.id === id);
+  if (!plugin) return c.notFound();
+
+  const uiDir = path.resolve(plugin.dir, "ui");
+  if (!fs.existsSync(uiDir)) return c.notFound();
+
+  const prefix = `/plugin-ui/${id}`;
+  let rel = c.req.path.slice(prefix.length) || "/";
+  try {
+    rel = decodeURIComponent(rel);
+  } catch {
+    return c.notFound();
+  }
+  if (rel.endsWith("/")) rel += "index.html";
+  // 先按段判穿越再 resolve：两道都要，`%2e%2e` 解码后才现形
+  if (rel.split("/").includes("..")) return c.notFound();
+
+  const full = path.resolve(uiDir, `.${rel.startsWith("/") ? rel : `/${rel}`}`);
+  if (full !== uiDir && !full.startsWith(uiDir + path.sep)) return c.notFound();
+
+  let stat: fs.Stats;
+  try {
+    stat = fs.statSync(full);
+  } catch {
+    return c.notFound();
+  }
+  if (!stat.isFile()) return c.notFound();
+
+  /*
+   * 不缓存：插件作者改完页面一刷新就要看到效果。
+   * 这类文件都很小，省这点带宽不值当"改了没反应"的困惑。
+   */
+  return c.body(fs.readFileSync(full), 200, {
+    "content-type": mimeOf(full),
+    "cache-control": "no-store",
+  });
+});
+
+/** 读某个插件的配置（插件页面自己 fetch，宿主不代理） */
+app.get("/api/plugin-config/:id", (c) => {
+  const id = c.req.param("id");
+  return c.json({ config: getPluginConfig(id) });
+});
+
+/** 写某个插件的配置：一层合并，返回合并后的完整配置 */
+app.put("/api/plugin-config/:id", async (c) => {
+  try {
+    const body = await c.req.json().catch(() => null);
+    const res = savePluginConfig(c.req.param("id"), body);
+    if (!res.ok) return c.json({ error: res.error }, 400);
+    return c.json({ config: res.config });
+  } catch (err) {
+    return fail(c, err);
+  }
+});
+
+/**
+ * 安装设置：目前只有 npm 源。
+ *
+ * 默认给国内镜像，因为插件安装动辄几十个包，连官方源基本等于默认失败；
+ * 需要官方源或私有 registry 的，在这里改一次即可（对所有后续安装生效）。
+ */
+app.get("/api/plugins/settings", (c) =>
+  c.json({ registry: getRegistry(), presets: REGISTRY_PRESETS, defaultRegistry: DEFAULT_REGISTRY }),
+);
+
+app.put("/api/plugins/settings", async (c) => {
+  try {
+    const body = (await c.req.json().catch(() => ({}))) as { registry?: string };
+    return c.json({ registry: setRegistry(String(body.registry ?? "")) });
+  } catch (err) {
+    return fail(c, err);
+  }
+});
+
+/**
+ * 来源预检：用户一边输入一边告诉他会装成什么。
+ * 不下载、不执行，只做字符串判定 + 目录占用检查。
+ */
+app.get("/api/plugins/detect", (c) => {
+  const source = String(c.req.query("source") ?? "");
+  if (!source.trim()) return c.json({ kind: null, reason: "还没有输入" });
+  const kind = detectSourceKind(source);
+  if (!kind) {
+    return c.json({
+      kind: null,
+      reason: "认不出这个来源：需要 git 地址（https://… 或 用户/仓库）、npm 包名（@scope/名字），或一个已存在的本地目录",
+    });
+  }
+  const name = guessTargetName(kind, source);
+  const dir = path.join(PROJECT_PLUGIN_DIR, name);
+  return c.json({ kind, name, dir, exists: fs.existsSync(dir) });
+});
+
+/** 安装：git / npm / 本地目录 → 装依赖 → 构建 → 校验。返回 job，前端轮询进度 */
+app.post("/api/plugins/install", async (c) => {
+  try {
+    const body = (await c.req.json().catch(() => ({}))) as {
+      source?: string;
+      name?: string;
+      registry?: string;
+      force?: boolean;
+    };
+    const job = startInstall({
+      source: String(body.source ?? ""),
+      name: body.name || undefined,
+      registry: body.registry || undefined,
+      force: !!body.force,
+    });
+    return c.json({ job });
+  } catch (err) {
+    return fail(c, err);
+  }
+});
+
+/** 最近的任务（含已完成）：面板重新打开时能接上正在跑的那个 */
+app.get("/api/plugins/jobs", (c) => c.json({ jobs: listJobs() }));
+
+app.get("/api/plugins/jobs/:id", (c) => {
+  const job = getJob(c.req.param("id"));
+  if (!job) return c.json({ error: "没有这个安装任务（服务重启过？）" }, 404);
+  return c.json({ job });
+});
+
+app.post("/api/plugins/jobs/:id/cancel", (c) => {
+  const ok = cancelJob(c.req.param("id"));
+  return ok ? c.json({ ok }) : c.json({ error: "这个任务已经结束了，取消不了" }, 400);
+});
+
+/** 原地重建：作者更新了源码、或当初是手动拷进来还没构建 */
+app.post("/api/plugins/:id/repair", (c) => {
+  try {
+    return c.json({ job: startRepair(c.req.param("id")) });
+  } catch (err) {
+    return fail(c, err);
+  }
+});
+
+/** 启用 / 停用（文件不动） */
+app.post("/api/plugins/:id/toggle", async (c) => {
+  try {
+    const body = (await c.req.json().catch(() => ({}))) as { enabled?: boolean };
+    const id = c.req.param("id");
+    const target = scanPlugins().find((p) => p.id === id);
+    if (!target) return c.json({ error: `没有 id 为「${id}」的插件` }, 404);
+    setPluginEnabled(id, !!body.enabled);
+    // 回读确认：只回"已设置"会在 data/ 只读时给出与事实相反的答复
+    const after = scanPlugins().find((p) => p.id === id);
+    const actual = after?.enabled ?? false;
+    if (actual !== !!body.enabled) {
+      return c.json({ error: `设置没生效（期望 ${!!body.enabled}，实际 ${actual}）。检查 data/plugins.json 是否可写` }, 500);
+    }
+    return c.json({ ok: true, enabled: actual });
+  } catch (err) {
+    return fail(c, err);
+  }
+});
+
+/**
+ * 删除"未识别的目录"：装错了、装坏了留下的残骸。
+ *
+ * 必须排在 `/:id/remove` **前面**，否则 `/api/plugins/orphans/remove` 会被当成
+ * id 为 "orphans" 的插件去卸载。
+ */
+app.post("/api/plugins/orphans/remove", async (c) => {
+  try {
+    const body = (await c.req.json().catch(() => ({}))) as { dir?: string };
+    if (!body.dir) return c.json({ error: "缺少 dir" }, 400);
+    return c.json(removeOrphanDir(String(body.dir)));
+  } catch (err) {
+    return fail(c, err);
+  }
+});
+
+/**
+ * 卸载插件。默认挪到 data/.plugin-trash/（可恢复）；
+ * body 带 { purge: true } 时彻底删除——这个分支只服务于前端确认框里
+ * 用户显式选了「永久删除」，平时不要主动传它。
+ */
+app.post("/api/plugins/:id/remove", async (c) => {
+  try {
+    const body = (await c.req.json().catch(() => ({}))) as { purge?: boolean };
+    return c.json(removePlugin(c.req.param("id"), { purge: body.purge === true }));
+  } catch (err) {
+    return fail(c, err);
+  }
+});
+
 /**
  * 渲染产物：列表 / 锁定 / 按选择删除。
  * `projectId` 只返回那个工程的产物（编辑器顶栏浮框用）——不传是全库（清理弹窗用）。
@@ -1314,9 +1883,43 @@ app.post("/api/projects/:id/assets", async (c) => {
 
     const ext = path.extname(file.name || "").toLowerCase() || ".bin";
     const name = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}${ext}`;
-    const url = writeProjectAsset(id, name, buffer);
 
-    return c.json({ url, name: file.name, size: buffer.length });
+    /*
+     * 走处理管道而不是直接落盘：插件可以在素材入库前改它（压缩、剥元数据、
+     * 转格式、加响度）。没装插件时这个调用只是一次数组判断 + 一次 writeFileSync，
+     * 和原来的 `writeProjectAsset` 开销一样。
+     */
+    const r = await ingestAsset(id, name, buffer);
+
+    return c.json({
+      url: r.url,
+      // `name` 保持原语义（用户选的那个文件名），前端/agent 一直在用它
+      name: file.name,
+      size: r.bytes,
+      // 处理过才带这几个字段：没装插件时回执保持和以前一模一样
+      ...(r.processed
+        ? { fileName: r.name, processed: true, processorNote: r.note, processorWarnings: r.warnings }
+        : {}),
+    });
+  } catch (err) {
+    return fail(c, err);
+  }
+});
+
+/**
+ * 把已装的文件处理插件套到**已有素材**上。
+ *
+ * 为什么需要独立端点：插件的自动处理只对**新上传**生效。用户装完插件，
+ * 工程里那几十张图不会自己变，这个入口就是补这件事。
+ *
+ * `dryRun` 默认 true —— 给用户先看一眼会产出什么，再决定写不写。
+ */
+app.post("/api/projects/:id/assets/reprocess", async (c) => {
+  try {
+    const id = c.req.param("id");
+    const body = (await c.req.json().catch(() => ({}))) as { names?: string[]; dryRun?: boolean };
+    const r = await reprocessProjectAssets(id, { onlyNames: body.names, dryRun: body.dryRun !== false });
+    return c.json(r);
   } catch (err) {
     return fail(c, err);
   }
@@ -1741,8 +2344,9 @@ app.post("/api/projects/:id/stills", async (c) => {
       purpose?: "cover";
     };
     const project = projects.get(c.req.param("id"));
-    const stills = await renderStills(project, body.frame, body.formats, body.tag, body.purpose);
-    return c.json({ stills });
+    const { stills, warnings } = await renderStills(project, body.frame, body.formats, body.tag, body.purpose);
+    // warnings 是"某个插件后期 pass 编不过、已跳过"这类话。不返回的话画面会少一层效果而没人知道原因
+    return c.json({ stills, ...(warnings.length ? { warnings } : {}) });
   } catch (err) {
     return fail(c, err);
   }
@@ -1937,6 +2541,38 @@ try {
   warnStaleWebBuild();
 } catch {
   /* 提醒失败不影响启动 */
+}
+
+/*
+ * 启动时预热插件钩子（不阻塞监听）。
+ *
+ * 不做的话，第一个请求要等 esbuild 打包插件（实测 240ms 左右），
+ * 用户看到的是"刚打开编辑器那一下特别慢"。放到这里，这几十上百毫秒
+ * 混在启动过程里，谁也感觉不到。失败也不影响启动——请求中间件还会再试。
+ */
+/*
+ * 全新环境（data/plugins.json 还不存在）时，把仓库自带的 _example-* 示例
+ * 预先停用——否则示例技能/风格/场景/审计会混进真实项目。一次性动作：
+ * 用户表达过任何意愿（文件存在）之后就不再介入。
+ */
+try {
+  const seeded = seedExamplePluginsDisabled();
+  if (seeded.length) console.log(`  ▸ 已停用 ${seeded.length} 个示例插件（面板里可一键启用）`);
+} catch {
+  /* 种子失败不影响启动：最坏情况只是示例多启用一次 */
+}
+void ensurePluginHooks().catch(() => {
+  /* 中间件里有正式的日志与兜底 */
+});
+void ensurePluginTools().catch(() => {
+  /* 同上 */
+});
+// 上次崩溃/断电可能留下半装完的插件暂存目录（plugins/.staging/*），启动清一次
+try {
+  const cleaned = cleanupPluginStaging();
+  if (cleaned.length) console.log(`  ▸ 已清理插件暂存目录 ${cleaned.length} 个`);
+} catch {
+  /* 清理失败不影响启动 */
 }
 
 const httpServer = serve({ fetch: app.fetch, port: PORT, hostname: HOST }, (info) => {

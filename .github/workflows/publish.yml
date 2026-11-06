@@ -14,6 +14,11 @@ permissions:
   contents: read
   id-token: write          # 换 OIDC 令牌就靠它，缺了 --provenance 必失败
 
+# 同一 tag 重跑 / 连推时不并发：两个 publish 抢同一个版本号只会让日志更乱
+concurrency:
+  group: publish-${{ github.ref }}
+  cancel-in-progress: false
+
 jobs:
   publish:
     runs-on: ubuntu-latest
@@ -77,9 +82,18 @@ jobs:
           node scripts/ensure-dirs.mjs
           npm run test:core
 
-      # 发布的是源码（package.json 的 files 已限定范围），不需要 build
+      # 插件子系统（钩子 / 工具 / TTS / 场景注册 / 冲突语义）单独跑一次：
+      # test:core 不含它，而 workflow_dispatch 手动发版时可能没跑过 ci.yml——
+      # 2026-11-06 那批插件修复就是靠这 150+ 项断言守住回归的。
+      - name: 插件内核测试
+        run: npx tsx scripts/test-plugins.mts
+
+      # 发布的是源码（package.json 的 files 已限定范围），不需要 build。
+      # 但**必须断言包内容**：files 白名单漏了 docs/ 或示例，装完就用不了。
+      # 曾经这里只 `npm pack --dry-run | tail -12` 打印，2026-11-06 那次发版
+      # 就这样把 docs/PLUGIN-GUIDE.md 和 8 个示例插件漏在了包外而流程全绿。
       - name: 确认包内容
-        run: npm pack --dry-run 2>&1 | tail -12
+        run: npm run check:package
 
       # 顺带抓住「进了暂存区」这个隐蔽状态：npm 在「只允许 staged」的 trust 下
       # 也会返回 0，包却只进了待批准队列。只有真的出现 staged，才说明没发出去。

@@ -1,34 +1,86 @@
 import fs from "node:fs";
 import { ROOT as PROJECT_ROOT } from "./root";
 import path from "node:path";
+import { pluginFiles } from "./plugin";
 
 /**
  * 技能/指南：放在 `server/skills/*.md`，通过 MCP 工具 `get_guide` 按需读取。
  *
  * 为什么不是常驻在工具描述里：agent 每次会话都带着几十条工具描述已经够重了，
  * 指南只在真要干活时读一次，还能只读某一节。
+ *
+ * ## 插件能往这里加东西（2026-11-05）
+ *
+ * `plugins/<任意名>/skills/*.md` 与本目录平权，**同名时内置优先**。
+ * 内置优先不是为了限制插件，是因为内置技能被 `start_guide` 的流程引用
+ * （"先读 manual"/"读 delivery"），被插件顶掉会让整条引导断线。
+ * 插件要新增能力就往新名字写，别覆盖内置的。
  */
 export const SKILL_DIR = path.join(PROJECT_ROOT, "server", "skills");
 
-export type SkillInfo = { name: string; title: string; chars: number };
+export type SkillInfo = {
+  name: string;
+  title: string;
+  chars: number;
+  /** 来源：内置 / 插件（`list_guides` 会显示，让人能确认自己的插件生效了） */
+  source: "builtin" | "plugin";
+};
 
 const NAME_RE = /^[a-z0-9-]+$/;
 
+type SkillSource = { name: string; file: string; source: "builtin" | "plugin" };
+
+/**
+ * 全部技能文件（内置 + 插件），**每次现算**。
+ *
+ * 不做缓存是刻意的：插件的卖点是"放进去就生效"，一旦缓存就变成
+ * "放进去没反应，重启一下试试"——那和没有插件机制没区别。
+ */
+function skillSources(): SkillSource[] {
+  const builtin: SkillSource[] = [];
+  if (fs.existsSync(SKILL_DIR)) {
+    for (const f of fs.readdirSync(SKILL_DIR)) {
+      if (!f.endsWith(".md")) continue;
+      builtin.push({ name: f.replace(/\.md$/, ""), file: path.join(SKILL_DIR, f), source: "builtin" });
+    }
+  }
+
+  const taken = new Set(builtin.map((s) => s.name));
+  const fromPlugins: SkillSource[] = [];
+  for (const { file } of pluginFiles("skill", ".md")) {
+    const name = path.basename(file, ".md");
+    // 同名插件技能让位给内置（见文件头注释）
+    if (taken.has(name)) continue;
+    taken.add(name);
+    fromPlugins.push({ name, file, source: "plugin" });
+  }
+
+  return [...builtin, ...fromPlugins];
+}
+
+/** 技能名 → 文件路径；不存在返回 null（`readSkill` 用它区分"没这篇"和"读不出来"） */
+function skillFileOf(name: string): string | null {
+  return skillSources().find((s) => s.name === name)?.file ?? null;
+}
+
 export function listSkills(): SkillInfo[] {
-  if (!fs.existsSync(SKILL_DIR)) return [];
-  return fs
-    .readdirSync(SKILL_DIR)
-    .filter((f) => f.endsWith(".md"))
-    .map((f) => {
-      const file = path.join(SKILL_DIR, f);
-      const text = fs.readFileSync(file, "utf8");
-      const first = text.split("\n").find((l) => l.startsWith("# ")) ?? f;
+  return skillSources()
+    .map((s) => {
+      let text = "";
+      try {
+        text = fs.readFileSync(s.file, "utf8");
+      } catch {
+        return null;
+      }
+      const first = text.split("\n").find((l) => l.startsWith("# ")) ?? s.name;
       return {
-        name: f.replace(/\.md$/, ""),
+        name: s.name,
         title: first.replace(/^#\s*/, ""),
         chars: text.length,
+        source: s.source,
       };
     })
+    .filter((x): x is SkillInfo => !!x)
     .sort((a, b) => a.name.localeCompare(b.name));
 }
 
@@ -117,8 +169,8 @@ export function resolveSkillName(input: string): { name?: string; hint?: string 
 export function readSkill(name: string, section?: string): string {
   const skills = listSkills();
   const resolved = resolveSkillName(name);
-  const file = resolved.name ? path.join(SKILL_DIR, `${resolved.name}.md`) : "";
-  if (!resolved.name || !fs.existsSync(file)) {
+  const file = resolved.name ? skillFileOf(resolved.name) : null;
+  if (!resolved.name || !file) {
     const list = skills.map((s) => `${s.name}（${s.title}）`).join("、");
     throw new Error(
       `没有技能「${name}」。` +

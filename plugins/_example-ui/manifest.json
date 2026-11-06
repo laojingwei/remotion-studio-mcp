@@ -1,0 +1,8 @@
+{
+  "id": "example-ui",
+  "name": "示例：自带界面",
+  "version": "1.0.0",
+  "apiVersion": 1,
+  "description": "演示插件怎么提供自己的配置界面：读写自己的配置、调用宿主 API、跟随宿主配色",
+  "provides": []
+}

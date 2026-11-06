@@ -1,7 +1,7 @@
 import React, { useMemo, useRef, useState } from "react";
 import {
-  ELEMENT_LIBRARY,
-  LIBRARY_CATS,
+  allLibraryCats,
+  allLibraryItems,
   elementFromLibrary,
   type ElementCategory,
   type LibraryItem,
@@ -113,9 +113,13 @@ export const ElementLibrary: React.FC = () => {
   const fileRef = useRef<HTMLInputElement>(null);
   const projFileRef = useRef<HTMLInputElement>(null);
 
+  /*
+   * 用全集而不是内置常量：插件贡献的元素在 `_plugins.generated.ts` 里注册，
+   * 这里读的是同一份注册表——所以"插件加了图标，面板里就有"不需要额外接口。
+   */
   const items = useMemo(
     () =>
-      ELEMENT_LIBRARY.filter(
+      allLibraryItems().filter(
         (it) =>
           (cat === "全部" || it.cat === cat) &&
           (!q.trim() || it.name.includes(q.trim()) || it.id.includes(q.trim().toLowerCase())),
@@ -284,7 +288,7 @@ export const ElementLibrary: React.FC = () => {
         <span>元素素材</span>
         <span className="hint">
           {source === "builtin"
-            ? ELEMENT_LIBRARY.length
+            ? allLibraryItems().length
             : source === "project"
               ? projItems.length
               : myItems.length}{" "}
@@ -341,7 +345,7 @@ export const ElementLibrary: React.FC = () => {
       {source === "builtin" ? (
         <>
           <div className="lib-cats">
-            {(["全部", ...LIBRARY_CATS] as const).map((c) => (
+            {(["全部", ...allLibraryCats()] as any[]).map((c) => (
               <button
                 key={c}
                 className={`lib-cat ${cat === c ? "is-active" : ""}`}

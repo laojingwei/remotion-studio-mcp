@@ -1,0 +1,230 @@
+/**
+ * 插件清单的文本输出（`list_plugins` 的返回值）。
+ *
+ * 为什么要单独一个文件：这句话是**这个子系统唯一的自解释入口**。
+ * 用户装完插件第一件事是看这里；agent 想知道有什么能力也是看这里。
+ * 它需要说清三件事——有什么、在哪、怎么加——所以不适合塞进 mcp-tools 的
+ * 一个内联模板字符串里（那里已经 5800 行了）。
+ */
+
+import { IMPLEMENTED_PROVIDES, PROVIDE_LABEL, PLUGIN_API_VERSION } from "./manifest";
+import { PROJECT_PLUGIN_DIR, pluginRoots, scanPlugins, type DiscoveredPlugin } from "./discovery";
+import path from "node:path";
+import { describePermissions } from "./permissions";
+import { resolvePluginEntry } from "./entry";
+import { HOOK_KINDS, HOOK_LABEL, hasExampleEntry, hookKindsOf, hookStatus } from "./hooks";
+import { pluginToolStatus } from "./plugin-tools";
+import { pluginToolNamesOf } from "./tool-registry";
+import {
+  syncPluginWorldSkies,
+  syncPluginTemplates,
+  syncPluginElements,
+  syncPluginLooks,
+  syncPluginPasses,
+  syncPluginTransitions,
+  syncPluginGraphPresets,
+} from "./content-sync";
+
+const NL = String.fromCharCode(10);
+
+/** 目录存在性：不存在时提示"目录还没建"比直接消失更有用 */
+function rootLines(): string[] {
+  return pluginRoots().map(
+    (r) => `  ${PROJECT_PLUGIN_DIR}${r.exists ? "" : "（目录不存在，放插件时会自动建）"}`,
+  );
+}
+
+function pluginBlock(p: DiscoveredPlugin): string[] {
+  const out: string[] = [];
+  const flags: string[] = [];
+  if (!p.enabled) flags.push("已停用");
+  if (p.errors.length) flags.push("加载失败");
+  const badge = flags.length ? `  [${flags.join(" / ")}]` : "";
+
+  out.push(`■ ${p.id}  ${p.name}  v${p.version}${badge}`);
+  out.push(`   路径：${p.pathLabel}`);
+
+  /*
+   * 入口形态只有代码插件才有。内容插件（技能/风格/场景）没有入口，
+   * 给它们显示"入口不可用"是纯粹的误导。
+   *
+   * 这一行存在的理由：工程化以后「为什么没生效」的原因变多了——
+   * 可能是没构建、可能是 exports 指错了、可能是装了依赖但没装全。
+   * 不把入口状态摆在这里，用户只能靠猜。
+   */
+  const entry = p.provides.includes("hooks") ? resolvePluginEntry(p.dir) : null;
+  if (entry) {
+    const rel = (f: string) => path.relative(p.dir, f).split(path.sep).join("/");
+    if (entry.kind === "module") {
+      out.push(`   入口：${rel(entry.file!)}（工程模式 · Node 直接加载，可用自己的 dependencies）`);
+    } else if (entry.kind === "script") {
+      out.push(`   入口：${rel(entry.file!)}（单文件 · 宿主编译）`);
+    } else if (hasExampleEntry(p.dir)) {
+      // 示例还没启用：中性陈述，不是警告
+      out.push(`   入口：（示例未启用 —— 把 plugin.ts.example 改名成 plugin.ts 即可）`);
+    } else if (p.enabled) {
+      out.push(`   入口：⚠ 不可用 —— ${entry.detail}`);
+      if (entry.hint) out.push(`         ${entry.hint}`);
+    }
+  }
+
+  if (p.provides.length) {
+    const items = p.provides.map((k) => {
+      const label = PROVIDE_LABEL[k] ?? k;
+      // 声明了但这一版还没接消费方 —— 必须标出来，否则用户会以为放进去就该生效
+      return IMPLEMENTED_PROVIDES.includes(k) ? label : `${label}（本版本未接入，暂不生效）`;
+    });
+    out.push(`   提供：${items.join("、")}`);
+  } else {
+    out.push("   提供：（空——目录里没有可识别的文件，检查是不是放错了层级）");
+  }
+
+  // 只有代码插件才会声明权限；L0 插件这里会显示"不需要任何权限"
+  const perms = p.manifest?.permissions ?? [];
+  /*
+   * 这里曾经还有一段「声明了但这一版没有 API」的提示。白名单缩到只有能执法的两条之后
+   * 它永久不会命中——留着就是一段死分支，删掉。未知权限仍会在 parseManifest 里被忽略并警告，
+   * 那条路才是作者写错名字时真正会走到的。
+   */
+  out.push(`   权限：${describePermissions(perms)}`);
+
+  const toolNames = pluginToolNamesOf(p.id);
+  if (toolNames.length) {
+    out.push(`   工具：${toolNames.join("、")}（${toolNames.length} 个，tool_search 能搜到）`);
+  }
+
+  /*
+   * 钩子插件单独说一句它挂了哪几个钩子。
+   * 光写"提供：流程钩子"等于没说——用户要知道它到底在哪个环节说话，
+   * 否则「装了但没感觉」会被当成插件坏了（实际是它只做写入复盘，
+   * 而用户一直在看自检结果）。
+   */
+  if (p.provides.includes("hooks")) {
+    const st = hookStatus();
+    const mine = st.errors.filter((e) => e.pluginId === p.id);
+    const mineWarn = st.warnings.filter((e) => e.pluginId === p.id);
+    const kinds = hookKindsOf(p.id);
+    if (kinds.length) {
+      out.push(`   钩子：${kinds.map((k) => HOOK_LABEL[k] ?? k).join("、")}`);
+    } else if (p.enabled && !p.errors.length && !mine.length && !hasExampleEntry(p.dir)) {
+      // 示例未启用时上面已经说过了，这里再说一遍只是噪音。
+      // 注意措辞：代码插件可以只提供工具/语音/文件处理（不经过钩子总线），这不是错误
+      out.push(
+        `   钩子：（没挂任何钩子——只提供工具/语音/文件处理的代码插件属正常；想要钩子就看 export default 里有没有 ${HOOK_KINDS.join(" / ")}）`,
+      );
+    }
+    /*
+     * 入口不可用时上面已经把那句话说清楚了（`hooks.ts` 也会把同一条塞进 errors），
+     * 这里再打一遍就是同一句话出现两次——用户会以为是两个不同的问题。
+     */
+    if (entry?.kind !== "unbuilt") for (const e of mine) out.push(`   ✗ ${e.message}`);
+    // 性能类提示单独一档（⏱）：不是错误，别和 ✗ 混在一起
+    for (const w of mineWarn) out.push(`   ⏱ ${w.message}`);
+  }
+
+  for (const w of p.warnings) out.push(`   ⚠ ${w}`);
+  for (const e of p.errors) out.push(`   ✗ ${e}`);
+  return out;
+}
+
+const HOW_TO = [
+  "## 怎么加一个插件",
+  "在 plugins/ 下建一个文件夹（名字随意，中文也行），按你要加的东西放文件——**不需要写任何配置**：",
+  "  skills/*.md          技能指南      → list_guides / get_guide 能读到",
+  "  styles/*.md          风格规则      → list_styles 可见、get_style 可读、apply_style 可套",
+  "  styles/presets.json  风格预设      → apply_style 一键落色板/字体/转场",
+  "  brief/steps.json     问诊步骤      → intake / save_brief 按你的步骤走（可替换或追加）",
+  "  templates/*.json     整片模板      → 模板市场里多一套（create_from_template 可套）",
+  "  scene3d/skies.json   3D 天空配方   → list_world_skies 多几条，set_graph_scene 能套",
+  "  elements/*.json      元素素材      → 元素面板里多几个图标/标签（分类可自定义）",
+  "  scene3d/looks.json   3D 光线风格   → 3D 场景的 look 下拉里多几套（灯位/色温/辉光）",
+  "  scene3d/presets.json 3D 图形配方   → list_graph_presets 多几套起手图，set_graph_scene 一套换上",
+  "  scene3d/passes.json  3D 后期效果   → list_plugin_passes 多几个（受控 GLSL），写进 post.passes 才上镜",
+  "  transitions/<id>.ts  插件转场     → set_transitions 能选；只写一个方向，出场自动反向",
+  "  plugin.ts 的 ttsProviders → 语音 provider（适配任意厂商，list_tts_providers 查）",
+  "  ui/index.html        自带界面      → 「插件」对话框里多一个「打开界面」，页面里可调 /api/* 与 /api/plugin-config/<id>",
+  "  scenes/<type>.json + <type>.tsx  场景组件 → 选择器里多一种画面（改了要重新打包）",
+  "  plugin.ts            钩子/工具/处理器 → 说意见、改字、清洗素材，或加一个 MCP 工具",
+  "  package.json + dist/ 完整工程        → 同上，但可以带自己的 dependencies / 构建脚本 / 原生模块",
+  "     · ops:before       写入前把关：返回 blocking 就整批拒掉（工程不动）",
+  "     · text:transform   字幕/稿件写进工程前改字（术语表、品牌名、口头禅）",
+  "     · media:process    新上传的图/音/视频先过一遍（压缩、剥元数据、统一响度）",
+  "放好就生效，不用重启。技能/风格/问诊/3D 天空/整片模板/3D 图形配方/3D 后期/转场/钩子/文本/文件处理改完立刻生效；场景组件要等一次自动重新打包（几十秒，编辑器画布还要等一次前端构建）。",
+  "文件处理只对**新上传**生效；要补已有的素材用 reprocess_assets（默认只预览）。",
+  "需要更细的控制（版本、作者、权限）时再加 manifest.json；规则与示例见 plugins/README.md。",
+  "内容类贡献项与代码能力已全部接通（含转场与 3D 图形配方）；格式与校验规则见 docs/PLUGIN-GUIDE.md。",
+].join(NL);
+
+/** 一个插件都没有时的引导（首次使用最可能看到的就是这个） */
+const EMPTY_HINT = [
+  "插件目录里还是空的。",
+  "",
+  "最省事的开始方式：建 plugins/我的风格/styles/neo-noir.md，写一段风格描述（参考",
+  "server/styles/_template.md），保存——它就会出现在 list_styles 里。",
+  "想先看个完整例子：把 plugins/_example-content 整个拷一份改名即可。",
+].join(NL);
+
+export function pluginsToText(): string {
+  const all = scanPlugins();
+  const ok = all.filter((p) => p.enabled && !p.errors.length);
+  const off = all.filter((p) => !p.enabled && !p.errors.length);
+  const bad = all.filter((p) => p.errors.length);
+
+  const hs = hookStatus();
+  const ts = pluginToolStatus();
+  const head = [
+    `插件（启用 ${ok.length} / 停用 ${off.length}${bad.length ? ` / 失败 ${bad.length}` : ""}）· 插件 API v${PLUGIN_API_VERSION}`,
+    ...(hs.active ? [`钩子：${hs.count} 条已挂上（${hs.plugins.join("、")}）`] : []),
+    ...(ts.active ? [`插件工具：${ts.count} 个（${ts.plugins.join("、")}）`] : []),
+    "扫描目录：",
+    ...rootLines(),
+  ].join(NL);
+
+  if (!all.length) return [head, "", EMPTY_HINT, "", HOW_TO].join(NL);
+
+  const sections: string[] = [head];
+
+  if (ok.length) sections.push(["", "## 已启用", ...ok.flatMap(pluginBlock)].join(NL));
+  if (off.length) {
+    sections.push(
+      ["", "## 已停用（数据还在，只是不生效）", ...off.flatMap(pluginBlock)].join(NL),
+    );
+  }
+  if (bad.length) {
+    sections.push(
+      [
+        "",
+        "## 加载失败（服务没坏，只是这些插件没进来）",
+        ...bad.flatMap(pluginBlock),
+        "修好后不用重启，再调一次 list_plugins 就会重新扫描。",
+      ].join(NL),
+    );
+  }
+
+  /*
+   * 内容同步问题单独成节：元素/模板/looks/skies/passes/转场/graph 配方的校验失败
+   * 不进插件自身的 errors（清单层是好的，是内容文件坏了）——不摆在这里，
+   * 作者看到的就是"提供：元素库"但元素面板里什么都没有，无从定位。
+   */
+  const contentIssues = [
+    ...syncPluginWorldSkies().issues,
+    ...syncPluginTemplates().issues,
+    ...syncPluginElements().issues,
+    ...syncPluginLooks().issues,
+    ...syncPluginPasses().issues,
+    ...syncPluginTransitions().issues,
+    ...syncPluginGraphPresets().issues,
+  ];
+  if (contentIssues.length) {
+    sections.push(
+      [
+        "",
+        "## 内容问题（这些文件存在，但没注册上——修好后不用重启）",
+        ...contentIssues.map((i) => `✗ ${i}`),
+      ].join(NL),
+    );
+  }
+
+  sections.push("", HOW_TO);
+  return sections.join(NL);
+}

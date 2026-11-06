@@ -1,0 +1,117 @@
+/**
+ * 示例插件：素材清洗（图片限宽 + 去元数据 / 音频统一响度）
+ *
+ * 启用方式：把这个文件改名成 `plugin.ts`（同目录）。改完立刻生效，不用重启。
+ *
+ * 这套东西的价值不在技术难度，在于**规则因团队而异**：
+ * 「我们的图最大 1920 宽」「所有旁白都要 -16 LUFS」是每个团队自己的口径，
+ * 不该硬编码在宿主里。
+ *
+ * ## 为什么用 ffmpeg 而不是纯 JS
+ *
+ * 宿主的 `ctx.ffmpeg` 指向 Remotion 自带那份（装了 Remotion 就一定在），
+ * 所以不需要用户再装什么。纯 JS 做图片缩放要引 sharp/jimp，那是给宿主加依赖；
+ * 交给插件 + 现成的 ffmpeg，宿主的依赖表一个都不动。
+ *
+ * ## 三条刻意的克制（比"能做什么"更重要）
+ *
+ * 1. **太小的文件不动。** 一张 80KB 的图重编码后可能更大，画质还降了。
+ *    处理不等于"无脑跑一遍"，每个处理器都该有自己的门槛。
+ * 2. **PNG 不动。** ffmpeg 重编码 PNG 会丢透明通道、体积也没优势。
+ *    只处理 jpg/jpeg/webp，输出统一 .jpg。
+ * 3. **ffmpeg 不在就返回 null。** 不是报错——"这台机器没有处理能力"是正常情况，
+ *    素材照原样入库才是对的。
+ */
+
+import fs from "node:fs";
+import path from "node:path";
+import { spawnSync } from "node:child_process";
+
+/** 小于这个体积不值得重编码（重编码有损，收益却是负的） */
+const MIN_IMAGE_BYTES = 200 * 1024;
+/** 图片最长边上限 */
+const MAX_EDGE = 1920;
+
+const IMAGE_EXT = new Set([".jpg", ".jpeg", ".webp"]);
+const AUDIO_EXT = new Set([".wav", ".mp3", ".m4a", ".aac"]);
+
+/** 跑一条 ffmpeg 命令，成功返回 true。失败一律不抛（让素材照原样入库） */
+function ffmpeg(bin: string, args: string[]): boolean {
+  const r = spawnSync(bin, ["-y", "-hide_banner", "-loglevel", "error", ...args], {
+    timeout: 50_000,
+    windowsHide: true,
+  });
+  return r.status === 0;
+}
+
+export default {
+  "media:process": async (ctx: {
+    file: string;
+    buffer: Buffer;
+    fileName: string;
+    kind: string;
+    tmpDir: string;
+    ffmpeg: string | null;
+    log: (m: string) => void;
+  }) => {
+    // 没有 ffmpeg：这台机器做不了，原样放行（不是错误）
+    if (!ctx.ffmpeg) return null;
+
+    const ext = path.extname(ctx.fileName).toLowerCase();
+
+    /* ── 图片：限最长边 + 重编码（顺带丢掉 EXIF，含拍摄地点这类隐私信息）── */
+    if (ctx.kind === "image") {
+      if (!IMAGE_EXT.has(ext)) return null;
+      if (ctx.buffer.length < MIN_IMAGE_BYTES) return null;
+
+      const out = path.join(ctx.tmpDir, "out.jpg");
+      const ok = ffmpeg(ctx.ffmpeg, [
+        "-i",
+        ctx.file,
+        // -2 保证高度是偶数（JPEG 编码器要求），等比缩放不拉伸
+        "-vf",
+        `scale='min(${MAX_EDGE},iw)':-2`,
+        "-q:v",
+        "3",
+        out,
+      ]);
+      if (!ok || !fs.existsSync(out) || !fs.statSync(out).size) return null;
+
+      const before = ctx.buffer.length;
+      const after = fs.statSync(out).size;
+      // 变大了就别换：用户要的是"更轻"，不是"被我处理过"
+      if (after >= before) {
+        ctx.log(`跳过：重编码后更大（${before} → ${after}）`);
+        return null;
+      }
+      return { file: out, fileName: "clean.jpg", note: `限宽 ${MAX_EDGE}、去元数据` };
+    }
+
+    /* ── 音频：统一到 -16 LUFS（和宿主 TTS 的口径一致，配乐才不会被压）── */
+    if (ctx.kind === "audio") {
+      if (!AUDIO_EXT.has(ext)) return null;
+
+      const out = path.join(ctx.tmpDir, `out${ext}`);
+      const ok = ffmpeg(ctx.ffmpeg, [
+        "-i",
+        ctx.file,
+        "-af",
+        "loudnorm=I=-16:TP=-1.5:LRA=11",
+        "-ar",
+        "48000",
+        out,
+      ]);
+      if (!ok || !fs.existsSync(out) || !fs.statSync(out).size) return null;
+
+      return {
+        // 扩展名跟着原文件走：把 wav 换成 mp3 会让工程里的引用语义变味
+        file: out,
+        fileName: `norm${ext}`,
+        note: "响度拉到 -16 LUFS",
+      };
+    }
+
+    // 视频不动：转码是分钟级的，不该出现在上传的同步等待里。要做请走自己的工具
+    return null;
+  },
+};
