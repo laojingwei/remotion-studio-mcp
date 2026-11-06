@@ -6,7 +6,7 @@ import { AbsoluteFill, useCurrentFrame, useVideoConfig } from "remotion";
 import type { Theme } from "../../../shared/schema";
 import { useSceneLayout } from "../../layout/useSceneLayout";
 import { Editable } from "../ui";
-import { installBloom } from "./bloom";
+import { installBloom, postExtrasOf } from "./bloom";
 import { studioEnvironment, useWorldTexture } from "./env";
 import { WorldLayer, fogRange, resolveWorld } from "./World";
 import { DslScene, applyBloomMultiplier, dslCamera, dslAutoDistance } from "./DslScene";
@@ -1369,7 +1369,7 @@ export const Scene3DScene: React.FC<Scene3DProps> = ({
         onCreated={(state) => {
           setupEnvironment(state, dslLights ? lookSpec.env * 0.55 : lookSpec.env);
           try {
-            installBloom(state, bloomOpts);
+            installBloom(state, bloomOpts, postExtrasOf(graph));
           } catch {
             setCssBloom(true);
           }

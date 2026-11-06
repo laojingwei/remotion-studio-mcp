@@ -16,7 +16,7 @@ import {
   type Scene3DLook,
   type Scene3DPreset,
 } from "../../src/scenes/scene3d/Scene3D";
-import { installBloom } from "../../src/scenes/scene3d/bloom";
+import { installBloom, postExtrasOf } from "../../src/scenes/scene3d/bloom";
 import { evalNode, nodeBaseScale } from "@shared/scene3dAnim";
 import {
   NODE_KEY_MAX,
@@ -1697,7 +1697,7 @@ const Bloom: React.FC<{ spec: LightSpec | unknown; theme: Theme; graph: Scene3DD
       graph,
     });
     try {
-      handle.current = installBloom(state, opts);
+      handle.current = installBloom(state, opts, postExtrasOf(graph));
     } catch {
       // 环境不支持半浮点渲染目标时降级为无辉光：画面仍然可用，只是不那么亮
       handle.current = null;

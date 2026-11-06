@@ -4,6 +4,8 @@ import { EffectComposer } from "three/examples/jsm/postprocessing/EffectComposer
 import { RenderPass } from "three/examples/jsm/postprocessing/RenderPass.js";
 import { UnrealBloomPass } from "three/examples/jsm/postprocessing/UnrealBloomPass.js";
 import { OutputPass } from "three/examples/jsm/postprocessing/OutputPass.js";
+import { ShaderPass } from "three/examples/jsm/postprocessing/ShaderPass.js";
+import type { Scene3DDsl } from "../../../shared/scene3dDsl";
 
 /**
  * 阈值辉光（UnrealBloomPass），走 three 自带后处理，不引第三方库。
@@ -47,9 +49,104 @@ export type BloomHandle = {
  * 装上辉光。必须在 `onCreated` 里调用（同步、早于首帧），
  * 放 `useEffect` 里会晚于 Remotion 截的第一帧 —— 这个坑和 envMap 那个是同一个。
  */
+/* ─────────────────────── 收尾效果（vignette / chroma / grain） ─────────────────────── */
+
+const FULLSCREEN_VERT = `
+varying vec2 vUv;
+void main() {
+  vUv = uv;
+  gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+}
+`;
+
+/**
+ * 暗角：按到中心的距离压暗，`smoothstep` 保证中心一片完全不压、边缘才落。
+ * 用固定 inner/outer 而不是让强度调半径：强度只该改"压多狠"，
+ * 改半径会让同一个数字在不同画幅下表现不一致（16:9 和 9:16 的角落不一样远）。
+ */
+const VIGNETTE_SHADER = {
+  uniforms: { tDiffuse: { value: null }, amount: { value: 0 } },
+  vertexShader: FULLSCREEN_VERT,
+  fragmentShader: `
+uniform sampler2D tDiffuse;
+uniform float amount;
+varying vec2 vUv;
+void main() {
+  vec4 c = texture2D(tDiffuse, vUv);
+  float d = distance(vUv, vec2(0.5));
+  float v = smoothstep(0.28, 0.78, d) * amount * 1.15;
+  gl_FragColor = vec4(c.rgb * (1.0 - clamp(v, 0.0, 0.92)), c.a);
+}
+`,
+};
+
+/**
+ * 色差：R/B 通道向相反方向偏移，中心为 0、边缘最强（模拟镜头）。
+ * 只错开一点点就够——多了文字立刻发花，所以上限在 schema 里压到 1，
+ * 而 1 对应的实际位移也只有 3 像素（按 uv 归一化）。
+ */
+const CHROMA_SHADER = {
+  uniforms: { tDiffuse: { value: null }, amount: { value: 0 } },
+  vertexShader: FULLSCREEN_VERT,
+  fragmentShader: `
+uniform sampler2D tDiffuse;
+uniform float amount;
+varying vec2 vUv;
+void main() {
+  vec2 dir = vUv - vec2(0.5);
+  float k = amount * 0.03 * dot(dir, dir) * 4.0;
+  float r = texture2D(tDiffuse, vUv + dir * k).r;
+  float g = texture2D(tDiffuse, vUv).g;
+  float b = texture2D(tDiffuse, vUv - dir * k).b;
+  gl_FragColor = vec4(r, g, b, texture2D(tDiffuse, vUv).a);
+}
+`,
+};
+
+/**
+ * 胶片颗粒：一个便宜的 hash 噪声，**静止**（不逐帧变化）。
+ *
+ * 为什么不做动态：`installBloom` 在 `onCreated` 里跑一次，拿不到帧号；
+ * 要做逐帧就得每帧 `uniforms.seed.value = frame`。而颗粒的主要用途是
+ * "打散深色渐变的色带"，静止颗粒同样有效，且不会在压缩后变成蠕动的噪点。
+ * 真要动态颗粒时再加帧号，别现在为它引入一条每帧写 uniform 的路径。
+ */
+const GRAIN_SHADER = {
+  uniforms: { tDiffuse: { value: null }, amount: { value: 0 } },
+  vertexShader: FULLSCREEN_VERT,
+  fragmentShader: `
+uniform sampler2D tDiffuse;
+uniform float amount;
+varying vec2 vUv;
+float hash(vec2 p) {
+  return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453);
+}
+void main() {
+  vec4 c = texture2D(tDiffuse, vUv);
+  // 三个不同频率叠一下，避免规则的网格感
+  float n = hash(vUv * 1024.0) + hash(vUv * 613.0 + 7.3) + hash(vUv * 337.0 + 2.1);
+  n = n / 3.0 - 0.5;
+  gl_FragColor = vec4(c.rgb + n * amount * 0.18, c.a);
+}
+`,
+};
+
+export type PostExtras = { vignette?: number; chroma?: number; grain?: number };
+
+/** 从 graph.post 里取三个收尾参数（没给就是关） */
+export const postExtrasOf = (graph?: Scene3DDsl): PostExtras => {
+  const p = (graph as { post?: PostExtras } | undefined)?.post;
+  return {
+    vignette: typeof p?.vignette === "number" ? p.vignette : 0,
+    chroma: typeof p?.chroma === "number" ? p.chroma : 0,
+    grain: typeof p?.grain === "number" ? p.grain : 0,
+  };
+};
+
 export function installBloom(
   state: Pick<RootState, "gl" | "scene" | "camera" | "size">,
   opts: BloomOptions,
+  extras: PostExtras = {},
 ): BloomHandle {
   const { gl, scene, camera, size } = state;
   const dpr = gl.getPixelRatio();
@@ -81,6 +178,22 @@ export function installBloom(
   composer.addPass(renderPass);
   composer.addPass(bloom);
   composer.addPass(output);
+  /*
+   * 三个收尾效果放在 OutputPass **之后**：那时已经在 sRGB 空间，
+   * 乘系数 / 偏移通道就是眼睛看到的效果，不用反推线性空间。
+   * `amount` 为 0 的直接不加 pass —— 省一次全屏采样，也保证"没开时一个像素都不变"。
+   */
+  const extraPasses: ShaderPass[] = [];
+  const pushExtra = (shader: typeof VIGNETTE_SHADER, amount: number | undefined) => {
+    if (typeof amount !== "number" || amount <= 0) return;
+    const pass = new ShaderPass(shader as never);
+    (pass.uniforms as Record<string, { value: number }>).amount.value = amount;
+    composer.addPass(pass);
+    extraPasses.push(pass);
+  };
+  pushExtra(VIGNETTE_SHADER, extras.vignette);
+  pushExtra(CHROMA_SHADER, extras.chroma);
+  pushExtra(GRAIN_SHADER, extras.grain);
   composer.setSize(size.width, size.height);
 
   const original = gl.render.bind(gl);
@@ -111,6 +224,7 @@ export function installBloom(
     },
     dispose: () => {
       gl.render = original as typeof gl.render;
+      for (const pass of extraPasses) pass.dispose();
       bloom.dispose();
       output.dispose();
       renderPass.dispose?.();

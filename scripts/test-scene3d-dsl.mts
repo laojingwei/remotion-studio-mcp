@@ -46,6 +46,21 @@ const errOf = (graph: unknown): string => {
   return "";
 };
 
+/* post 的三个收尾效果：默认全关，写错范围要被拒 */
+{
+  const oneNode = [{ id: "a", geometry: { type: "sphere" } }];
+  const ok = normalizeProps("scene3d", { graph: { nodes: oneNode, post: { vignette: 0.3, chroma: 0.15, grain: 0.2 } } });
+  const post = (ok.graph as { post: Record<string, number> }).post;
+  assert.equal(post.vignette, 0.3);
+  assert.equal(post.chroma, 0.15);
+  assert.equal(post.grain, 0.2);
+  const plain = normalizeProps("scene3d", { graph: { nodes: oneNode } });
+  const p2 = (plain.graph as { post?: Record<string, number> }).post;
+  assert.equal(p2?.vignette, undefined, "不写就该是 undefined（关）");
+  assert.ok(errOf({ nodes: oneNode, post: { vignette: 1.5 } }).length > 0, "vignette 超过 1 要拒");
+  assert.ok(errOf({ nodes: oneNode, post: { grain: -0.1 } }).length > 0, "负数要拒");
+}
+
 console.log("[scene3d dsl] 合法输入");
 
 test("最小图能过校验，且默认值被补齐", () => {

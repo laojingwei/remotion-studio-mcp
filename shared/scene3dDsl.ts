@@ -677,6 +677,31 @@ export const dslSchema = z.object({
         .default("aces")
         .describe("aces=电影感滚降（默认）；none=逐像素还原色值（要和 2D 精确对色时才用）"),
       exposure: z.number().min(0.4).max(3).default(1.25).describe("曝光（仅 tonemap=aces 时生效）"),
+      /**
+       * 三个"收尾"效果，都在 OutputPass 之后（sRGB 空间）做——
+       * 在那里乘一个系数就是眼睛看到的效果，不用反推线性空间。
+       *
+       * 默认全关：这些是**口味**，不是默认审美。开着它们不会让画面更好，
+       * 只会在特定题材下更像那个题材。
+       */
+      vignette: z
+        .number()
+        .min(0)
+        .max(1)
+        .optional()
+        .describe("暗角：0=关（默认）。0.3 轻微、0.6 明显、1 很重。把视线收到中心，压住四角杂物"),
+      chroma: z
+        .number()
+        .min(0)
+        .max(1)
+        .optional()
+        .describe("色差（边缘彩色错位）：0=关（默认）。0.15 轻微、0.3 明显。科技/故障感用；**超过 0.35 字会花**"),
+      grain: z
+        .number()
+        .min(0)
+        .max(1)
+        .optional()
+        .describe("胶片颗粒：0=关（默认）。0.2 轻微质感、0.5 明显。深色大幅渐变加一点能避免色带（静止颗粒，不逐帧变化）"),
     })
     .optional(),
 });
