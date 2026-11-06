@@ -58,6 +58,11 @@ jobs:
       - name: 版本一致性
         run: node scripts/check-version.mjs
 
+      # 发布包内容守卫：files 白名单是唯一真源，而 .gitignore 里的东西（docs/、plugins/*、
+      # 生成物）不会自动进包。这条会把「发出去的包缺文档/缺示例」拦在合码前。
+      - name: 发布包内容
+        run: npm run check:package
+
   # 真浏览器回归：起服务 + 临时数据目录 + 5 条核心路径。
   # 单独一个 job：它要装 Chromium、要 build，失败原因和单测完全不同。
   e2e:

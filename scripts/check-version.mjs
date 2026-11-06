@@ -36,11 +36,17 @@ const walk = (dir) => {
     }
     if (!/\.(ts|tsx)$/.test(entry.name)) continue;
     const text = fs.readFileSync(p, "utf8");
-    // version: "1.2.3"（serverInfo / McpServer 选项）；注释里的不算
+    // version: "1.2.3"（serverInfo / McpServer 选项）；注释里的不算。
+    //
+    // 必须**行首锚定**：不锚定会把三元兜底值误判成写死版本，例如
+    //   version: typeof pkg.version === "string" ? pkg.version : "0.0.0",
+    // 里的 `pkg.version : "0.0.0"` 会被 `version\s*:` 命中（2026-11-06 实际误报过，
+    // 而这行恰好出现在发布闸门里，会把发版直接卡死）。
+    // `0.0.0` 是"不知道版本"的占位值，不是包版本，也一并放过。
     for (const line of text.split("\n")) {
       if (/^\s*(\/\/|\*|\/\*)/.test(line)) continue;
-      const m = /version\s*:\s*["'](\d+\.\d+\.\d+)["']/.exec(line);
-      if (m) offenders.push(`${path.relative(ROOT, p)} → ${m[0]}`);
+      const m = /^\s*version\s*:\s*["'](\d+\.\d+\.\d+)["']/.exec(line);
+      if (m && m[1] !== "0.0.0") offenders.push(`${path.relative(ROOT, p)} → ${m[0].trim()}`);
     }
   }
 };
@@ -61,6 +67,31 @@ if (fs.existsSync(readmePath)) {
     errors.push(`README 写的是 ${m[1]}，package.json 是 ${version}（发版时一起改）`);
   } else if (m) {
     notes.push(`README 版本一致：${m[1]}`);
+  }
+}
+
+/* 2.5) package-lock.json 的根版本也必须跟上。
+ *
+ * 这一条是补漏：lock 不需要手改（`npm version x.y.z --no-git-tag-version` 会同步），
+ * 但真改版本号时如果只动了 package.json，lock 会静静停在几个版本之前
+ * （曾经 1.1.3 的仓库里躺着 1.0.8，一路没人发现）。lock 不进发布包，
+ * 所以不影响用户，但它进 git，看的人会以为版本对不上是漏提交。
+ */
+const lockPath = path.join(ROOT, "package-lock.json");
+if (fs.existsSync(lockPath)) {
+  try {
+    const lock = JSON.parse(fs.readFileSync(lockPath, "utf8"));
+    const lockVer = lock?.version ?? lock?.packages?.[""]?.version;
+    if (lockVer && lockVer !== version) {
+      errors.push(
+        `package-lock.json 的版本是 ${lockVer}，package.json 是 ${version}` +
+          `（跑一次 npm version ${version} --allow-same-version --no-git-tag-version 即可同步）`,
+      );
+    } else {
+      notes.push(`package-lock 版本一致：${lockVer}`);
+    }
+  } catch (e) {
+    errors.push(`package-lock.json 解析失败：${e instanceof Error ? e.message : String(e)}`);
   }
 }
 
