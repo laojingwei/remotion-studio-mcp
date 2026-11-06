@@ -42,6 +42,17 @@ export type BloomOptions = {
 
 export type BloomHandle = {
   setSize: (cssWidth: number, cssHeight: number) => void;
+  /**
+   * 就地换参数：辉光改三个数值、收尾效果按需增删 pass。
+   *
+   * 为什么不是"改了参数就 dispose 重建"：`EffectComposer` 重建要重新分配
+   * 半浮点渲染目标、重编三套 shader，拖一个滑块就是几十次分配（视口直接卡）。
+   * 而这三类参数都能就地改：bloom 的三个值本来就是每帧读的字段，
+   * 收尾 pass 只要"删掉再按固定顺序追加回队尾"就是新参数下的正确顺序。
+   *
+   * 渲染端不用它（参数一次定死，多余 pass 也不建）；编辑器视口用它做实时预览。
+   */
+  update: (opts: BloomOptions, extras?: PostExtras) => void;
   dispose: () => void;
 };
 
@@ -183,17 +194,33 @@ export function installBloom(
    * 乘系数 / 偏移通道就是眼睛看到的效果，不用反推线性空间。
    * `amount` 为 0 的直接不加 pass —— 省一次全屏采样，也保证"没开时一个像素都不变"。
    */
-  const extraPasses: ShaderPass[] = [];
-  const pushExtra = (shader: typeof VIGNETTE_SHADER, amount: number | undefined) => {
-    if (typeof amount !== "number" || amount <= 0) return;
-    const pass = new ShaderPass(shader as never);
-    (pass.uniforms as Record<string, { value: number }>).amount.value = amount;
-    composer.addPass(pass);
-    extraPasses.push(pass);
+  let extraPasses: ShaderPass[] = [];
+
+  /**
+   * 按固定顺序重建收尾 pass。
+   *
+   * 顺序必须固定（暗角 → 色差 → 颗粒），否则"改了某个参数导致 pass 增删"会得到
+   * 不同的叠加顺序，画面无端变一次。它们都在 OutputPass 之后、也就是 composer
+   * 队列末尾，所以"全删 + 按序追加"就等于"正确顺序"，不需要 insertPass。
+   */
+  const applyExtras = (next: PostExtras) => {
+    for (const pass of extraPasses) {
+      composer.removePass(pass);
+      pass.dispose();
+    }
+    extraPasses = [];
+    const push = (shader: typeof VIGNETTE_SHADER, amount: number | undefined) => {
+      if (typeof amount !== "number" || amount <= 0) return;
+      const pass = new ShaderPass(shader as never);
+      (pass.uniforms as Record<string, { value: number }>).amount.value = amount;
+      composer.addPass(pass);
+      extraPasses.push(pass);
+    };
+    push(VIGNETTE_SHADER, next.vignette);
+    push(CHROMA_SHADER, next.chroma);
+    push(GRAIN_SHADER, next.grain);
   };
-  pushExtra(VIGNETTE_SHADER, extras.vignette);
-  pushExtra(CHROMA_SHADER, extras.chroma);
-  pushExtra(GRAIN_SHADER, extras.grain);
+  applyExtras(extras);
   composer.setSize(size.width, size.height);
 
   const original = gl.render.bind(gl);
@@ -221,6 +248,13 @@ export function installBloom(
       composer.setPixelRatio(dpr);
       composer.setSize(cssWidth, cssHeight);
       bloom.setSize(px(cssWidth), px(cssHeight));
+    },
+    update: (nextOpts, nextExtras) => {
+      // UnrealBloomPass 的三个值是每帧读的字段，改了立刻生效，不用重建
+      bloom.strength = nextOpts.strength;
+      bloom.radius = nextOpts.radius;
+      bloom.threshold = nextOpts.threshold;
+      applyExtras(nextExtras ?? {});
     },
     dispose: () => {
       gl.render = original as typeof gl.render;

@@ -1690,14 +1690,30 @@ const Bloom: React.FC<{ spec: LightSpec | unknown; theme: Theme; graph: Scene3DD
   const state = useThree();
   const handle = useRef<ReturnType<typeof installBloom> | null>(null);
 
+  /*
+   * 后期参数每帧重算（都是便宜运算），但**只装一次** composer。
+   * 重建 EffectComposer 要重新分配半浮点 RT、重编三套 shader，拖滑块时会卡；
+   * 所以下面第二个 effect 用 handle.update 就地改数值与 pass 组合。
+   */
+  const bloomOpts = bloomFor({
+    spec: resolveLook("orbit-core", look).spec,
+    background: theme.palette.background,
+    graph,
+  });
+  const postExtras = postExtrasOf(graph);
+  /** 数值指纹：对象引用每帧都新，用它当依赖才不会被当成"变了" */
+  const postKey = [
+    bloomOpts.strength,
+    bloomOpts.radius,
+    bloomOpts.threshold,
+    postExtras.vignette,
+    postExtras.chroma,
+    postExtras.grain,
+  ].join("|");
+
   useEffect(() => {
-    const opts = bloomFor({
-      spec: resolveLook("orbit-core", look).spec,
-      background: theme.palette.background,
-      graph,
-    });
     try {
-      handle.current = installBloom(state, opts, postExtrasOf(graph));
+      handle.current = installBloom(state, bloomOpts, postExtras);
     } catch {
       // 环境不支持半浮点渲染目标时降级为无辉光：画面仍然可用，只是不那么亮
       handle.current = null;
@@ -1708,6 +1724,12 @@ const Bloom: React.FC<{ spec: LightSpec | unknown; theme: Theme; graph: Scene3DD
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  useEffect(() => {
+    handle.current?.update(bloomOpts, postExtras);
+    // postKey 已涵盖所有数值；bloomOpts / postExtras 是每帧新对象，不能进依赖
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [postKey]);
 
   useEffect(() => {
     handle.current?.setSize(state.size.width, state.size.height);
