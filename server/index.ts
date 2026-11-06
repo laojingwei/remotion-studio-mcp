@@ -12,6 +12,7 @@ import { ensurePluginScenes, pluginSceneTypes } from "./plugin/scene-meta";
 import {
   ensurePluginEntryFresh,
   syncPluginElements,
+  syncPluginLooks,
   syncPluginTemplates,
   syncPluginWorldSkies,
 } from "./plugin/content-sync";
@@ -192,12 +193,13 @@ app.use("*", async (_c, next) => {
     const sky = syncPluginWorldSkies();
     const tpl = syncPluginTemplates();
     const els = syncPluginElements();
+    const looks = syncPluginLooks();
     /*
      * 元素/场景要落到 `src/_plugins.generated.ts` 才能被编辑器看见（web 是独立 bundle）。
      * 这一步保证了"装完插件打开面板就有"，而不是"等下次渲染才生效"。
      */
     const entry = ensurePluginEntryFresh();
-    const contentIssues = [...sky.issues, ...tpl.issues, ...els.issues, ...entry.issues];
+    const contentIssues = [...sky.issues, ...tpl.issues, ...els.issues, ...looks.issues, ...entry.issues];
     if (contentIssues.length && !ensuredContentOnce) {
       ensuredContentOnce = true;
       for (const i of contentIssues) console.warn(`[plugin] ${i}`);

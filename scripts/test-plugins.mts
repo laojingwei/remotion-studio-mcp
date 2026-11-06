@@ -1967,6 +1967,103 @@ test("元素：ensurePluginEntryFresh 会自己发现 elements/ 变化（不需�
   }
 });
 
+/* ──────────────── 3D 光线风格（2026-11-06 第 6 步） ──────────────── */
+
+const { syncPluginLooks } = await import("../server/plugin/content-sync");
+const { allLookIds, lookSpecOf, registerLook, unregisterLook, lookLabelOf } = await import("../shared/scene3dLooks");
+const { getMeta, describeFields } = await import("../shared/sceneMetas");
+
+/** 一套"看就知道是插件给的"风格：暖色、低环境、强 bloom */
+const pluginLook = {
+  id: "noir-warm",
+  label: "暖夜",
+  ambient: 0.12,
+  env: 0.2,
+  key: { pos: [3, 5, 4], intensity: 2.8, color: "#FFB27A" },
+  rimA: { pos: [-5, 2, -6], intensity: 2.1, color: "cool" },
+  rimB: null,
+  fill: null,
+  bloom: { strength: 0.7, radius: 0.5, threshold: 0.72 },
+  summary: "暖主光 + 冷边光，测试用",
+};
+
+test("3D 风格：插件的 looks.json 进注册表，停用后撤掉", () => {
+  resetPlugins();
+  write("lk/scene3d/looks.json", JSON.stringify({ looks: [pluginLook] }));
+
+  const r = syncPluginLooks();
+  assert.equal(r.issues.length, 0, `不该有报错：${JSON.stringify(r.issues)}`);
+  assert.ok(allLookIds().includes("noir-warm"), "插件风格应出现在可选列表里");
+  assert.equal(lookSpecOf("noir-warm")?.key.intensity, 2.8);
+  assert.equal(lookLabelOf("noir-warm"), "暖夜");
+
+  setPluginEnabled("lk", false);
+  syncPluginLooks();
+  assert.equal(lookSpecOf("noir-warm"), undefined, "停用插件后不该还能选到它的风格");
+  setPluginEnabled("lk", true);
+  resetPlugins();
+  syncPluginLooks();
+  unregisterLook("noir-warm");
+});
+
+test("3D 风格：内置 id 与 auto 不能被占；坏 spec 被拒", () => {
+  assert.equal(registerLook("auto", pluginLook).ok, false, "auto 是保留字");
+  const dup = registerLook("cyber", pluginLook);
+  assert.equal(dup.ok, false);
+  assert.ok(dup.reason?.includes("内置"), `要说明与内置重名，实际：${dup.reason}`);
+
+  const bad1 = registerLook("bad1", { ...pluginLook, ambient: -1 });
+  assert.equal(bad1.ok, false, "负环境光要拒");
+  const bad2 = registerLook("bad2", { ...pluginLook, key: { pos: [1, 2], intensity: 1, color: "#fff" } });
+  assert.equal(bad2.ok, false, "灯位不是三元组要拒");
+  const bad3 = registerLook("bad3", { ...pluginLook, bloom: { strength: 9, radius: 0.5, threshold: 0.7 } });
+  assert.equal(bad3.ok, false, "bloom 越界要拒");
+});
+
+/**
+ * 这条是「面板/agent 能选到」的判据。
+ *
+ * `look` 的 schema 只能是 string（插件 id 编译期不存在），如果 describeFields 不把
+ * 注册表补进 options，面板就会退化成自由文本、agent 也没有可选清单 ——
+ * 那等于"能注册但选不到"，比没接好不了多少。
+ */
+test("3D 风格：describeFields 把插件 id 注入 look 选项", () => {
+  resetPlugins();
+  write("lk2/scene3d/looks.json", JSON.stringify([pluginLook]));
+  syncPluginLooks();
+
+  const meta = getMeta("scene3d")!;
+  const look = describeFields(meta.schema).find((f) => f.key === "look")!;
+  assert.equal(look.kind, "enum", "必须是下拉框，不是自由文本");
+  assert.ok(look.options?.includes("auto"), "auto 要在选项里");
+  assert.ok(look.options?.includes("cyber"), "内置项要在选项里");
+  assert.ok(look.options?.includes("noir-warm"), "插件项要在选项里");
+
+  resetPlugins();
+  syncPluginLooks();
+  const after = describeFields(meta.schema).find((f) => f.key === "look")!;
+  assert.ok(!after.options?.includes("noir-warm"), "停用后选项里不该还有它");
+});
+
+test("3D 风格：写进生成文件（渲染端只有这一条通道）", () => {
+  resetPlugins();
+  const out = path.join(TMP, "gen2", "_plugins.generated.ts");
+  fs.mkdirSync(path.dirname(out), { recursive: true });
+  generatePluginEntry({ outFile: out });
+  write("lk3/scene3d/looks.json", JSON.stringify({ looks: [pluginLook] }));
+
+  const res = generatePluginEntry({ outFile: out });
+  assert.equal(res.lookCount, 1, `应统计到 1 套风格，实际：${res.lookCount}`);
+  const text = fs.readFileSync(out, "utf8");
+  assert.ok(text.includes("PLUGIN_LOOKS"), "生成文件要导出 PLUGIN_LOOKS");
+  assert.ok(text.includes("registerLook"), "生成文件要导入并调用 registerLook");
+  assert.ok(text.includes("noir-warm"), "生成文件要内联风格数据");
+
+  resetPlugins();
+  generatePluginEntry({ outFile: out });
+  fs.rmSync(out, { force: true });
+});
+
 /* ────────────────────────── 收尾 ────────────────────────── */
 fs.rmSync(TMP, { recursive: true, force: true });
 

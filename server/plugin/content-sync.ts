@@ -26,6 +26,7 @@ import { generatePluginEntry } from "./gen-entry";
 import { registerWorldSky, unregisterWorldSky } from "../../shared/worldPresets";
 import { registerTemplate, unregisterTemplate } from "../../shared/templates";
 import { registerLibraryItem, unregisterLibraryItem } from "../../shared/elementLibrary";
+import { registerLook, unregisterLook } from "../../shared/scene3dLooks";
 
 type Candidate = { file: string; pluginId: string };
 
@@ -301,6 +302,71 @@ export function syncPluginElements(): { count: number; issues: string[] } {
 /** 诊断用：当前由插件提供的元素 id */
 export const pluginElementIds = (): string[] => [...ownedElements].sort();
 
+/* ─────────────────────────── 3D 光线风格 ─────────────────────────── */
+
+const ownedLooks = new Set<string>();
+let lookKey = "";
+let lookIssues: string[] = [];
+
+/**
+ * 把 `scene3d/looks.json` 登记进 `shared/scene3dLooks`。
+ *
+ * 服务端要这份是因为 `/api/scene-types` 的 `look` 字段选项来自注册表——
+ * agent 只能选它看得见的 id。渲染端另外从生成文件拿（bundle 独立）。
+ */
+export function syncPluginLooks(): { count: number; issues: string[] } {
+  const key = fingerprint(candidateFiles(path.join("scene3d", "looks.json")));
+  if (key === lookKey) return { count: ownedLooks.size, issues: [...lookIssues] };
+
+  const files = pluginFiles("scene3d.look", ".json");
+  const issues: string[] = [];
+  const seen = new Set<string>();
+
+  for (const { file, pluginId } of files) {
+    const where = `${pluginId}/scene3d/looks.json`;
+    let raw: unknown;
+    try {
+      raw = JSON.parse(fs.readFileSync(file, "utf8"));
+    } catch (err) {
+      issues.push(`${where} 解析失败：${err instanceof Error ? err.message : String(err)}`);
+      continue;
+    }
+    const list: unknown[] = Array.isArray(raw)
+      ? raw
+      : raw && typeof raw === "object" && Array.isArray((raw as { looks?: unknown }).looks)
+        ? ((raw as { looks: unknown[] }).looks as unknown[])
+        : raw && typeof raw === "object" && "id" in raw
+          ? [raw]
+          : [];
+    if (!list.length) {
+      issues.push(`${where} 的形态不对：要 {"looks":[...]}、[...] 或 {"id":"...", ...}`);
+      continue;
+    }
+    for (const item of list) {
+      const id = String((item as { id?: string })?.id ?? "").trim();
+      const reg = registerLook(id, item);
+      if (!reg.ok) {
+        issues.push(`${where}：${reg.reason}`);
+        continue;
+      }
+      seen.add(id);
+      ownedLooks.add(id);
+    }
+  }
+
+  for (const id of [...ownedLooks]) {
+    if (seen.has(id)) continue;
+    if (unregisterLook(id)) ownedLooks.delete(id);
+  }
+
+  lookKey = key;
+  lookIssues = issues;
+  return { count: ownedLooks.size, issues: [...issues] };
+}
+
+/** 诊断用：当前由插件提供的 look id */
+export const pluginLookIds = (): string[] => [...ownedLooks].sort();
+
 /* ───────────────────── 生成文件（web/渲染端那一份） ───────────────────── */
 
 let entryKey = "";
@@ -322,6 +388,7 @@ export function ensurePluginEntryFresh(): { changed: boolean; issues: string[] }
   const candidates = [
     ...candidateDirFiles("scenes"),
     ...candidateDirFiles("elements"),
+    ...candidateFiles(path.join("scene3d", "looks.json")),
   ];
   const key = fingerprint(candidates);
   if (key === entryKey) return { changed: false, issues: [] };

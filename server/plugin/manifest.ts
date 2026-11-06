@@ -36,7 +36,7 @@ export const PROVIDE_KINDS = [
   "elements", //         elements/*.json        → 元素库（面板 + list_element_library）
   "scene3d.sky", //      scene3d/skies.json     → 3D 天空 + 打光配方
   "scene3d.preset", //   scene3d/presets.json   → 3D 母题（不按原方案接，见计划 9.3）
-  "scene3d.look", //     scene3d/looks.json     → 3D 观感预设（未接）
+  "scene3d.look", //     scene3d/looks.json     → 3D 光线风格（内置 4 套 + 插件）
   /* ── L1 注册表层 ── */
   "brief.steps", //      brief/steps.json       → 问诊步骤（替换或追加）
   "scene", //            scenes/<type>.json + <type>.tsx → 新场景类型
@@ -67,9 +67,9 @@ export const PROVIDE_LABEL: Record<ProvideKind, string> = {
  * **能声明但没生效**是插件系统里最伤人的一类问题（比直接报错伤人，因为不报错）。
  * 所以没接的项必须在输出里标出来。
  *
- * 2026-11-06：`template` / `scene3d.sky` / `elements` 都已接上消费方
- * （`server/plugin/content-sync.ts` + 生成文件）。剩下 `scene3d.look` 未接；
- * `scene3d.preset` 不再按原方案做（见计划文档 9.3，改成 graph 配方）。
+ * 2026-11-06：内容层全部接完——`template` / `scene3d.sky` / `elements` / `scene3d.look`
+ * 都有消费方了（`server/plugin/content-sync.ts` + 生成文件）。
+ * 只有 `scene3d.preset` 不按原方案做（见计划文档 9.3，改成 graph 配方）。
  */
 export const IMPLEMENTED_PROVIDES: ProvideKind[] = [
   "skill",
@@ -80,6 +80,7 @@ export const IMPLEMENTED_PROVIDES: ProvideKind[] = [
   "template",
   "scene3d.sky",
   "elements",
+  "scene3d.look",
 ];
 
 /**

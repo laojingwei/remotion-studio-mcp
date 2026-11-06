@@ -43,11 +43,16 @@ export type PluginElementEntry = {
   items: unknown[];
 };
 
+/** 插件贡献的 3D 光线风格（同样是纯数据） */
+export type PluginLookEntry = PluginElementEntry;
+
 export type GenResult = {
   changed: boolean;
   count: number;
   /** 顺带生成进去的插件元素条数（0 = 没有这类插件） */
   elementCount: number;
+  /** 顺带生成进去的插件 3D 风格套数 */
+  lookCount: number;
   issues: string[];
   outFile: string;
 };
@@ -123,8 +128,13 @@ export function discoverSceneEntries(pluginDir = PROJECT_PLUGIN_DIR): { entries:
  *
  * 文件形态三种都收：`{"elements":[...]}` / `[...]` / 单个元素对象。
  */
-export function discoverElementEntries(
-  pluginDir = PROJECT_PLUGIN_DIR,
+function discoverDataEntries(
+  relDir: string,
+  /** 文件内数组的键名（`elements` / `looks`）；同时接受纯数组与单个对象 */
+  listKey: string,
+  pluginDir: string,
+  /** 只认这个文件名（不含扩展名）：`scene3d/` 里只取 looks.json，别把 presets 当风格读 */
+  onlyBasename?: string,
 ): { entries: PluginElementEntry[]; issues: string[] } {
   const entries: PluginElementEntry[] = [];
   const issues: string[] = [];
@@ -139,12 +149,13 @@ export function discoverElementEntries(
     if (!plugin.isDirectory() || plugin.name.startsWith(".") || plugin.name === "node_modules") continue;
     const dir = path.join(pluginDir, plugin.name);
     if (!enabled.has(path.resolve(dir))) continue;
-    const elementsDir = path.join(dir, "elements");
-    if (!fs.existsSync(elementsDir)) continue;
+    const dataDir = path.join(dir, relDir);
+    if (!fs.existsSync(dataDir)) continue;
 
-    for (const f of safeDir(elementsDir)) {
+    for (const f of safeDir(dataDir)) {
       if (!f.isFile() || !f.name.toLowerCase().endsWith(".json")) continue;
-      const file = path.join(elementsDir, f.name);
+      if (onlyBasename && path.basename(f.name, path.extname(f.name)).toLowerCase() !== onlyBasename) continue;
+      const file = path.join(dataDir, f.name);
       let raw: unknown;
       try {
         raw = JSON.parse(fs.readFileSync(file, "utf8"));
@@ -154,13 +165,15 @@ export function discoverElementEntries(
       }
       const items = Array.isArray(raw)
         ? raw
-        : raw && typeof raw === "object" && Array.isArray((raw as { elements?: unknown }).elements)
-          ? ((raw as { elements: unknown[] }).elements as unknown[])
+        : raw && typeof raw === "object" && Array.isArray((raw as Record<string, unknown>)[listKey])
+          ? ((raw as Record<string, unknown[]>)[listKey] as unknown[])
           : raw && typeof raw === "object" && "id" in raw
             ? [raw]
             : null;
       if (!items) {
-        issues.push(`${plugin.name}/elements/${f.name} 的形态不对：要 {"elements":[...]}、[...] 或 {"id":"...", ...}`);
+        issues.push(
+          `${plugin.name}/${relDir}/${f.name} 的形态不对：要 {"${listKey}":[...]}、[...] 或 {"id":"...", ...}`,
+        );
         continue;
       }
       entries.push({ file, pluginId: plugin.name, items });
@@ -170,9 +183,18 @@ export function discoverElementEntries(
   return { entries: entries.sort((a, b) => a.file.localeCompare(b.file)), issues };
 }
 
+/** 插件元素（`elements/*.json`） */
+export const discoverElementEntries = (pluginDir = PROJECT_PLUGIN_DIR) =>
+  discoverDataEntries("elements", "elements", pluginDir);
+
+/** 插件 3D 风格（`scene3d/looks.json`） */
+export const discoverLookEntries = (pluginDir = PROJECT_PLUGIN_DIR) =>
+  discoverDataEntries("scene3d", "looks", pluginDir, "looks");
+
 function render(
   entries: PluginSceneEntry[],
   elements: PluginElementEntry[],
+  looks: PluginLookEntry[],
   issues: string[],
   outDir: string,
 ): string {
@@ -199,9 +221,16 @@ function render(
       `  { from: ${JSON.stringify(e.pluginId)}, file: ${JSON.stringify(path.basename(e.file))}, items: ${JSON.stringify(e.items)} },`,
     );
   }
+  // 3D 风格也是纯数据，走同一条内联路线
+  const lookRows: string[] = [];
+  for (const e of looks) {
+    lookRows.push(
+      `  { from: ${JSON.stringify(e.pluginId)}, file: ${JSON.stringify(path.basename(e.file))}, items: ${JSON.stringify(e.items)} },`,
+    );
+  }
 
   // 两样都没有：只留占位数组，让编译不依赖"装没装插件"
-  if (!entries.length && !elements.length) {
+  if (!entries.length && !elements.length && !looks.length) {
     return [
       ...header,
       ...issueLines,
@@ -212,6 +241,9 @@ function render(
       "/** 没有插件元素时的占位 */",
       "export const PLUGIN_ELEMENTS: { from: string; file: string; items: unknown[] }[] = [];",
       "",
+      "/** 没有插件 3D 风格时的占位 */",
+      "export const PLUGIN_LOOKS: { from: string; file: string; items: unknown[] }[] = [];",
+      "",
     ].join("\n");
   }
 
@@ -221,6 +253,7 @@ function render(
     'import { registerSceneMeta } from "../shared/sceneMetas";',
     'import { registerSceneComponent } from "./scenes/components";',
     'import { registerLibraryItem } from "../shared/elementLibrary";',
+    'import { registerLook } from "../shared/scene3dLooks";',
   ];
 
   if (issueLines.length) lines.push(...issueLines);
@@ -273,6 +306,19 @@ function render(
     "    if (!r.ok) console.warn('[plugin] 元素 ' + e.from + '/' + e.file + ' 已跳过：' + r.reason);",
     "  }",
     "}",
+    "",
+    "/** 插件 3D 光线风格：注册后 resolveLook 就能取到（内置 id 不可覆盖） */",
+    "export const PLUGIN_LOOKS: { from: string; file: string; items: unknown[] }[] = [",
+    ...lookRows,
+    "];",
+    "",
+    "for (const e of PLUGIN_LOOKS) {",
+    "  for (const item of e.items) {",
+    "    const id = String((item as { id?: string })?.id ?? '');",
+    "    const r = registerLook(id, item);",
+    "    if (!r.ok) console.warn('[plugin] 3D 风格 ' + e.from + '/' + e.file + ' 已跳过：' + r.reason);",
+    "  }",
+    "}",
   );
 
   return lines.join("\n") + "\n";
@@ -291,8 +337,9 @@ export function generatePluginEntry(opts: { pluginDir?: string; outFile?: string
 
   const { entries, issues } = discoverSceneEntries(pluginDir);
   const els = discoverElementEntries(pluginDir);
-  const allIssues = [...issues, ...els.issues];
-  const next = render(entries, els.entries, allIssues, outDir);
+  const looks = discoverLookEntries(pluginDir);
+  const allIssues = [...issues, ...els.issues, ...looks.issues];
+  const next = render(entries, els.entries, looks.entries, allIssues, outDir);
 
   let prev = "";
   try {
@@ -311,6 +358,7 @@ export function generatePluginEntry(opts: { pluginDir?: string; outFile?: string
   // 让用户在一次输出里看到全部问题，不用逐个工具试
   const briefIssues = pluginBriefSteps().issues;
   const elementCount = els.entries.reduce((n, e) => n + e.items.length, 0);
+  const lookCount = looks.entries.reduce((n, e) => n + e.items.length, 0);
 
-  return { changed, count: entries.length, elementCount, issues: [...allIssues, ...briefIssues], outFile };
+  return { changed, count: entries.length, elementCount, lookCount, issues: [...allIssues, ...briefIssues], outFile };
 }

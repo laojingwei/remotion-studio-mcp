@@ -26,6 +26,7 @@ plugins/我的插件/
   brief/steps.json       问诊步骤      → intake / save_brief 按你的流程走
   templates/*.json       整片模板      → 模板市场里多一套，create_from_template 可套
   elements/*.json        元素素材      → 元素面板里多几个图标 / 标签（分类可自定义）
+  scene3d/looks.json     3D 光线风格   → 3D 场景的 look 里多几套可选光（灯位/色温/辉光）
   scene3d/skies.json     3D 天空配方   → list_world_skies 多几条，set_graph_scene 能套
   scenes/*.json + *.tsx  场景组件      → 选择器里多一种画面（必须放项目内）
   plugin.ts              钩子/工具/处理器 → 说意见、改字、洗素材，或加一个 MCP 工具
@@ -52,8 +53,9 @@ plugins/我的插件/
 | **整片模板** | `templates/*.json`，模板市场里多一套；`{ "templates": [...] }`、`[...]`、单个对象三种写法都收 |
 | **3D 天空配方** | `scene3d/skies.json`，`list_world_skies` 里多几条（带「〔插件 xxx〕」标记），`set_graph_scene { worldPreset }` 直接套 |
 | **元素素材** | `elements/*.json`，元素面板里多几个图标/标签；`cat` 随你定（会自动变成筛选项），也能被 `list_element_library` / `add_element { libraryId }` 用 |
+| **3D 光线风格** | `scene3d/looks.json`，3D 场景的 `look` 下拉里多几套（灯位/强度/色温/辉光）；只换光的性格，不换配色 |
 
-**还没接的**只剩 3D 观感（`scene3d/looks.json`）——放进去会被识别但**明确标注不生效**（见 `list_plugins`）。
+内容层已经**全部接通**：技能、风格、问诊、整片模板、3D 天空、3D 光线风格、元素、场景组件、钩子都能用。
 转场 / 特效 / 3D 几何体（`scene3d/presets.json`）**不打算做**，理由见计划文档 9.3。
 完整路线见 `docs/2026-11-05-插件化架构与实施计划.md`。
 

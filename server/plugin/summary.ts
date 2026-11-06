@@ -122,6 +122,7 @@ const HOW_TO = [
   "  templates/*.json     整片模板      → 模板市场里多一套（create_from_template 可套）",
   "  scene3d/skies.json   3D 天空配方   → list_world_skies 多几条，set_graph_scene 能套",
   "  elements/*.json      元素素材      → 元素面板里多几个图标/标签（分类可自定义）",
+  "  scene3d/looks.json   3D 光线风格   → 3D 场景的 look 下拉里多几套（灯位/色温/辉光）",
   "  scenes/<type>.json + <type>.tsx  场景组件 → 选择器里多一种画面（改了要重新打包）",
   "  plugin.ts            钩子/工具/处理器 → 说意见、改字、清洗素材，或加一个 MCP 工具",
   "  package.json + dist/ 完整工程        → 同上，但可以带自己的 dependencies / 构建脚本 / 原生模块",
@@ -130,8 +131,7 @@ const HOW_TO = [
   "放好就生效，不用重启。技能/风格/问诊/3D 天空/整片模板/钩子/文本/文件处理改完立刻生效；场景组件要等一次自动重新打包（几十秒）。",
   "文件处理只对**新上传**生效；要补已有的素材用 reprocess_assets（默认只预览）。",
   "需要更细的控制（版本、作者、权限）时再加 manifest.json；规则与示例见 plugins/README.md。",
-  "只剩 3D 观感（scene3d/looks.json）没接；转场/特效/几何体（scene3d/presets.json）不打算做（见计划文档 9.3）。\n"
-  + "没接的项会被识别但不生效，上面会标「本版本未接入」。",
+  "内容类贡献项已全部接通；转场/特效/几何体（scene3d/presets.json）不打算做（见计划文档 9.3）。",
 ].join(NL);
 
 /** 一个插件都没有时的引导（首次使用最可能看到的就是这个） */

@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { freeformPropsSchema } from "./freeform";
+import { allLookIds, lookLabelOf } from "./scene3dLooks";
 
 /**
  * 场景元信息（纯数据，不含 React）
@@ -1687,8 +1688,15 @@ export const scene3dMeta: SceneMeta = {
           "waveform=波形柱阵起伏（讲数据、趋势、声音、节奏）；" +
           "globe-arc=球面点阵+弧线（讲全球、连接、网络、辐射范围）",
       ),
+    /*
+     * 开放式枚举：内置 4 套 + 插件 `scene3d/looks.json` 注册的任意 id。
+     *
+     * 为什么不用 `z.enum`：zod 的 enum 是**静态**的，插件 id 编译期不存在。
+     * 校验靠两处：面板/agent 的可选项由 `describeFields` 从注册表注入（写入前就选不错），
+     * 渲染端 `resolveLook` 取不到会退回预设默认并告警（删了插件的老工程仍能导出）。
+     */
     look: z
-      .enum(["auto", "studio", "dramatic", "cyber", "nature"])
+      .string()
       .default("auto")
       .describe(
         "光线风格，决定这一幕的「气质」。auto 会按预设自动挑（orbit-core/grid-horizon=cyber，" +
@@ -1697,7 +1705,8 @@ export const scene3dMeta: SceneMeta = {
           "需要明确情绪时才手动指定：studio=明亮干净产品光（讲解、看清材质）；" +
           "dramatic=暗调暖主光+冷边光（开场、悬念、情绪）；" +
           "cyber=冷色高对比+青色边光（科技、数据、未来感）；" +
-          "nature=天光+暖阳光（自然、生活、纪实）",
+          "nature=天光+暖阳光（自然、生活、纪实）。" +
+          "插件可以加（装在 plugins/<名>/scene3d/looks.json），列出可用项用 list_scene_types",
       ),
     hue: z
       .enum(["primary", "accent", "secondary", "text"])
@@ -2006,12 +2015,15 @@ const OPTION_LABELS: Record<string, Record<string, string>> = {
     waveform: "波形柱阵",
     "globe-arc": "球面网络",
   },
-  look: { auto: "自动", studio: "影棚", dramatic: "戏剧", cyber: "赛博", nature: "自然" },
   hue: { primary: "主色", accent: "强调色", secondary: "次色", text: "文字色" },
 };
 
 /** 枚举值 → 中文短名（没有映射就原样返回） */
-export const optionLabel = (key: string, value: string): string => OPTION_LABELS[key]?.[value] ?? value;
+export const optionLabel = (key: string, value: string): string => {
+  // look 的取值是开放的（插件能加），中文名以注册表为准，`OPTION_LABELS` 里不再维护一份
+  if (key === "look") return lookLabelOf(value);
+  return OPTION_LABELS[key]?.[value] ?? value;
+};
 
 /**
  * 3D 母题清单（面板里铺按钮 / 场景选择器里直接建场景用；顺序 = 推荐顺序）。
@@ -2054,7 +2066,7 @@ export type FieldDesc = {
 
 export function describeFields(schema: z.ZodObject<z.ZodRawShape>): FieldDesc[] {
   const shape = schema.shape;
-  return Object.entries(shape).map(([key, raw]) => {
+  const fields: FieldDesc[] = Object.entries(shape).map(([key, raw]) => {
     let node = raw as z.ZodTypeAny;
     const required = !(node instanceof z.ZodOptional);
     let def: unknown = undefined;
@@ -2140,6 +2152,21 @@ export function describeFields(schema: z.ZodObject<z.ZodRawShape>): FieldDesc[] 
     }
     return { key, kind: "text", label: desc, required, default: def };
   });
+
+  /*
+   * `look` 是**开放式枚举**（内置 + 插件），schema 侧只能写 string，
+   * 但面板要的是下拉框、agent 要的是清单 —— 所以在描述阶段把注册表补进来。
+   *
+   * 只对 key 恰好是 `look` 生效，不做通用的"开放式枚举"机制：
+   * 目前只有这一个字段是开放的，抽象一层反而没人受益。
+   */
+  for (const f of fields) {
+    if (f.key === "look" && f.kind === "text") {
+      f.kind = "enum";
+      f.options = ["auto", ...allLookIds()];
+    }
+  }
+  return fields;
 }
 
 /** 校验并补全某场景的 props */
