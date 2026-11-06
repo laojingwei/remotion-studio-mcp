@@ -57,9 +57,27 @@ export type TtsProviderMeta = {
   hint?: string;
   /** 这个 provider 需要哪些配置项（编辑器/工具据此渲染表单） */
   configFields?: TtsConfigField[];
+  /**
+   * 能输出的音频格式（如 ["wav"] / ["mp3","wav"]）。
+   * 只是**声明**：面板把它映射成下拉选项，选中的值经 `format` 传回 synthesize，
+   * 真正产出什么格式是插件的事——宿主不代转码。
+   */
+  formats?: string[];
+  /**
+   * 是否支持风格指令（synthesize 会真的消费 instruct）。
+   * **不声明就不显示**：面板对插件来源只在声明了此项时才露出"风格指令"输入框，
+   * 免得用户填了没效果还以为是自己写法不对。
+   */
+  instruct?: boolean;
 };
 
 export type TtsProviderVoice = { id: string; label?: string; language?: string };
+
+/** check 探测的入参：只给 provider 自己的配置和取消信号 */
+export type TtsCheckRequest = { config: Record<string, string>; signal: AbortSignal };
+
+/** check 的返回：{ ok, detail? } 或 { ok:false, error }。抛错也行，宿主会把它当失败并带上原文 */
+export type TtsCheckResult = { ok: boolean; detail?: string; error?: string };
 
 export type TtsSynthRequest = {
   text: string;
@@ -77,6 +95,13 @@ export type TtsSynthRequest = {
 export type TtsProviderModule = {
   meta?: TtsProviderMeta;
   voices?: (config: Record<string, string>) => Promise<TtsProviderVoice[]> | TtsProviderVoice[];
+  /**
+   * 探测：agent 的 tts_check（浅层）会调它，用来回答"现在能不能用"。
+   * 要求**便宜**——验 key、探一个轻量接口都行，别做完整合成；
+   * 做不了零成本探测就用最小请求（如 2 字合成），并在 detail 里说明消耗。
+   * 返回 { ok:false, error } 或抛错都算不可用，error 原文会原样回到 agent。
+   */
+  check?: (req: TtsCheckRequest) => Promise<TtsCheckResult>;
   synthesize: (
     req: TtsSynthRequest,
   ) => Promise<{ audio: Uint8Array | ArrayBuffer; contentType?: string } | { file: string }>;
@@ -215,7 +240,10 @@ export async function ttsProviderCatalog(): Promise<{
     hint?: string;
     pluginId: string;
     configFields: TtsConfigField[];
+    formats: string[];
     hasVoices: boolean;
+    /** 插件声明了 meta.instruct（synthesize 真的消费风格指令） */
+    hasInstruct: boolean;
   }[];
   errors: string[];
 }> {
@@ -227,7 +255,9 @@ export async function ttsProviderCatalog(): Promise<{
       hint: p.meta.hint,
       pluginId: p.pluginId,
       configFields: Array.isArray(p.meta.configFields) ? p.meta.configFields : [],
+      formats: Array.isArray(p.meta.formats) ? p.meta.formats.filter((x) => typeof x === "string" && x.trim()) : [],
       hasVoices: typeof p.mod.voices === "function",
+      hasInstruct: !!p.meta.instruct,
     })),
     errors: [...errors],
   };

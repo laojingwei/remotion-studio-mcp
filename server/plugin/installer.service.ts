@@ -1273,15 +1273,19 @@ function dirSize(dir: string, budget = 6000): { bytes: number; truncated: boolea
 
 /* ─────────────────────────── 卸载 ─────────────────────────── */
 
-export type RemoveResult = { dir: string; trash: string; scope: string };
+export type RemoveResult = { dir: string; scope: string; /** 挪到哪（purge 模式没有这个值） */ trash?: string; /** true = 已永久删除，不经过回收站 */ purged?: boolean };
 
 /**
- * 卸载 = 从 plugins/ 挪到 data/.plugin-trash/，**不删文件**。
+ * 卸载插件。两种模式：
  *
- * 理由很实际：插件目录里可能有作者自己积累的数据（生成的预设、本地的 API key），
- * 一键删除是不可逆的；而"挪走"既让它立刻消失，又能在用户后悔时捡回来。
+ * - **默认：挪到 data/.plugin-trash/，不删文件。**
+ *   插件目录里可能有作者自己积累的数据（生成的预设、本地的 API key），
+ *   一键删除是不可逆的；"挪走"既让它立刻消失，又能在用户后悔时捡回来。
+ * - **purge: true：彻底删除，不可恢复。** 只在用户于确认框里**显式选择**"永久删除"时
+ *   才会走到这里（前端弹窗给了两档，回收站是推荐项）——服务端不再做二次确认，
+ *   但目录安全检查一条不少。
  */
-export function removePlugin(id: string): RemoveResult {
+export function removePlugin(id: string, opts: { purge?: boolean } = {}): RemoveResult {
   const target = scanPlugins().find((p) => p.id === id);
   if (!target) throw new Error(`没有 id 为「${id}」的插件`);
 
@@ -1290,7 +1294,15 @@ export function removePlugin(id: string): RemoveResult {
     throw new Error(`拒绝卸载：${dir} 不在插件目录内（这不是这个服务该动的东西）`);
   }
 
-  const trash = moveToTrash(dir);
+  const result: RemoveResult = { dir, scope: target.scope };
+
+  if (opts.purge) {
+    // 彻底删除。isInside 检查已保证只动 plugins/ 里的目录
+    fs.rmSync(dir, { recursive: true, force: true });
+    result.purged = true;
+  } else {
+    result.trash = moveToTrash(dir);
+  }
 
   try {
     resetHookCache();
@@ -1299,7 +1311,7 @@ export function removePlugin(id: string): RemoveResult {
     /* 同上 */
   }
 
-  return { dir, trash, scope: target.scope };
+  return result;
 }
 
 /** 挪进回收站（不删除）。跨盘时 rename 会 EXDEV，退化成复制 + 删除 */

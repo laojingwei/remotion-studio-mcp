@@ -69,6 +69,14 @@ export const PluginUiWindow: React.FC<{
   );
   /** 重载：改 key 让 iframe 重新挂载（插件改完 ui/ 里的文件后不必重启编辑器） */
   const [reload, setReload] = useState(0);
+  /**
+   * iframe 加载完成了吗？
+   *
+   * 没有 finished 之前 iframe 是不可见的——否则窗口先挂出来、页面还在路上，
+   * 用户看到的就是一闪而过的空白（体验像"卡了"）。占位层盖住这段，
+   * onLoad 之后才把 iframe 淡入。重载时要把它拨回 false，等新页面重新加载。
+   */
+  const [ready, setReady] = useState(false);
 
   /*
    * 消息监听用 ref 取最新的回调与几何：否则每次父组件重渲染都要重绑一次监听，
@@ -164,7 +172,14 @@ export const PluginUiWindow: React.FC<{
         <span className="ui-win-tag">插件自带界面</span>
         <span className="ui-win-spacer" />
         <div className="ui-win-actions" onPointerDown={(e) => e.stopPropagation()}>
-          <button className="ui-win-btn" onClick={() => setReload((n) => n + 1)} title="重新加载这个页面（插件改完文件不必重启）">
+          <button
+            className="ui-win-btn"
+            onClick={() => {
+              setReady(false);
+              setReload((n) => n + 1);
+            }}
+            title="重新加载这个页面（插件改完文件不必重启）"
+          >
             重载
           </button>
           <button className="ui-win-btn" onClick={() => onPatch({ max: !win.max })} title={win.max ? "还原大小" : "铺满屏幕"}>
@@ -177,10 +192,17 @@ export const PluginUiWindow: React.FC<{
       </div>
 
       <div className="ui-win-body">
+        {/* 加载占位：iframe 不可见期间盖住空面板，onLoad 后撤掉 */}
+        {!ready ? (
+          <div className="ui-win-loading" aria-live="polite">
+            <span className="ui-win-spin" />
+            正在加载「{name}」界面…
+          </div>
+        ) : null}
         <iframe
           key={reload}
           ref={frame}
-          className="ui-win-frame"
+          className={`ui-win-frame ${ready ? "is-ready" : ""}`}
           title={`${name} 界面`}
           src={`/plugin-ui/${encodeURIComponent(id)}/index.html`}
           /*
@@ -189,6 +211,7 @@ export const PluginUiWindow: React.FC<{
            */
           sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-downloads"
           onLoad={() => {
+            setReady(true);
             /*
              * 把宿主的主题变量送进去：插件可以照着用（想要统一观感时），
              * 也可以完全无视。只发一次，之后由插件自己决定要不要再问。

@@ -75,6 +75,8 @@ export {
 
 export { pluginTools, pluginToolEntries, pluginToolNamesOf, type PluginToolEntry } from "./tool-registry";
 
+export { ensureTtsProviders, ttsProviderCatalog } from "./tts-providers";
+
 export { buildParamShape, PARAM_TYPES, type ParamSpec, type ParamType } from "./tool-params";
 
 export { pluginsToText } from "./summary";

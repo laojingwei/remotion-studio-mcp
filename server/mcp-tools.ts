@@ -2259,8 +2259,9 @@ const TOOLS: ToolDef[] = [
     description:
       "语音服务预检。默认只探连通性（快）；deep=true 会真合成一句极短语音，验证 key/model/voice/format 全对（约 1–3 秒，产物不留）。\n" +
       "**开工做配音之前先调它**，比跑到第 6 步才发现服务没启动便宜得多。\n" +
-      "当前用的是插件 provider（list_tts_providers 里标「当前使用」的那家）时没有本机地址可探，" +
-      "默认只回报「用的是哪家」，要验鉴权/接口就传 deep=true 真调一次厂商。",
+      "当前用的是插件 provider（list_tts_providers 里标「当前使用」的那家）时没有本机地址可探：" +
+      "插件提供了自检方法（check）就浅层直接跑它（key/余额是否可用，通常只消耗极小额度）；" +
+      "没提供自检方法的，默认只回报「用的是哪家」，要验整条链路就传 deep=true 真调一次厂商。",
     shape: {
       deep: z.boolean().optional().describe("true = 连真合成一起验"),
     },
@@ -2278,6 +2279,9 @@ const TOOLS: ToolDef[] = [
         const stageTip: Record<string, string> = {
           config: "配置问题：用 get_tts_config 看当前地址，set_tts_config 改",
           reach: "服务没起来：先把本地 TTS 服务拉起来再重试",
+          check:
+            "插件自检未通过：按上面的错误原文处理（多半是 key 没配 / key 错 / 余额不足）；" +
+            "配好了再调一次本工具确认",
           synth:
             "合成失败：内置 provider 多半是 model / voice / format 名字不对或 apiKey 错；" +
             "插件 provider 看它要的鉴权字段填没填（list_tts_providers 看 configFields）",
@@ -2291,7 +2295,8 @@ const TOOLS: ToolDef[] = [
         );
       }
       if (data.stage === "provider") {
-        return `ℹ️ ${data.detail}${nl}当前 provider：${data.provider}（插件提供，配置在它自己的界面里）`;
+        const checked = /自检通过/.test(data.detail ?? "");
+        return `${checked ? "✅" : "ℹ️"} ${data.detail}${nl}当前 provider：${data.provider}（插件提供，配置在它自己的界面里）`;
       }
       if (data.stage === "reach") {
         return (
@@ -2733,7 +2738,7 @@ const TOOLS: ToolDef[] = [
   },
   {
     name: "tts_synthesize",
-    description: `把文本合成语音（走配置好的本地 TTS 服务），音频存进 assets；addAs=track 直接加音效轨，music 替换背景音乐，sceneId 放进指定场景。
+    description: `把文本合成语音（走当前配置的语音来源：内置服务或插件 provider，见 get_tts_config 的 provider），音频存进 assets；addAs=track 直接加音效轨，music 替换背景音乐，sceneId 放进指定场景。
 
 【传入文本的格式很重要，直接决定读音】
 - 默认自动转义（escape=true）：90% → 百分之九十、2026-10-25 → 2026年10月25日、1234565 → 一百二十三万四千五百六十五；已经写成中文读法的文本不会被转坏。

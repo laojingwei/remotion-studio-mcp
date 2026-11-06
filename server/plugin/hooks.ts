@@ -549,10 +549,25 @@ export async function ensurePluginHooks(): Promise<HookStatus> {
         registered++;
       }
       if (!registered) {
-        errs.push({
-          pluginId: p.id,
-          message: `入口里没有可识别的钩子（支持：${HOOK_KINDS.join(" / ")}）`,
-        });
+        /*
+         * 没有钩子不一定是错误：代码插件可以只导出 tools / ttsProviders / media 处理器
+         * （它们分别由 plugin-tools / tts-providers / 媒体管线消费，不经过这里）。
+         * 一个只有 ttsProviders 的插件在此被判"没有可识别的钩子"，用户会看到一条
+         * 假错误，还以为语音插件没装上——所以只对"什么都没导出"的插件报错。
+         */
+        const mod2 = mod as Record<string, unknown>;
+        const hasOtherExports =
+          Array.isArray(table.tools) ||
+          Array.isArray(mod2.tools) ||
+          (typeof table.ttsProviders === "object" && table.ttsProviders !== null) ||
+          (typeof mod2.ttsProviders === "object" && mod2.ttsProviders !== null) ||
+          typeof table["media:process"] === "function";
+        if (!hasOtherExports) {
+          errs.push({
+            pluginId: p.id,
+            message: `入口里没有可识别的钩子（支持：${HOOK_KINDS.join(" / ")}；只提供工具/语音的插件可忽略本条）`,
+          });
+        }
       }
     }
 

@@ -97,8 +97,11 @@ function pluginBlock(p: DiscoveredPlugin): string[] {
     if (kinds.length) {
       out.push(`   钩子：${kinds.map((k) => HOOK_LABEL[k] ?? k).join("、")}`);
     } else if (p.enabled && !p.errors.length && !mine.length && !hasExampleEntry(p.dir)) {
-      // 示例未启用时上面已经说过了，这里再说一遍只是噪音
-      out.push(`   钩子：（入口没导出可识别的钩子——检查 export default 里有没有 ${HOOK_KINDS.join(" / ")}）`);
+      // 示例未启用时上面已经说过了，这里再说一遍只是噪音。
+      // 注意措辞：代码插件可以只提供工具/语音/文件处理（不经过钩子总线），这不是错误
+      out.push(
+        `   钩子：（没挂任何钩子——只提供工具/语音/文件处理的代码插件属正常；想要钩子就看 export default 里有没有 ${HOOK_KINDS.join(" / ")}）`,
+      );
     }
     /*
      * 入口不可用时上面已经把那句话说清楚了（`hooks.ts` 也会把同一条塞进 errors），

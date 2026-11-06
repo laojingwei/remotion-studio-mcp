@@ -41,6 +41,7 @@ const PROVIDE_LABEL: Record<string, string> = {
   template: "模板",
   elements: "元素库",
   brief: "问诊",
+  "brief.steps": "问诊",
   scene: "场景组件",
   hooks: "钩子",
   tool: "工具",
@@ -49,7 +50,27 @@ const PROVIDE_LABEL: Record<string, string> = {
   "scene3d.sky": "3D 天空",
   "scene3d.preset": "3D 预设",
   "scene3d.look": "3D 观感",
+  "scene3d.pass": "3D 后期",
+  transition: "转场",
+  tts: "语音",
 };
+
+/** tab 的固定排序：出现几个显示几个，顺序稳定不随安装顺序跳 */
+const TAB_ORDER = [
+  "hooks",
+  "scene",
+  "skill",
+  "style",
+  "template",
+  "elements",
+  "brief.steps",
+  "tts",
+  "transition",
+  "scene3d.sky",
+  "scene3d.look",
+  "scene3d.preset",
+  "scene3d.pass",
+];
 
 const provideText = (p: string[]) => (p.length ? p.map((x) => PROVIDE_LABEL[x] ?? x).join("、") : "无可识别的贡献项");
 
@@ -235,6 +256,28 @@ export const PluginsDialog: React.FC<{ open: boolean; onClose: () => void }> = (
     return `${plugins.length} 个${plugins.length ? `（${on} 个启用）` : ""}`;
   }, [plugins]);
 
+  /*
+   * 类型 tab：按插件实际声明（provides）动态生成，声明了什么类型就出现什么 tab。
+   * 没装任何插件的类型不占位置；顺序按 TAB_ORDER 固定，不随安装先后跳。
+   * 当前 tab 的类型被全部卸掉时自动退回「全部」，避免出现"没有任何选中项"的死态。
+   */
+  const [tab, setTab] = useState<string>("all");
+  const tabs = useMemo(() => {
+    const counts = new Map<string, number>();
+    for (const p of plugins) for (const k of p.provides) counts.set(k, (counts.get(k) ?? 0) + 1);
+    const kinds = TAB_ORDER.filter((k) => counts.has(k));
+    for (const k of counts.keys()) if (!kinds.includes(k)) kinds.push(k); // 声明了未知类型也能筛
+    return [
+      { id: "all", label: "全部", count: plugins.length },
+      ...kinds.map((k) => ({ id: k, label: PROVIDE_LABEL[k] ?? k, count: counts.get(k) ?? 0 })),
+    ];
+  }, [plugins]);
+  const activeTab = tabs.some((t) => t.id === tab) ? tab : "all";
+  const visiblePlugins = useMemo(
+    () => (activeTab === "all" ? plugins : plugins.filter((p) => p.provides.includes(activeTab))),
+    [plugins, activeTab],
+  );
+
   if (!open) return null;
 
   const doInstall = async () => {
@@ -293,23 +336,38 @@ export const PluginsDialog: React.FC<{ open: boolean; onClose: () => void }> = (
     }
   };
 
+  /**
+   * 卸载确认：一次弹窗给两档后果，每档把"能不能恢复"写在选项里。
+   * 回收站是推荐项（焦点默认落在它上面）；永久删除红字标出、必须主动点，
+   * 不做"先确认、再二次确认"——两档后果一次看清，比连环弹窗少一层打断。
+   */
   const doRemove = (p: PluginItem) => {
+    const run = async (purge: boolean) => {
+      try {
+        const r = await removePlugin(p.id, { purge });
+        notify(purge ? `已永久删除 ${p.name}` : `已卸载 ${p.name}`);
+        setMsg(purge ? "已彻底删除，不可恢复" : `已移到回收站：${r.trash}`);
+        await load();
+      } catch (err) {
+        setMsg(err instanceof Error ? err.message : "卸载失败");
+      }
+    };
     askConfirm({
-      title: `卸载「${p.name}」？`,
-      message: `插件会从 plugins/ 移走，立刻失效。文件不会删除，而是挪到回收目录，需要时可以捡回来。`,
-      confirmLabel: "卸载",
-      onConfirm: () => {
-        void (async () => {
-          try {
-            const r = await removePlugin(p.id);
-            notify(`已卸载 ${p.name}`);
-            setMsg(`已移到：${r.trash}`);
-            await load();
-          } catch (err) {
-            setMsg(err instanceof Error ? err.message : "卸载失败");
-          }
-        })();
-      },
+      title: `卸载「${p.name}」`,
+      message: "卸载后插件立刻失效，它提供的技能、风格、工具等全部从清单消失。请选择处理方式：",
+      choices: [
+        {
+          label: "放入插件回收站（推荐）",
+          desc: "文件移入回收目录，不真删；后悔了可以捡回来。",
+          onChoose: () => void run(false),
+        },
+        {
+          label: "永久删除",
+          desc: "不经过回收站，插件文件被彻底删除，不可恢复。",
+          danger: true,
+          onChoose: () => void run(true),
+        },
+      ],
     });
   };
 
@@ -345,7 +403,13 @@ export const PluginsDialog: React.FC<{ open: boolean; onClose: () => void }> = (
           </button>
         </div>
 
-        <div className="plg-body">
+        {/*
+          布局：上下两段。
+          上段（安装入口/预检/任务日志）固定不滚——它短且随时要操作；
+          下段（插件列表/未识别目录）单独滚动——插件一多它是唯一需要翻的内容。
+          日志自身还有 150px 内滚上限，保证上段不会把下段挤没。
+        */}
+        <div className="plg-top">
           <p className="plg-intro">
             粘贴一个 git 地址、npm 包名，或者选一个本地目录——下载、装依赖、执行构建、检查能不能用，都在这里自动完成。
             装好立刻生效，不用重启。
@@ -500,18 +564,50 @@ export const PluginsDialog: React.FC<{ open: boolean; onClose: () => void }> = (
           ) : null}
 
           {msg ? <div className="plg-msg">{msg}</div> : null}
+        </div>
 
+        {/*
+          类型 tab：按已装插件声明的 provides 动态生成（有几个类型出现几个）。
+          放在滚动区外——切类型时它不动，下面才是滚动的列表。
+        */}
+        {tabs.length > 1 ? (
+          <div className="plg-tabs" role="tablist">
+            {tabs.map((t) => (
+              <button
+                key={t.id}
+                role="tab"
+                aria-selected={t.id === activeTab}
+                className={`plg-tab ${t.id === activeTab ? "is-on" : ""}`}
+                onClick={() => setTab(t.id)}
+              >
+                {t.label}
+                <i className="plg-tab-count">{t.count}</i>
+              </button>
+            ))}
+          </div>
+        ) : null}
+
+        <div className="plg-scroll">
           <div className="plg-list">
-            {plugins.length === 0 && !loading ? (
-              <div className="plg-empty">还没有装插件。上面粘贴一个地址试试，或者把插件文件夹直接放进 plugins/。</div>
+            {visiblePlugins.length === 0 && !loading ? (
+              <div className="plg-empty">
+                {activeTab === "all"
+                  ? "还没有装插件。上面粘贴一个地址试试，或者把插件文件夹直接放进 plugins/。"
+                  : "这个类型下还没有插件。"}
+              </div>
             ) : null}
-            {plugins.map((p) => {
+            {visiblePlugins.map((p) => {
               const broken = p.needsBuild;
               /*
                * 「声明了钩子，但一个都没注册上」和「生效」在清单层面长得一样，
                * 这是最误导人的一种状态：用户以为它在管画面质量，其实它什么都没做。
+               *
+               * 但钩子不是代码插件唯一的生效渠道——工具（tool_search/tool_call）和
+               * 语音 provider 走各自的注册表。只挂了语音/工具的插件（如 glm-tts）是
+               * 正常生效的，不能打"未生效"。
                */
-              const dormant = p.enabled && p.provides.includes("hooks") && p.hooks.length === 0;
+              const dormant =
+                p.enabled && p.provides.includes("hooks") && p.hooks.length === 0 && !p.tts && p.tools.length === 0;
               return (
                 <div
                   className={`plg-item ${p.enabled ? "" : "is-off"} ${broken ? "is-broken" : ""} ${dormant ? "is-dormant" : ""}`}
@@ -528,10 +624,22 @@ export const PluginsDialog: React.FC<{ open: boolean; onClose: () => void }> = (
                     </div>
                     <div className="plg-item-sub">
                       {provideText(p.provides)}
-                      {/* 钩子这一项要说实际注册了哪几个，而不是"提供了钩子" */}
+                      {/*
+                        钩子这一项要说实际注册了哪几个，而不是"提供了钩子"。
+                        没挂钩子但靠语音/工具生效的，说清它真实的生效渠道——
+                        "没有注册任何钩子"对 glm-tts 这类插件是一句吓唬人的废话。
+                      */}
                       {p.provides.includes("hooks") ? (
                         <span className="plg-hook-note">
-                          {p.hooks.length ? `已注册：${p.hooks.join("、")}` : "没有注册任何钩子"}
+                          {p.hooks.length
+                            ? `已注册：${p.hooks.join("、")}`
+                            : p.tts && p.tools.length
+                              ? "未挂钩子；以语音 provider + 工具方式生效"
+                              : p.tts
+                                ? "未挂钩子；以语音 provider 方式生效"
+                                : p.tools.length
+                                  ? `未挂钩子；以工具方式生效（${p.tools.join("、")}）`
+                                  : "没有注册任何钩子"}
                         </span>
                       ) : null}
                     </div>
@@ -547,7 +655,7 @@ export const PluginsDialog: React.FC<{ open: boolean; onClose: () => void }> = (
                           ? "目录里只有 plugin.ts.example 模板。把文件名里的 .example 去掉（改成 plugin.ts），它才会被加载。"
                           : p.entry.kind === "unbuilt"
                             ? `没有可用的代码入口：${p.entry.detail}`
-                            : "入口能加载，但里面没有导出任何钩子（应 export default { \"audit:rules\": fn }）。"}
+                            : "入口能加载，但没导出任何钩子、工具或语音 provider——export default 里放 \"audit:rules\" 这类钩子、tools 数组或 ttsProviders 至少一样，它才能干活。"}
                       </div>
                     ) : null}
                     {p.errors.map((e, i) => (
@@ -579,7 +687,12 @@ export const PluginsDialog: React.FC<{ open: boolean; onClose: () => void }> = (
                     <button className="ghost plg-mini" onClick={() => void doToggle(p)}>
                       {p.enabled ? "停用" : "启用"}
                     </button>
-                    <button className="ghost plg-mini danger" onClick={() => doRemove(p)} disabled={active}>
+                    <button
+                      className="ghost plg-mini danger"
+                      onClick={() => doRemove(p)}
+                      disabled={active}
+                      title="可选择移入插件回收站（可恢复）或永久删除"
+                    >
                       卸载
                     </button>
                   </div>
@@ -593,8 +706,8 @@ export const PluginsDialog: React.FC<{ open: boolean; onClose: () => void }> = (
             })}
           </div>
 
-          {/* 装错了、装坏了的残骸：必须可见可删，否则用户只能去翻文件系统 */}
-          {orphans.length ? (
+          {/* 装错了、装坏了的残骸：必须可见可删，否则用户只能去翻文件系统。只在「全部」tab 显示 */}
+          {activeTab === "all" && orphans.length ? (
             <div className="plg-orphans">
               <div className="plg-section-title">
                 未识别的目录 <span className="plg-count">{orphans.length}</span>
@@ -626,9 +739,13 @@ export const PluginsDialog: React.FC<{ open: boolean; onClose: () => void }> = (
             </div>
           ) : null}
         </div>
+        {/* /.plg-scroll —— 以下为固定底栏 */}
 
         <div className="plg-foot">
-          <span>卸载不删文件：{trashDir || "data/.plugin-trash"}</span>
+          <span>
+            卸载默认进回收站：{trashDir || "data/.plugin-trash"}
+            （卸载时也可选择永久删除）
+          </span>
           <span>装完即生效，不需要重启</span>
         </div>
       </div>

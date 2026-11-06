@@ -28,12 +28,14 @@ import {
   cancelJob,
   cleanupPluginStaging,
   detectSourceKind,
+  ensureTtsProviders,
   getJob,
   guessTargetName,
   listJobs,
   hasExampleEntry,
   hookKindsOf,
   pluginRoots,
+  pluginToolNamesOf,
   readPackageJson,
   removePlugin,
   scanOrphanDirs,
@@ -44,6 +46,7 @@ import {
   seedExamplePluginsDisabled,
   startInstall,
   startRepair,
+  ttsProviderCatalog,
   declaresCodeEntry,
   getRegistry,
   setRegistry,
@@ -92,7 +95,7 @@ import {
 } from "./annotation.service";
 import { readToolCalls, toolStats } from "./tool-log.service";
 import { getTtsConfig, saveTtsConfig, synthesize } from "./tts.service";
-import { BUILTIN_TTS_PROVIDER_ID } from "./plugin/tts-providers";
+import { BUILTIN_TTS_PROVIDER_ID, getTtsProvider } from "./plugin/tts-providers";
 import { z } from "zod";
 import { zodToJsonSchema } from "zod-to-json-schema";
 import { TOOLS, CORE_TOOL_NAMES, exposeAllTools, validateToolArgs } from "./mcp-tools";
@@ -436,6 +439,25 @@ app.post("/api/tts/synthesize", async (c) => {
 app.get("/api/tts/speakers", async (c) => {
   try {
     const cfg = getTtsConfig();
+    /*
+     * 音色表按来源分流：插件来源取插件**声明的** voices（静态数据，不碰厂商、不探活），
+     * 面板只做映射——和 formats 同一个原则。?provider= 显式指定（面板切来源时用），
+     * 不传则跟随当前配置的来源。
+     */
+    const providerId =
+      String(c.req.query("provider") ?? "").trim() ||
+      String(cfg.provider ?? "").trim() ||
+      BUILTIN_TTS_PROVIDER_ID;
+    const plugin = providerId !== BUILTIN_TTS_PROVIDER_ID ? await getTtsProvider(providerId).catch(() => undefined) : undefined;
+    if (plugin) {
+      if (typeof plugin.mod.voices !== "function") {
+        return c.json({ error: `插件 provider「${providerId}」没有声明音色列表（voices）` }, 400);
+      }
+      const voices = await plugin.mod.voices(cfg.providers?.[providerId] ?? {});
+      return c.json({
+        speakers: Object.fromEntries((voices ?? []).map((v) => [v.id, v.label ?? v.language ?? ""])),
+      });
+    }
     const openai = /\/v1\/audio\/speech\/?$/.test(cfg.endpoint);
     const base = cfg.endpoint
       .replace(/\/v1\/audio\/speech\/?$/, "")
@@ -477,6 +499,9 @@ app.post("/api/tts/test", async (c) => {
  * 直连厂商（可能根本没有 endpoint）。以前这里不分情况一律拿 endpoint 探测，插件
  * provider 明明可用、只要本地那个服务没起，预检就报「连不上」——然后人跑去查本机端口。
  */
+/** 插件自检（check）的超时：探测要便宜，给不到合成那么长的预算 */
+const PLUGIN_CHECK_TIMEOUT_MS = 15_000;
+
 app.post("/api/tts/check", async (c) => {
   const body = (await c.req.json().catch(() => ({}))) as { deep?: boolean };
   const cfg = getTtsConfig();
@@ -492,6 +517,49 @@ app.post("/api/tts/check", async (c) => {
   let reachMs = 0;
 
   if (byPlugin) {
+    /*
+     * 插件 provider 的浅层探测：插件自己提供了 check 方法就直接跑它——
+     * 这回答的才是 agent 真正要的"现在能不能用"（key 有效/余额够），
+     * 而不是"用的哪家"。check 是插件声明的廉价探测（如 2 字最小合成），
+     * 同样套超时兜底；没提供 check 的才退回"只报名字 + 建议 deep"。
+     */
+    const provider = await getTtsProvider(providerId).catch(() => undefined);
+    if (provider?.mod.check) {
+      const t0 = Date.now();
+      const ctrl = new AbortController();
+      const timer = setTimeout(() => ctrl.abort(), PLUGIN_CHECK_TIMEOUT_MS);
+      try {
+        const r = await Promise.race([
+          Promise.resolve(
+            provider.mod.check({ config: cfg.providers?.[providerId] ?? {}, signal: ctrl.signal }),
+          ),
+          new Promise<never>((_, rej) =>
+            setTimeout(() => rej(new Error(`插件自检超过 ${PLUGIN_CHECK_TIMEOUT_MS / 1000} 秒没返回`)), PLUGIN_CHECK_TIMEOUT_MS + 3_000),
+          ),
+        ]);
+        const out = (r ?? {}) as { ok?: boolean; detail?: string; error?: string };
+        if (out.ok === false) {
+          return c.json(
+            { ok: false, stage: "check", provider: providerId, ms: Date.now() - t0, error: out.error ?? "插件自检未通过" },
+            400,
+          );
+        }
+        return c.json({
+          ok: true,
+          stage: "provider",
+          provider: providerId,
+          ms: Date.now() - t0,
+          detail: `插件自检通过${out.detail ? `：${out.detail}` : ""}`,
+        });
+      } catch (err) {
+        return c.json(
+          { ok: false, stage: "check", provider: providerId, ms: Date.now() - t0, error: (err as Error).message },
+          400,
+        );
+      } finally {
+        clearTimeout(timer);
+      }
+    }
     if (!body?.deep) {
       return c.json({
         ok: true,
@@ -499,7 +567,7 @@ app.post("/api/tts/check", async (c) => {
         provider: providerId,
         detail:
           `当前用的是插件 provider「${providerId}」，它直连厂商、不走本机地址探测。` +
-          `要确认整条链路就加 deep=true 真合成一句（会真的调一次厂商接口）。`,
+          `它没提供自检方法（check），要确认整条链路就加 deep=true 真合成一句（会真的调一次厂商接口）。`,
       });
     }
   } else {
@@ -1254,6 +1322,15 @@ app.get("/api/plugins", async (c) => {
     await ensurePluginHooks().catch(() => {
       /* 加载失败会体现在 hookStatus().errors 里，不影响列表本身 */
     });
+    /*
+     * 钩子不是代码插件唯一的生效渠道：工具（tool_search/tool_call）与语音 provider
+     * 走各自的注册表。面板要判断"它到底生效没有"就得拿到**全部渠道的实际状态**——
+     * 否则一个只导出 ttsProviders 的插件会被误判成"未生效"。
+     * 两个 ensure 都幂等且便宜（指纹没变只是 stat）。
+     */
+    await ensurePluginTools().catch(() => {});
+    await ensureTtsProviders().catch(() => {});
+    const ttsByPlugin = new Set((await ttsProviderCatalog().catch(() => ({ providers: [] as { pluginId: string }[] }))).providers.map((x) => x.pluginId));
     const plugins = scanPlugins().map((p) => {
       const entry = resolvePluginEntry(p.dir);
       const pkg = readPackageJson(p.dir);
@@ -1275,6 +1352,10 @@ app.get("/api/plugins", async (c) => {
         canRepair: !!pkg?.scripts?.build || depCount > 0,
         /** 实际注册到的钩子（不是清单声明的） */
         hooks: hookKindsOf(p.id),
+        /** 实际注册到的插件工具名（tool_search 能搜到的；没有就空数组） */
+        tools: pluginToolNamesOf(p.id),
+        /** 是否注册了语音 provider（tts_synthesize / tts_narration 走它） */
+        tts: ttsByPlugin.has(p.id),
         /**
          * 目录里只有 `plugin.ts.example` 这种模板 —— 示例插件的"未启用"形态，
          * 不是错误，但必须让用户看见"它现在什么都没干"。
@@ -1491,12 +1572,14 @@ app.post("/api/plugins/orphans/remove", async (c) => {
 });
 
 /**
- * 卸载：**不删文件**，挪到 data/.plugin-trash/。
- * 插件目录里可能有作者自己积累的配置，一键删除不可逆；挪走既能立刻消失，也能捡回来。
+ * 卸载插件。默认挪到 data/.plugin-trash/（可恢复）；
+ * body 带 { purge: true } 时彻底删除——这个分支只服务于前端确认框里
+ * 用户显式选了「永久删除」，平时不要主动传它。
  */
-app.post("/api/plugins/:id/remove", (c) => {
+app.post("/api/plugins/:id/remove", async (c) => {
   try {
-    return c.json(removePlugin(c.req.param("id")));
+    const body = (await c.req.json().catch(() => ({}))) as { purge?: boolean };
+    return c.json(removePlugin(c.req.param("id"), { purge: body.purge === true }));
   } catch (err) {
     return fail(c, err);
   }

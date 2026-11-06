@@ -229,7 +229,9 @@ plugins/我的插件/
   装完它会出现在「未识别的目录」里，随时能删
 
 列表里每个插件可以直接**停用 / 启用**（文件不动）、**重建**（改了源码时重跑 install + build）、
-**卸载**（不删文件，挪到 `data/.plugin-trash/`，后悔了能捡回来）。
+**卸载**——卸载有确认框，两种处理方式任选：
+**放入插件回收站**（默认推荐，挪到 `data/.plugin-trash/`，后悔了能捡回来）或
+**永久删除**（跳过回收站，彻底删除，不可恢复）。
 
 ### 不想用面板？（或者面板里装失败了）
 
@@ -628,7 +630,7 @@ tts_synthesize / tts_narration                      # 调用方式完全不变
 配置存在 `data/tts-config.json` 的 `providers[id]` 里，按 provider 合并——改一家不会清掉别家。
 老配置（endpoint/apiKey/model…）不用改：它就是内置 `openai` provider 的配置。
 
-**自带界面的 TTS 插件注意落点**：你的界面要往 `PUT /api/tts/config` 写
+**自带界面的 TTS 插件注意落点**：你的界面要往 `POST /api/tts/config` 写
 `{ provider: "你的id", providers: { "你的id": { appid: "...", ... } } }`——
 **不要**写进 `PUT /api/plugin-config/<id>`。那是通用的插件配置存储，宿主合成时读的是
 tts-config 里的 `providers[id]`，写错地方用户会看到「还缺 appid」，但明明已经填了。

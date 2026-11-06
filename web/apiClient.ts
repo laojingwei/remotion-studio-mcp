@@ -935,8 +935,12 @@ export type TtsProviderInfo = {
   hint?: string;
   /** 来自哪个插件（打开它的界面填配置用） */
   pluginId: string;
-  configFields: { key: string; label?: string; secret?: boolean; required?: boolean }[];
+  configFields: { key: string; label?: string; secret?: boolean; required?: boolean; hint?: string }[];
+  /** 插件声明能输出的音频格式（面板把它映射成选项，选中值经 format 传回插件） */
+  formats?: string[];
   hasVoices: boolean;
+  /** 插件声明支持风格指令（instruct）；没声明时面板不显示"风格指令"输入框 */
+  hasInstruct: boolean;
 };
 
 export async function fetchTtsProviders(): Promise<{ providers: TtsProviderInfo[]; errors: string[] }> {
@@ -985,9 +989,13 @@ export async function ttsSynthesize(
   return data;
 }
 
-/** 音色列表（Qwen3-TTS 等本地服务的 /speakers） */
-export async function fetchTtsSpeakers(): Promise<Record<string, string>> {
-  const res = await fetch("/api/tts/speakers");
+/**
+ * 音色表。内置来源 = 本地服务的 /speakers；插件来源 = 插件声明的 voices（面板只做映射）。
+ * provider 不传时服务端跟随当前配置的来源。
+ */
+export async function fetchTtsSpeakers(provider?: string): Promise<Record<string, string>> {
+  const q = provider ? `?provider=${encodeURIComponent(provider)}` : "";
+  const res = await fetch(`/api/tts/speakers${q}`);
   const data = await res.json();
   if (!res.ok) throw new Error(data.error ?? "获取音色失败");
   return (data.speakers ?? {}) as Record<string, string>;
@@ -1203,6 +1211,10 @@ export type PluginItem = {
   needsBuild: boolean;
   /** 实际注册到的钩子（不是清单声明的） */
   hooks: string[];
+  /** 实际注册到的插件工具名（没有就空数组） */
+  tools: string[];
+  /** 是否注册了语音 provider */
+  tts: boolean;
   /** 目录里只有 `plugin.ts.example` 这种模板，还没启用 */
   templateOnly: boolean;
   /** 有没有自带界面（plugins/<名>/ui/index.html） */
@@ -1334,8 +1346,20 @@ export async function togglePlugin(id: string, enabled: boolean): Promise<boolea
   return data.enabled;
 }
 
-export async function removePlugin(id: string): Promise<{ dir: string; trash: string }> {
-  const res = await fetch(`/api/plugins/${encodeURIComponent(id)}/remove`, { method: "POST" });
+/**
+ * 卸载插件。
+ * 默认挪进回收站（可恢复）；purge=true 彻底删除、不可恢复——
+ * 只在用户于确认框里明确选了「永久删除」时才传。
+ */
+export async function removePlugin(
+  id: string,
+  opts: { purge?: boolean } = {},
+): Promise<{ dir: string; trash?: string; purged?: boolean }> {
+  const res = await fetch(`/api/plugins/${encodeURIComponent(id)}/remove`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ purge: opts.purge === true }),
+  });
   const data = await res.json();
   if (!res.ok) throw new Error(data.error ?? "卸载失败");
   return data;

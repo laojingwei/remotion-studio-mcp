@@ -1265,7 +1265,7 @@ export default function App() {
                 }}
               >
                 <span>语音</span>
-                <span className="menu-meta">本地 TTS</span>
+                <span className="menu-meta">语音合成 · 厂商可切换</span>
               </button>
             </div>
           ) : null}
