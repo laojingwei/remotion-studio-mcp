@@ -2538,6 +2538,90 @@ test("转场：写进生成文件（编辑器与成片读同一份，预览必�
   fs.rmSync(out, { force: true });
 });
 
+/* ──────────────── 语音 provider（2026-11-06） ──────────────── */
+
+const { ensureTtsProviders, resetTtsProviders, ttsProviderCatalog, getTtsProvider } = await import(
+  "../server/plugin/tts-providers"
+);
+
+/**
+ * 插件 provider 的加载与"内置优先/先装优先"。
+ *
+ * 这里只验注册表这一层：真合成要起网络或写盘，属于 e2e（单独跑）。
+ * 但**注册表搞错了整条链就废**——比如 id 冲突时后装的静默覆盖前面的，
+ * 用户会看到"我装的 provider 一会被换掉"这种查不动的问题。
+ */
+await testAsync("语音 provider：插件入口导出的 ttsProviders 能被发现", async () => {
+  resetPlugins();
+  resetTtsProviders();
+  write(
+    "vt/plugin.ts",
+    `export const ttsProviders = {
+      "probe-tts": {
+        meta: { label: "探针语音", configFields: [{ key: "token", secret: true, required: true }] },
+        voices: () => [{ id: "v1", label: "音色一" }],
+        synthesize: async () => ({ audio: new Uint8Array([1, 2, 3]) }),
+      },
+    };`,
+  );
+
+  const r = await ensureTtsProviders();
+  assert.equal(r.errors.length, 0, `不该有报错：${JSON.stringify(r.errors)}`);
+  const cat = await ttsProviderCatalog();
+  const p = cat.providers.find((x) => x.id === "probe-tts");
+  assert.ok(p, "provider 应被收集");
+  assert.equal(p?.label, "探针语音");
+  assert.equal(p?.pluginId, "vt");
+  assert.equal(p?.configFields[0].key, "token");
+  assert.equal(p?.configFields[0].secret, true);
+  assert.equal(p?.hasVoices, true, "有 voices 要标出来（面板/工具据此显示「能列音色」）");
+
+  // 真拿到模块（合成时要用）
+  const got = await getTtsProvider("probe-tts");
+  assert.equal(typeof got?.mod.synthesize, "function");
+
+  setPluginEnabled("vt", false);
+  resetTtsProviders();
+  const off = await ttsProviderCatalog();
+  assert.equal(off.providers.some((x) => x.id === "probe-tts"), false, "停用插件后 provider 不该还在");
+
+  setPluginEnabled("vt", true);
+  resetPlugins();
+  resetTtsProviders();
+});
+
+await testAsync("语音 provider：内置 id 不可占、缺 synthesize 要报、重名先装优先", async () => {
+  resetPlugins();
+  resetTtsProviders();
+  write(
+    "vt2/plugin.ts",
+    `export const ttsProviders = {
+      openai: { synthesize: async () => ({ audio: new Uint8Array([1]) }) },
+      "no-synth": { meta: { label: "空的" } },
+      "Bad Id": { synthesize: async () => ({ audio: new Uint8Array([1]) }) },
+    };`,
+  );
+  const r = await ensureTtsProviders();
+  assert.ok(r.errors.some((e) => e.includes("与内置重名")), `要报内置重名：${JSON.stringify(r.errors)}`);
+  assert.ok(r.errors.some((e) => e.includes("synthesize")), `要报缺 synthesize：${JSON.stringify(r.errors)}`);
+  assert.ok(r.errors.some((e) => e.includes("不合法")), `要报 id 非法：${JSON.stringify(r.errors)}`);
+  const cat = await ttsProviderCatalog();
+  assert.equal(cat.providers.length, 0, "三个都该被拒");
+
+  // 两个插件抢同一个 id：先扫到的留下，后者报"被占用"
+  resetPlugins();
+  resetTtsProviders();
+  write("vt3/plugin.ts", `export const ttsProviders = { dup: { synthesize: async () => ({ audio: new Uint8Array([1]) }) } };`);
+  write("vt4/plugin.ts", `export const ttsProviders = { dup: { synthesize: async () => ({ audio: new Uint8Array([2]) }) } };`);
+  const r2 = await ensureTtsProviders();
+  assert.ok(r2.errors.some((e) => e.includes("占用")), `要报 id 冲突：${JSON.stringify(r2.errors)}`);
+  const cat2 = await ttsProviderCatalog();
+  assert.equal(cat2.providers.filter((x) => x.id === "dup").length, 1, "同名只留一个");
+
+  resetPlugins();
+  resetTtsProviders();
+});
+
 /* ────────────────────────── 收尾 ────────────────────────── */
 fs.rmSync(TMP, { recursive: true, force: true });
 

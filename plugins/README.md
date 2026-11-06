@@ -479,6 +479,70 @@ schema 会静默失效。只声明数据（`string` / `number` / `boolean` / `en
 
 可运行示例：`plugins/_example-tool/`（语速体检 + 批量编号）。
 
+## 语音合成：适配任意厂商
+
+内置实现只有一条路——OpenAI 兼容协议 + 一个 `customBody` 占位模板。而各家的鉴权、
+请求体、响应体、分片规则都不一样（签名、先换 token、音频塞 JSON base64、异步轮询任务……），
+**靠模板拼是拼不出来的**。所以"文字 → 音频"这一步整个交给插件。
+
+在插件入口 `plugin.ts` 里导出 `ttsProviders`：
+
+```ts
+export const ttsProviders = {
+  "volc-tts": {
+    meta: {
+      label: "火山引擎",
+      hint: "需要在控制台开通语音合成",
+      configFields: [
+        { key: "appid", label: "AppID", required: true },
+        { key: "token", label: "Access Token", secret: true, required: true },
+      ],
+    },
+    /** 可选：能列音色就列（宿主会在工具/面板里显示） */
+    voices: (config) => [{ id: "zh_female_1", label: "晓晓", language: "zh" }],
+    synthesize: async ({ text, voice, speed, format, config, signal }) => {
+      const res = await fetch("https://openspeech.bytedance.com/api/v1/tts", {
+        method: "POST",
+        signal, // ← 请务必透传，宿主超时会 abort
+        headers: { "content-type": "application/json", authorization: `Bearer;${config.token}` },
+        body: JSON.stringify({ app: { appid: config.appid, token: config.token }, ... }),
+      });
+      if (!res.ok) throw new Error(`火山返回 ${res.status}`);
+      return { audio: new Uint8Array(await res.arrayBuffer()), contentType: "audio/mpeg" };
+    },
+  },
+};
+```
+
+返回 `{ audio }`（字节）或 `{ file: "/abs/path.mp3" }`（插件自己落了盘，适合 CLI 型 TTS）。
+
+### 宿主负责什么
+
+落盘（按工程归属）、响度归一到 -16 LUFS、时长探测、字幕时间轴对齐、`assets` 登记。
+插件只做"文字 → 音频字节"，不用管这些。
+
+### 宿主兜什么（三条，都不限制你怎么调厂商）
+
+| 兜什么 | 为什么 |
+|---|---|
+| 60 秒超时（`signal` + 宿主再 race 一道） | 插件忘了透传 signal 时也能杀掉，不会把合成请求挂死 |
+| 20MB 上限 + **按 magic bytes 认真是音频** | 厂商报错常返 200 + HTML/JSON，不认就会把错误页写成音频、渲染时才在 ffmpeg 那炸 |
+| **报错就报错，不静默回退内置** | 悄悄换回内置会让"配错了但出片了"变成最难查的坑 |
+
+必填字段（`configFields` 里 `required: true`）宿主会在调用前就检查，缺了直接告诉用户缺哪个——
+比让厂商返回一句英文 401 有用得多。
+
+### 怎么用
+
+```
+list_tts_providers                                  # 看有哪几家、各自要什么字段
+set_tts_config { provider: "volc-tts", providers: { "volc-tts": { appid: "...", token: "..." } } }
+tts_synthesize / tts_narration                      # 调用方式完全不变
+```
+
+配置存在 `data/tts-config.json` 的 `providers[id]` 里，按 provider 合并——改一家不会清掉别家。
+老配置（endpoint/apiKey/model…）不用改：它就是内置 `openai` provider 的配置。
+
 ## 文本处理：在字进工程之前改它
 
 字幕和稿件不是文件，是字段。所以"用我的插件处理字幕"= 在文本**写进工程之前**改写它：

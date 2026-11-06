@@ -2616,11 +2616,83 @@ const TOOLS: ToolDef[] = [
     },
   },
   {
+    name: "list_tts_providers",
+    description:
+      "列出可用的**语音合成 provider**：内置的 openai 兼容实现 + 插件适配的厂商（火山/阿里/腾讯/私有部署……）。\n" +
+      "每个 provider 会列出它要哪些配置字段（`configFields`）——每家鉴权方式不同，宿主不猜，由插件声明。\n" +
+      "用法：① 选一家 → `set_tts_config { provider: \"id\", providers: { \"id\": { 字段: 值 } } }`；\n" +
+      "      ② 然后照常 `tts_synthesize` / `tts_narration`，不用改调用参数。\n" +
+      "⚠ 插件 provider 报错时**不会静默退回内置**（那会让\"配错了但出片了\"变成最难查的坑），\n" +
+      "   所以看到合成失败先看 provider 的鉴权字段填对没有。",
+    shape: {},
+    run: async () => {
+      await ensureServer();
+      const res = await fetch(`${BASE}/api/tts/providers`);
+      const data = (await res.json()) as {
+        providers?: { id: string; label: string; hint?: string; pluginId: string; configFields: { key: string; label?: string; secret?: boolean; required?: boolean }[]; hasVoices: boolean }[];
+        errors?: string[];
+        error?: string;
+      };
+      if (!res.ok) throw new Error(data.error ?? "读取 provider 列表失败");
+
+      let current = "openai";
+      try {
+        const cfg = (await (await fetch(`${BASE}/api/tts/config`)).json()) as { config: { provider?: string } };
+        current = cfg.config.provider ?? "openai";
+      } catch {
+        /* 读不到就当默认 */
+      }
+
+      const out: string[] = [];
+      if (data.errors?.length) {
+        out.push("⚠ 有 provider 没能加载：");
+        for (const e of data.errors) out.push(`  · ${e}`);
+        out.push("");
+      }
+      out.push(`内置：openai（OpenAI 兼容协议，endpoint 可在 set_tts_config 里改）${current === "openai" ? " ← 当前使用" : ""}`);
+      const list = data.providers ?? [];
+      if (!list.length) {
+        out.push("");
+        out.push("没有插件提供 provider。放法：插件的 plugin.ts 里导出 ttsProviders 对象，");
+        out.push('  例如 export const ttsProviders = { "my-tts": { meta: {...}, synthesize: async (req) => ({ audio }) } }');
+        out.push("字段与返回值见 plugins/README.md 的「语音合成」一节。");
+        return out.join("\n");
+      }
+      out.push("");
+      out.push(`插件 provider（${list.length} 个）：`);
+      for (const p of list) {
+        out.push(`· ${p.id}（${p.label}）${current === p.id ? " ← 当前使用" : ""} · 来自插件 ${p.pluginId}`);
+        if (p.hint) out.push(`  ${p.hint}`);
+        if (p.configFields.length) {
+          out.push(
+            `  需要配置：${p.configFields
+              .map((f) => `${f.key}${f.required ? "（必填）" : ""}${f.secret ? "［密钥］" : ""}`)
+              .join("、")}`,
+          );
+        } else {
+          out.push("  不需要配置");
+        }
+        if (p.hasVoices) out.push("  能列音色（由插件向厂商查询）");
+      }
+      out.push("");
+      out.push('切到某家：set_tts_config { provider: "id", providers: { "id": { 字段: 值 } } }');
+      return out.join("\n");
+    },
+  },
+  {
     name: "set_tts_config",
     description:
-      "修改 TTS 配置（endpoint/apiKey/model/voice/format/speed/customBody），只传要改的字段。",
+      "修改 TTS 配置，只传要改的字段。\n" +
+      "- 用内置实现（默认）：填 endpoint/apiKey/model/voice/format/speed/customBody\n" +
+      "- 用插件 provider：填 provider=插件给的 id + providers[id] 里它要的那些字段（字段名见 list_tts_providers）\n" +
+      "各家的鉴权/请求体都不一样，宿主不猜——插件声明什么字段就填什么。",
     shape: {
-      endpoint: z.string().optional().describe("语音服务完整 URL"),
+      provider: z.string().optional().describe("用哪个 provider：'openai'=内置（默认），或插件提供的 id（list_tts_providers 查）"),
+      providers: z
+        .record(z.record(z.string()))
+        .optional()
+        .describe('各 provider 的自由配置，例如 { "volc-tts": { "appid": "xxx", "token": "yyy" } }。会按 provider 合并，不会清掉别家'),
+      endpoint: z.string().optional().describe("语音服务完整 URL（仅内置 openai provider 用）"),
       apiKey: z.string().optional().describe("Bearer token，没有就留空"),
       model: z.string().optional(),
       voice: z.string().optional().describe("默认音色"),
@@ -2637,8 +2709,9 @@ const TOOLS: ToolDef[] = [
         headers: { "content-type": "application/json" },
         body: JSON.stringify(patch),
       });
-      const data = (await res.json()) as { config: { endpoint: string } };
-      return `已保存 TTS 配置：${data.config.endpoint}`;
+      const data = (await res.json()) as { config: { endpoint: string; provider: string } };
+      return `已保存 TTS 配置。当前 provider：${data.config.provider}` +
+        (data.config.provider === "openai" ? `（内置，endpoint=${data.config.endpoint}）` : "（插件提供）");
     },
   },
   {

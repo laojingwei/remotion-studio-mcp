@@ -39,6 +39,7 @@ export const PROVIDE_KINDS = [
   "scene3d.look", //     scene3d/looks.json     → 3D 光线风格（内置 4 套 + 插件）
   "scene3d.pass", //     scene3d/passes.json    → 3D 后期 pass（受控 GLSL，只在 post.passes 显式启用时上镜）
   "transition", //       transitions/<id>.ts    → 入场/出场转场（文件名即 id，出入场由宿主反向复用）
+  "tts", //              plugin.ts 的 ttsProviders → 语音合成 provider（适配任意厂商）
   /* ── L1 注册表层 ── */
   "brief.steps", //      brief/steps.json       → 问诊步骤（替换或追加）
   "scene", //            scenes/<type>.json + <type>.tsx → 新场景类型
@@ -58,6 +59,7 @@ export const PROVIDE_LABEL: Record<ProvideKind, string> = {
   "scene3d.look": "3D 观感",
   "scene3d.pass": "3D 后期 pass",
   transition: "转场",
+  tts: "语音 provider",
   "brief.steps": "问诊步骤",
   scene: "场景组件",
   hooks: "流程钩子",
@@ -88,6 +90,7 @@ export const IMPLEMENTED_PROVIDES: ProvideKind[] = [
   "scene3d.preset",
   "scene3d.pass",
   "transition",
+  "tts",
 ];
 
 /**

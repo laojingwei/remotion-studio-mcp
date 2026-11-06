@@ -387,6 +387,22 @@ app.get("/api/orphans", (c) => {
 
 app.get("/api/tts/config", (c) => c.json({ config: getTtsConfig() }));
 
+/**
+ * 可用的语音 provider：内置 openai + 插件贡献的。
+ *
+ * 返回 `configFields` 是为了让面板/工具能**按各家自己的字段**渲染表单——
+ * 每家鉴权方式都不一样，宿主猜不出来，只能由插件声明。
+ */
+app.get("/api/tts/providers", async (c) => {
+  try {
+    const { ttsProviderCatalog } = await import("./plugin/tts-providers");
+    const cat = await ttsProviderCatalog();
+    return c.json({ builtin: "openai", ...cat });
+  } catch (err) {
+    return fail(c, err);
+  }
+});
+
 app.post("/api/tts/config", async (c) => {
   try {
     const body = (await c.req.json()) as Record<string, unknown>;
