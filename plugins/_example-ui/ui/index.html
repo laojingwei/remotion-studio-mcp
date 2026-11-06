@@ -46,10 +46,12 @@
       1. 读写自己的配置（GET/PUT /api/plugin-config/<插件id>）
       2. 调宿主的能力（这里拿 /api/tts/providers 举例）
       3. 跟随宿主配色（接收 studio:init 里的 CSS 变量）
+      4. 请求宿主调整浮窗（studio:resize / studio:close，可选）
   -->
   <h1>示例插件 · 设置</h1>
   <p class="hint">
-    这个页面完全由插件提供。宿主只把它挂进「插件」对话框，并给一个存配置的地方。
+    这个页面完全由插件提供，宿主把它装进一个可拖动、可缩放的浮窗里，并给一个存配置的地方。
+    窗口里的一切——布局、宽度、按钮——都由这个页面决定。
   </p>
 
   <div class="row">
@@ -69,6 +71,7 @@
     <button class="primary" id="save">保存</button>
     <button id="reload">重新读取</button>
     <button id="check">检查宿主 API</button>
+    <button id="taller">让浮窗更高</button>
   </div>
 
   <div id="status"></div>
@@ -134,9 +137,20 @@
     }
   }
 
+  /*
+   * 内容变多时可以请宿主把浮窗调高（高度会被夹在屏幕内）。
+   * 同理，`{ type: "studio:close" }` 可以让用户点完「保存」就把窗口收掉。
+   * 两条都是可选的：不发，用户也能自己拖、自己关。
+   */
+  function taller() {
+    parent.postMessage({ type: "studio:resize", height: 720 }, "*");
+    say("已请求宿主把窗口调到 720 高（会被屏幕边界夹住）");
+  }
+
   $("save").addEventListener("click", save);
   $("reload").addEventListener("click", load);
   $("check").addEventListener("click", check);
+  $("taller").addEventListener("click", taller);
 
   /* 宿主加载完成后会发一次主题变量，照着用就能和编辑器观感一致 */
   window.addEventListener("message", (ev) => {

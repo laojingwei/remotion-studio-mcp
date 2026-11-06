@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useRef, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   cancelPluginJob,
   detectPluginSource,
@@ -20,6 +20,7 @@ import {
 } from "../apiClient";
 import { useDoc } from "../store";
 import { askConfirm } from "../ui";
+import { PluginUiWindow, initialUiWin, type UiWin } from "./PluginUiWindow";
 
 /**
  * 插件面板：装、卸、停用、重建，一个地方全办。
@@ -114,15 +115,52 @@ export const PluginsDialog: React.FC<{ open: boolean; onClose: () => void }> = (
   const [busy, setBusy] = useState(false);
   const [loading, setLoading] = useState(false);
   /**
-   * 当前展开的是哪个插件的自制界面。
+   * 插件自带的界面：每个插件一个浮窗，可以同时开多个。
    *
-   * 用"只有一个"而不是多开：插件界面里常有密钥输入，同时开好几个既挤又容易填错栏。
+   * 存的是窗口几何（位置/大小/层级）而不是「开没开」——浮窗要能拖、能缩、能叠放，
+   * 这些状态必须落在宿主这边，窗口自己算会随重渲染丢掉。
+   * 关掉插件对话框时浮窗一起消失（它们属于这个面板）。
    */
-  const [uiOf, setUiOf] = useState<string | null>(null);
-  const uiFrame = useRef<HTMLIFrameElement | null>(null);
+  const [wins, setWins] = useState<Record<string, UiWin>>({});
+  const zTop = useRef(200);
   const logRef = useRef<HTMLDivElement | null>(null);
 
   const active = !!job && (job.status === "running" || job.status === "queued");
+
+  /**
+   * 打开界面：已经开着就只置顶，不重建。
+   *
+   * 重建会让插件页面里的输入（密钥、连接状态）全部丢掉——用户点两下按钮不该丢东西。
+   */
+  const openUi = useCallback((p: PluginItem) => {
+    setWins((prev) => {
+      const cur = prev[p.id];
+      const z = ++zTop.current;
+      return { ...prev, [p.id]: cur ? { ...cur, z } : { ...initialUiWin(Object.keys(prev).length), z } };
+    });
+  }, []);
+
+  const patchUi = useCallback((id: string, patch: Partial<UiWin>) => {
+    setWins((prev) => (prev[id] ? { ...prev, [id]: { ...prev[id], ...patch } } : prev));
+  }, []);
+
+  const closeUi = useCallback((id: string) => {
+    setWins((prev) => {
+      if (!prev[id]) return prev;
+      const next = { ...prev };
+      delete next[id];
+      return next;
+    });
+  }, []);
+
+  const focusUi = useCallback((id: string) => {
+    setWins((prev) => {
+      const cur = prev[id];
+      if (!cur) return prev;
+      if (cur.z === zTop.current) return prev; // 已经在最上面，别为一次点击留一个多余的渲染
+      return { ...prev, [id]: { ...cur, z: ++zTop.current } };
+    });
+  }, []);
 
   const load = async () => {
     setLoading(true);
@@ -219,6 +257,21 @@ export const PluginsDialog: React.FC<{ open: boolean; onClose: () => void }> = (
     const nearBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 60;
     if (nearBottom) el.scrollTop = el.scrollHeight;
   }, [job?.logs.length]);
+
+  /*
+   * 插件被卸载、或者目录里的 ui/ 被删掉之后，浮窗不能继续挂着——那会是一个
+   * 「看着还在，里面 404」的窗口。列表一刷新就跟着收掉。
+   */
+  useEffect(() => {
+    setWins((prev) => {
+      const ids = new Set(plugins.filter((p) => p.hasUi).map((p) => p.id));
+      const keep = Object.keys(prev).filter((id) => ids.has(id));
+      if (keep.length === Object.keys(prev).length) return prev;
+      const next: Record<string, UiWin> = {};
+      for (const id of keep) next[id] = prev[id]!;
+      return next;
+    });
+  }, [plugins]);
 
   const summary = useMemo(() => {
     const on = plugins.filter((p) => p.enabled).length;
@@ -324,6 +377,7 @@ export const PluginsDialog: React.FC<{ open: boolean; onClose: () => void }> = (
   };
 
   return (
+    <>
     <div className="modal-mask" onClick={onClose}>
       <div className="plg-dialog" onClick={(e) => e.stopPropagation()}>
         <div className="plg-head">
@@ -553,10 +607,11 @@ export const PluginsDialog: React.FC<{ open: boolean; onClose: () => void }> = (
                   <div className="plg-item-actions">
                     {p.hasUi ? (
                       <button
-                        className={`ghost plg-mini ${uiOf === p.id ? "is-on" : ""}`}
-                        onClick={() => setUiOf(uiOf === p.id ? null : p.id)}
+                        className={`ghost plg-mini ${wins[p.id] ? "is-on" : ""}`}
+                        onClick={() => openUi(p)}
+                        title={wins[p.id] ? "界面已经开着，点一下把它提到最前" : "打开插件自带的界面（独立浮窗，可拖动、可缩放）"}
                       >
-                        {uiOf === p.id ? "收起界面" : "打开界面"}
+                        {wins[p.id] ? "界面已开" : "打开界面"}
                       </button>
                     ) : null}
                     {p.canRepair ? (
@@ -572,48 +627,10 @@ export const PluginsDialog: React.FC<{ open: boolean; onClose: () => void }> = (
                     </button>
                   </div>
                   {/*
-                    插件自己的界面：**宿主不解析它的内容**，只把 plugins/<id>/ui/ 当静态目录挂上去。
-                    为什么用 iframe 而不是渲染它的 React 组件——见 server/index.ts 里
-                    /plugin-ui 路由上那段注释（一句话：编辑器是预构建产物，静态 import 会变成
-                    "装完看不到，得先跑 vite build"）。
+                    插件自己的界面不在这里展开，而是浮窗（见 PluginUiWindow.tsx 顶部的说明：
+                    内嵌会被对话框的高度卡住、且一次只能看一个）。
+                    宿主不解析它的内容，只把 plugins/<id>/ui/ 当静态目录挂上去。
                   */}
-                  {p.hasUi && uiOf === p.id ? (
-                    <div className="plg-ui-panel">
-                      <div className="plg-ui-bar">
-                        <span>
-                          以下是插件 <b>{p.name}</b> 自带的界面，内容和能力都由插件提供
-                        </span>
-                        <button className="ghost plg-mini" onClick={() => setUiOf(null)}>
-                          收起
-                        </button>
-                      </div>
-                      <iframe
-                        ref={uiFrame}
-                        className="plg-ui-frame"
-                        title={`${p.name} 界面`}
-                        src={`/plugin-ui/${encodeURIComponent(p.id)}/index.html`}
-                        /*
-                         * allow-same-origin 是必须的：插件页面要 fetch('/api/...') 读写自己的配置。
-                         * 不给 allow-top-navigation，防止插件把整个编辑器导航走。
-                         */
-                        sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-downloads"
-                        onLoad={() => {
-                          /*
-                           * 把宿主的主题变量送进去：插件可以照着用（想要统一观感时），
-                           * 也可以完全无视。只发一次，之后由插件自己决定要不要再问。
-                           */
-                          const cs = getComputedStyle(document.documentElement);
-                          const keys = ["--bg", "--panel", "--panel-2", "--line", "--text", "--muted", "--accent", "--danger", "--radius"];
-                          const tokens: Record<string, string> = {};
-                          for (const k of keys) tokens[k] = cs.getPropertyValue(k).trim();
-                          uiFrame.current?.contentWindow?.postMessage(
-                            { type: "studio:init", pluginId: p.id, theme: "dark", tokens },
-                            "*",
-                          );
-                        }}
-                      />
-                    </div>
-                  ) : null}
                 </div>
               );
             })}
@@ -659,5 +676,27 @@ export const PluginsDialog: React.FC<{ open: boolean; onClose: () => void }> = (
         </div>
       </div>
     </div>
+
+    {/*
+      插件界面浮窗。渲染在遮罩之外：浮窗要能拖到对话框旁边、压在上面、同时开好几个，
+      放在 mask 里会被遮罩的点击与居中布局牵连。
+    */}
+    {Object.entries(wins).map(([id, w]) => {
+      const p = plugins.find((x) => x.id === id);
+      // 插件在这轮刷新里消失时，清理 effect 会把它收走；这一帧先不渲染
+      if (!p) return null;
+      return (
+        <PluginUiWindow
+          key={id}
+          id={id}
+          name={p.name}
+          win={w}
+          onPatch={(patch) => patchUi(id, patch)}
+          onClose={() => closeUi(id)}
+          onFocus={() => focusUi(id)}
+        />
+      );
+    })}
+    </>
   );
 };

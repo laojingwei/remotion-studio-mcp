@@ -8494,7 +8494,7 @@ select.tts-input {
 
 .plg-item {
   display: flex;
-  flex-wrap: wrap; /* 插件界面要占整行，不能被 actions 挤到右边 */
+  flex-wrap: wrap; /* 错误/警告行很长时允许换行，别把右边按钮挤没 */
   gap: 10px;
   align-items: flex-start;
   padding: 10px;
@@ -8503,34 +8503,129 @@ select.tts-input {
   background: var(--panel-2);
 }
 
-/* ── 插件自制界面（iframe）──
-   宿主只给一个容器和一条说明条，里面全归插件。
-   高度固定 460px 并可滚动：插件内容长短不可控，让 iframe 自己撑开会把整个对话框
-   顶成无限长（还带一层嵌套滚动）；插件真需要更高，可以在页面里发 studio:resize。 */
-.plg-ui-panel {
-  flex: 0 0 100%;
-  margin-top: 4px;
-  border-top: 1px dashed var(--line);
-  padding-top: 8px;
+/* ── 插件自制界面：浮窗 ──
+   插件的界面不嵌在「插件」对话框里：那里高度受限（内容一多就要套内层滚动），
+   而且一次只能看一个（开着 A 的设置就看不了 B 的）。
+   改成独立浮窗——可拖动、可缩放、能同时开多个、永远压在对话框之上。
+   宿主仍然只提供容器（一条标题栏 + 一个 iframe），里面的内容和按钮全归插件。 */
+.ui-win {
+  position: fixed;
+  display: flex;
+  flex-direction: column;
+  border-radius: 12px;
+  border: 1px solid var(--line-strong);
+  background: var(--panel);
+  box-shadow: 0 24px 70px rgba(0, 0, 0, 0.62);
+  overflow: hidden;
 }
 
-.plg-ui-bar {
+.ui-win-head {
+  flex: 0 0 auto;
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  gap: 10px;
-  font-size: 11px;
-  color: var(--muted);
-  margin-bottom: 6px;
+  gap: 8px;
+  padding: 7px 10px;
+  background: var(--panel-2);
+  border-bottom: 1px solid var(--line);
+  cursor: move;
+  user-select: none;
+  touch-action: none; /* 指针拖动时别让浏览器当成滚动/缩放手势 */
 }
 
-.plg-ui-frame {
+.ui-win.is-max .ui-win-head {
+  cursor: default;
+}
+
+.ui-win-dot {
+  flex: 0 0 auto;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--accent);
+}
+
+.ui-win-name {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text);
+  white-space: nowrap;
+}
+
+.ui-win-tag {
+  font-size: 10px;
+  color: var(--muted);
+  white-space: nowrap;
+}
+
+.ui-win-spacer {
+  flex: 1;
+}
+
+.ui-win-actions {
+  display: flex;
+  gap: 4px;
+}
+
+.ui-win-btn {
+  border: 1px solid var(--line);
+  background: transparent;
+  color: var(--muted);
+  border-radius: 6px;
+  padding: 2px 8px;
+  font-size: 11px;
+  line-height: 1.5;
+  cursor: pointer;
+}
+
+.ui-win-btn:hover {
+  color: var(--text);
+  border-color: var(--line-strong);
+  background: rgba(255, 255, 255, 0.06);
+}
+
+.ui-win-btn.is-close:hover {
+  color: var(--danger);
+  border-color: var(--danger);
+  background: rgba(255, 90, 90, 0.1);
+}
+
+.ui-win-body {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  background: var(--bg);
+}
+
+.ui-win-frame {
   display: block;
   width: 100%;
-  height: 460px;
-  border: 1px solid var(--line);
-  border-radius: 8px;
+  height: 100%;
+  border: 0;
   background: var(--bg);
+}
+
+/* 右下角的缩放把手：只画两条斜线，不抢注意力 */
+.ui-win-grip {
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  width: 16px;
+  height: 16px;
+  cursor: nwse-resize;
+  touch-action: none;
+}
+
+.ui-win-grip::after {
+  content: "";
+  position: absolute;
+  right: 3px;
+  bottom: 3px;
+  width: 9px;
+  height: 9px;
+  border-right: 1px solid var(--muted);
+  border-bottom: 1px solid var(--muted);
+  border-bottom-right-radius: 2px;
+  opacity: 0.55;
 }
 
 .plg-item.is-off {
