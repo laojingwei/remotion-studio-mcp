@@ -45,6 +45,9 @@ const REQUIRED_FILES = [
   // 文档：代码里的报错与 list_plugins 都在指路它
   "docs/PLUGIN-GUIDE.md",
   "plugins/README.md",
+  // 外部工具目录的说明：external-tools 技能要求"在 .other_modules/README.md 登记"，
+  // 独立文件不进包时装完就是一句指向空目录的指令（663B，值得带）
+  ".other_modules/README.md",
   // 包元信息
   "package.json",
   "README.md",
@@ -144,6 +147,17 @@ if (nm.length) {
 const extraDocs = files.filter((f) => f.startsWith("docs/") && f !== "docs/PLUGIN-GUIDE.md");
 if (extraDocs.length) {
   problems.push(`  不该入包：docs/ 下只该有 PLUGIN-GUIDE.md，多出 ${extraDocs.length} 个（例：${extraDocs[0]}）`);
+}
+
+// ⑦ .other_modules/ 只允许 README.md 与 .gitkeep：其余是第三方开源项目（anatomy 等），
+// 按其自身设计"按需下载"，27MB 的副本进包会冻结版本、还得补第三方许可声明。
+const OTHER_MODULES_ALLOWED = new Set([".other_modules/README.md", ".other_modules/.gitkeep"]);
+const otherMods = files.filter((f) => f.startsWith(".other_modules/") && !OTHER_MODULES_ALLOWED.has(f));
+if (otherMods.length) {
+  problems.push(
+    `  不该入包：.other_modules/ 下只该有 README.md 与 .gitkeep，多出 ${otherMods.length} 个（例：${otherMods[0]}）` +
+      `——第三方工具按需下载，见 .other_modules/README.md`,
+  );
 }
 
 if (problems.length) {

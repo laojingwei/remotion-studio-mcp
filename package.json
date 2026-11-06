@@ -34,6 +34,8 @@
     "!src/_plugins.generated.ts",
     "scripts",
     "docs/PLUGIN-GUIDE.md",
+    ".other_modules/README.md",
+    ".other_modules/.gitkeep",
     "plugins/README.md",
     "plugins/_example-content",
     "plugins/_example-audit",
