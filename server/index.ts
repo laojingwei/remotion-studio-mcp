@@ -14,6 +14,7 @@ import {
   syncPluginElements,
   syncPluginGraphPresets,
   syncPluginLooks,
+  syncPluginPasses,
   syncPluginTemplates,
   syncPluginWorldSkies,
 } from "./plugin/content-sync";
@@ -195,6 +196,7 @@ app.use("*", async (_c, next) => {
     const tpl = syncPluginTemplates();
     const els = syncPluginElements();
     const looks = syncPluginLooks();
+    const passes = syncPluginPasses();
     const gpreset = syncPluginGraphPresets();
     /*
      * 元素/场景要落到 `src/_plugins.generated.ts` 才能被编辑器看见（web 是独立 bundle）。
@@ -206,6 +208,7 @@ app.use("*", async (_c, next) => {
       ...tpl.issues,
       ...els.issues,
       ...looks.issues,
+      ...passes.issues,
       ...gpreset.issues,
       ...entry.issues,
     ];
@@ -2103,8 +2106,9 @@ app.post("/api/projects/:id/stills", async (c) => {
       purpose?: "cover";
     };
     const project = projects.get(c.req.param("id"));
-    const stills = await renderStills(project, body.frame, body.formats, body.tag, body.purpose);
-    return c.json({ stills });
+    const { stills, warnings } = await renderStills(project, body.frame, body.formats, body.tag, body.purpose);
+    // warnings 是"某个插件后期 pass 编不过、已跳过"这类话。不返回的话画面会少一层效果而没人知道原因
+    return c.json({ stills, ...(warnings.length ? { warnings } : {}) });
   } catch (err) {
     return fail(c, err);
   }

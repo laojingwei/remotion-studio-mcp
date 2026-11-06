@@ -46,6 +46,9 @@ export type PluginElementEntry = {
 /** 插件贡献的 3D 光线风格（同样是纯数据） */
 export type PluginLookEntry = PluginElementEntry;
 
+/** 插件贡献的 3D 后期 pass（fragment 源码内联进 bundle） */
+export type PluginPassEntry = PluginElementEntry;
+
 export type GenResult = {
   changed: boolean;
   count: number;
@@ -53,6 +56,8 @@ export type GenResult = {
   elementCount: number;
   /** 顺带生成进去的插件 3D 风格套数 */
   lookCount: number;
+  /** 顺带生成进去的插件后期 pass 个数 */
+  passCount: number;
   issues: string[];
   outFile: string;
 };
@@ -191,10 +196,20 @@ export const discoverElementEntries = (pluginDir = PROJECT_PLUGIN_DIR) =>
 export const discoverLookEntries = (pluginDir = PROJECT_PLUGIN_DIR) =>
   discoverDataEntries("scene3d", "looks", pluginDir, "looks");
 
+/**
+ * 插件 3D 后期 pass（`scene3d/passes.json`）。
+ *
+ * 和元素/风格同一条内联路线，但**内容里带源码**：fragment 是一段字符串，
+ * JSON.stringify 之后就是一个 JS 字面量，不需要任何 loader 或路径处理。
+ */
+export const discoverPassEntries = (pluginDir = PROJECT_PLUGIN_DIR) =>
+  discoverDataEntries("scene3d", "passes", pluginDir, "passes");
+
 function render(
   entries: PluginSceneEntry[],
   elements: PluginElementEntry[],
   looks: PluginLookEntry[],
+  passes: PluginPassEntry[],
   issues: string[],
   outDir: string,
 ): string {
@@ -228,9 +243,20 @@ function render(
       `  { from: ${JSON.stringify(e.pluginId)}, file: ${JSON.stringify(path.basename(e.file))}, items: ${JSON.stringify(e.items)} },`,
     );
   }
+  /*
+   * 3D 后期 pass：源码也一起内联。
+   * 这一条比其它几类更需要在 bundle 里——渲染端要在**装 pass 之前**拿源码自检编译，
+   * 拿不到源码就只能靠"渲出来发现是黑的"，那是事后了。
+   */
+  const passRows: string[] = [];
+  for (const e of passes) {
+    passRows.push(
+      `  { from: ${JSON.stringify(e.pluginId)}, file: ${JSON.stringify(path.basename(e.file))}, items: ${JSON.stringify(e.items)} },`,
+    );
+  }
 
   // 两样都没有：只留占位数组，让编译不依赖"装没装插件"
-  if (!entries.length && !elements.length && !looks.length) {
+  if (!entries.length && !elements.length && !looks.length && !passes.length) {
     return [
       ...header,
       ...issueLines,
@@ -244,6 +270,9 @@ function render(
       "/** 没有插件 3D 风格时的占位 */",
       "export const PLUGIN_LOOKS: { from: string; file: string; items: unknown[] }[] = [];",
       "",
+      "/** 没有插件后期 pass 时的占位 */",
+      "export const PLUGIN_PASSES: { from: string; file: string; items: unknown[] }[] = [];",
+      "",
     ].join("\n");
   }
 
@@ -254,6 +283,7 @@ function render(
     'import { registerSceneComponent } from "./scenes/components";',
     'import { registerLibraryItem } from "../shared/elementLibrary";',
     'import { registerLook } from "../shared/scene3dLooks";',
+    'import { registerPassDef } from "../shared/scene3dPasses";',
   ];
 
   if (issueLines.length) lines.push(...issueLines);
@@ -319,6 +349,21 @@ function render(
     "    if (!r.ok) console.warn('[plugin] 3D 风格 ' + e.from + '/' + e.file + ' 已跳过：' + r.reason);",
     "  }",
     "}",
+    "",
+    "/**",
+    " * 插件 3D 后期 pass：注册的是**源码**，装 pass 时由 bloom.ts 先自检编译再决定装不装。",
+    " * 这里注册失败（文本级校验）只是不进注册表，不影响任何已装插件的其它能力。",
+    " */",
+    "export const PLUGIN_PASSES: { from: string; file: string; items: unknown[] }[] = [",
+    ...passRows,
+    "];",
+    "",
+    "for (const e of PLUGIN_PASSES) {",
+    "  for (const item of e.items) {",
+    "    const r = registerPassDef(item, e.from);",
+    "    if (!r.ok) console.warn('[plugin] 3D 后期 pass ' + e.from + '/' + e.file + ' 已跳过：' + r.reason);",
+    "  }",
+    "}",
   );
 
   return lines.join("\n") + "\n";
@@ -338,8 +383,9 @@ export function generatePluginEntry(opts: { pluginDir?: string; outFile?: string
   const { entries, issues } = discoverSceneEntries(pluginDir);
   const els = discoverElementEntries(pluginDir);
   const looks = discoverLookEntries(pluginDir);
-  const allIssues = [...issues, ...els.issues, ...looks.issues];
-  const next = render(entries, els.entries, looks.entries, allIssues, outDir);
+  const passes = discoverPassEntries(pluginDir);
+  const allIssues = [...issues, ...els.issues, ...looks.issues, ...passes.issues];
+  const next = render(entries, els.entries, looks.entries, passes.entries, allIssues, outDir);
 
   let prev = "";
   try {
@@ -359,6 +405,15 @@ export function generatePluginEntry(opts: { pluginDir?: string; outFile?: string
   const briefIssues = pluginBriefSteps().issues;
   const elementCount = els.entries.reduce((n, e) => n + e.items.length, 0);
   const lookCount = looks.entries.reduce((n, e) => n + e.items.length, 0);
+  const passCount = passes.entries.reduce((n, e) => n + e.items.length, 0);
 
-  return { changed, count: entries.length, elementCount, lookCount, issues: [...allIssues, ...briefIssues], outFile };
+  return {
+    changed,
+    count: entries.length,
+    elementCount,
+    lookCount,
+    passCount,
+    issues: [...allIssues, ...briefIssues],
+    outFile,
+  };
 }

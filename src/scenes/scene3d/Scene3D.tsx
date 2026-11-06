@@ -1191,6 +1191,13 @@ export const Scene3DScene: React.FC<Scene3DProps> = ({
 }) => {
   const frame = useCurrentFrame();
   const { fps, width, height } = useVideoConfig();
+  /*
+   * 插件后期 pass 的 `uFrame` 要**每帧最新的值**，而 `installBloom` 在 `onCreated` 里
+   * 只跑一次——闭包捕获的 `frame` 永远是安装那一帧。所以用 ref 过渡：
+   * 组件每帧重渲染都会刷新 `frameRef.current`，bloom 侧每帧读它。
+   */
+  const frameRef = React.useRef(0);
+  frameRef.current = frame;
   const { h } = useSceneLayout();
   const c = theme.palette;
   const t = frame / fps;
@@ -1369,7 +1376,11 @@ export const Scene3DScene: React.FC<Scene3DProps> = ({
         onCreated={(state) => {
           setupEnvironment(state, dslLights ? lookSpec.env * 0.55 : lookSpec.env);
           try {
-            installBloom(state, bloomOpts, postExtrasOf(graph));
+            installBloom(state, bloomOpts, postExtrasOf(graph), {
+              uses: graph?.post?.passes,
+              frame: () => frameRef.current,
+              fps,
+            });
           } catch {
             setCssBloom(true);
           }

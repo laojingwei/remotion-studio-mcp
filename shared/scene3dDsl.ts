@@ -702,6 +702,29 @@ export const dslSchema = z.object({
         .max(1)
         .optional()
         .describe("胶片颗粒：0=关（默认）。0.2 轻微质感、0.5 明显。深色大幅渐变加一点能避免色带（静止颗粒，不逐帧变化）"),
+      /**
+       * 插件贡献的后期 pass。按数组顺序叠加，全部挂在 OutputPass 之后
+       * （sRGB 空间、和内置三个收尾效果同一位置，所以"透传 pass"不会改画面）。
+       *
+       * id 的存在性**不在这里校验**：这份 schema 同时被服务端与渲染端使用，
+       * 两边注册表可能不同步。写错 id 的行为是"渲染时跳过并告警"，
+       * 而 `set_graph_scene` 会在写入前就报错并列出可用的 id ——
+       * 严格校验放在那边，是为了让老工程在插件被删后仍然能打开。
+       */
+      passes: z
+        .array(
+          z.object({
+            id: z.string().describe("插件 pass 的 id（list_plugin_passes 查）"),
+            intensity: z.number().min(0).max(1).optional().describe("强度 0–1，作为 uAmount 传进 shader"),
+            params: z
+              .record(z.number())
+              .optional()
+              .describe("覆盖该 pass 自己的可调参数（名字见 list_plugin_passes）；越界会被钳进声明范围"),
+          }),
+        )
+        .max(6)
+        .optional()
+        .describe("插件 3D 后期 pass，按顺序叠加（最多 6 个）。不写=不用任何插件后期"),
     })
     .optional(),
 });

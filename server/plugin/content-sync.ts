@@ -28,6 +28,7 @@ import { registerTemplate, unregisterTemplate } from "../../shared/templates";
 import { registerLibraryItem, unregisterLibraryItem } from "../../shared/elementLibrary";
 import { registerLook, unregisterLook } from "../../shared/scene3dLooks";
 import { registerGraphPreset, unregisterGraphPreset } from "../../shared/scene3dPresets";
+import { registerPassDef, unregisterPassDef } from "../../shared/scene3dPasses";
 
 type Candidate = { file: string; pluginId: string };
 
@@ -433,6 +434,75 @@ export function syncPluginGraphPresets(): { count: number; issues: string[] } {
 /** 诊断用：当前由插件提供的配方 id */
 export const pluginGraphPresetIds = (): string[] => [...ownedPresets].sort();
 
+/* ───────────────────── 3D 后期 pass（受控 GLSL） ───────────────────── */
+
+const ownedPasses = new Set<string>();
+let passKey = "";
+let passIssues: string[] = [];
+
+/**
+ * 把 `scene3d/passes.json` 登记进 `shared/scene3dPasses`。
+ *
+ * 两条通道都要：服务端这份给 `list_plugin_passes` 与写入时的 id 校验，
+ * 渲染端那份走生成文件（bundle 独立，读不到服务端内存）。
+ *
+ * **注意这里只做文本级校验**（id/长度/gl_FragColor/sampler/#version）。
+ * 真正的编译校验在 `src/scenes/scene3d/bloom.ts` 的 `compileCheck`——那要 GL 上下文，
+ * 服务端没有。两层是互补的：这层保证"进注册表的东西形状对"，那层保证"装上去不会黑屏"。
+ */
+export function syncPluginPasses(): { count: number; issues: string[] } {
+  const key = fingerprint(candidateFiles(path.join("scene3d", "passes.json")));
+  if (key === passKey) return { count: ownedPasses.size, issues: [...passIssues] };
+
+  const files = pluginFiles("scene3d.pass", ".json");
+  const issues: string[] = [];
+  const seen = new Set<string>();
+
+  for (const { file, pluginId } of files) {
+    const where = `${pluginId}/scene3d/passes.json`;
+    let raw: unknown;
+    try {
+      raw = JSON.parse(fs.readFileSync(file, "utf8"));
+    } catch (err) {
+      issues.push(`${where} 解析失败：${err instanceof Error ? err.message : String(err)}`);
+      continue;
+    }
+    const list: unknown[] = Array.isArray(raw)
+      ? raw
+      : raw && typeof raw === "object" && Array.isArray((raw as { passes?: unknown }).passes)
+        ? ((raw as { passes: unknown[] }).passes as unknown[])
+        : raw && typeof raw === "object" && "id" in raw
+          ? [raw]
+          : [];
+    if (!list.length) {
+      issues.push(`${where} 的形态不对：要 {"passes":[...]}、[...] 或 {"id":"...", ...}`);
+      continue;
+    }
+    for (const item of list) {
+      const id = String((item as { id?: string })?.id ?? "").trim();
+      const reg = registerPassDef(item, pluginId);
+      if (!reg.ok) {
+        issues.push(`${where}：${reg.reason}`);
+        continue;
+      }
+      seen.add(id);
+      ownedPasses.add(id);
+    }
+  }
+
+  for (const id of [...ownedPasses]) {
+    if (seen.has(id)) continue;
+    if (unregisterPassDef(id)) ownedPasses.delete(id);
+  }
+
+  passKey = key;
+  passIssues = issues;
+  return { count: ownedPasses.size, issues: [...issues] };
+}
+
+/** 诊断用：当前由插件提供的 pass id */
+export const pluginPassIds = (): string[] => [...ownedPasses].sort();
+
 /* ───────────────────── 生成文件（web/渲染端那一份） ───────────────────── */
 
 let entryKey = "";
@@ -455,6 +525,7 @@ export function ensurePluginEntryFresh(): { changed: boolean; issues: string[] }
     ...candidateDirFiles("scenes"),
     ...candidateDirFiles("elements"),
     ...candidateFiles(path.join("scene3d", "looks.json")),
+    ...candidateFiles(path.join("scene3d", "passes.json")),
   ];
   const key = fingerprint(candidates);
   if (key === entryKey) return { changed: false, issues: [] };

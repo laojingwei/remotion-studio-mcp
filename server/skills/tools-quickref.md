@@ -1,10 +1,10 @@
 # 工具速查（入口页）
 
-完整说明书在 **`get_guide("manual")`**：《Agent 使用全书》——129 个工具全表（4 常驻 + 125 按需）、能力地图、
+完整说明书在 **`get_guide("manual")`**：《Agent 使用全书》——130 个工具全表（4 常驻 + 126 按需）、能力地图、
 「我想…」意图速查、落地铁律（为什么没生效）。本页只留最快的域索引：
 
 **两层调用**：常驻核心 4 个（start_guide / get_guide / tool_search / tool_call）；
-其余 125 个工具 `tool_search("意图")` 找 → `tool_call(name, args)` 执行（`all=true` 看全量目录，`names=[...]` 取完整参数表）。
+其余 126 个工具 `tool_search("意图")` 找 → `tool_call(name, args)` 执行（`all=true` 看全量目录，`names=[...]` 取完整参数表）。
 
 - 工程：list / switch / create / get / **archive（收进抽屉，不删文件）** / delete / 模板（含删除）/ 历史 / 导入导出
   （当前工程只在 create / import / switch / 删除当前工程时变；显式 projectId 只影响本次调用）
@@ -13,6 +13,7 @@
 - 场景与元素：add/update_scene、76 个 2D 版式（scene-recipes）、freeform、元素/特效/转场
 - **3D 场景**：`add_scene(type="scene3d")`——抽象氛围用 preset（6 个母题），具体物体写 `graph` 场景图；
   写法与坑见 `get_guide("scene3d")`，字段全表 `list_scene_types(type:"scene3d")`
+- **3D 后期效果**：`list_plugin_passes`（插件给的 VHS/故障/水波等受控 GLSL）→ `set_graph_scene { post: { passes: [{ id }] } }` 启用（最多 6 个，编不过会被跳过并告警）
 - **3D 图形配方**：`list_graph_presets`（插件给的现成起手图）→ `set_graph_scene { graphPreset: "id" }` 整套替换（**不是合并**，套完抽帧看构图）
 - **3D 世界背景**：`list_world_skies`（春夏秋冬/晨午昏/夜景银河/室内的全景图配方，**并标出本机有没有那个文件**）
   → `set_graph_scene { worldPreset:"golden-hour" }` 一键套用。缺图别硬套，会静默退回渐变天空

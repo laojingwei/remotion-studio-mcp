@@ -29,6 +29,7 @@ plugins/我的插件/
   scene3d/looks.json     3D 光线风格   → 3D 场景的 look 里多几套可选光（灯位/色温/辉光）
   scene3d/presets.json   3D 图形配方   → list_graph_presets 里多几套起手图，set_graph_scene 一套换上
   scene3d/skies.json     3D 天空配方   → list_world_skies 多几条，set_graph_scene 能套
+  scene3d/passes.json    3D 后期效果   → list_plugin_passes 多几个，写进 post.passes 才上镜（受控 GLSL）
   scenes/*.json + *.tsx  场景组件      → 选择器里多一种画面（必须放项目内）
   plugin.ts              钩子/工具/处理器 → 说意见、改字、洗素材，或加一个 MCP 工具
   package.json + dist/   同上，但做成**完整工程**（可以带自己的 dependencies）
@@ -56,8 +57,9 @@ plugins/我的插件/
 | **元素素材** | `elements/*.json`，元素面板里多几个图标/标签；`cat` 随你定（会自动变成筛选项），也能被 `list_element_library` / `add_element { libraryId }` 用 |
 | **3D 光线风格** | `scene3d/looks.json`，3D 场景的 `look` 下拉里多几套（灯位/强度/色温/辉光）；只换光的性格，不换配色 |
 | **3D 图形配方** | `scene3d/presets.json`，一份 graph JSON 当「起手图」：`set_graph_scene { graphPreset }` 整套换上，之后当普通 graph 继续改。校验和用户手写同一条（`dslSchema` + `dslIssues`），写错在注册时就被拒 |
+| **3D 后期效果** | `scene3d/passes.json`，一段 fragment 源码（受控 GLSL）。**默认不上镜**，要显式写进 `post.passes` 才生效；一个工程最多 6 个，按数组顺序叠加 |
 
-**上面这张表里的全部接通**（技能、风格、问诊、整片模板、3D 天空、3D 光线风格、3D 图形配方、元素、场景组件、钩子）。
+**上面这张表里的全部接通**（技能、风格、问诊、整片模板、3D 天空、3D 光线风格、3D 图形配方、3D 后期效果、元素、场景组件、钩子）。
 转场 / 特效 / 3D 几何体（`scene3d/presets.json`）**不打算做**，理由见计划文档 9.3。
 完整路线见 `docs/2026-11-05-插件化架构与实施计划.md`。
 
@@ -206,6 +208,60 @@ export default {
 
 `ctx.ffmpeg` 指向 Remotion 自带的那个（装了 Remotion 就一定在），所以不需要为了处理图片
 给宿主装 sharp。示例：`plugins/_example-media/`。
+
+## 3D 后期效果：自己写一段 GLSL
+
+内置的 `vignette` / `chroma` / `grain` 只是"口味"层。真要做 VHS 扫描线、故障抖动、水波扭曲、像素化，
+就得自己写着色器——放在 `scene3d/passes.json`：
+
+```json
+{
+  "passes": [
+    {
+      "id": "vhs-scan",
+      "label": "VHS 扫描线",
+      "summary": "老录像带的横向扫过与轻微色偏",
+      "params": { "lines": { "min": 10, "max": 400, "default": 120, "label": "扫描线密度" } },
+      "fragment": "uniform sampler2D tDiffuse;\nuniform float lines;\nvarying vec2 vUv;\nvoid main() {\n  float s = 0.62 + 0.38 * sin(vUv.y * lines);\n  gl_FragColor = vec4(texture2D(tDiffuse, vUv).rgb * s, 1.0);\n}"
+    }
+  ]
+}
+```
+
+**只写 fragment**，vertex 是宿主固定的全屏四边形。写 GLSL ES 1.0 风格
+（`varying` / `texture2D` / `gl_FragColor`），和 three 内部转换前的写法一致。
+
+### 能拿到什么
+
+| uniform | 类型 | 含义 |
+|---|---|---|
+| `tDiffuse` | sampler2D | 上一段的结果（**唯一**允许声明的 sampler） |
+| `uResolution` | vec2 | 当前渲染分辨率（像素） |
+| `uFrame` | float | 当前帧号。**不要用 `performance.now()`**，同一帧必须算出一样的结果 |
+| `uFps` | float | 帧率，配合 `uFrame` 换算时间 |
+| `uAmount` | float | 引用方给的强度（`post.passes[].intensity`，不写就是 1） |
+| 你自己 `params` 里声明的 | float | 名字就是 key，值来自 `post.passes[].params`，缺省用 `default` |
+
+### 三条硬规则（都是"踩过才知道"的）
+
+1. **默认不上镜**。装插件不会改画面，必须在 `post.passes` 里写出来。这是刻意的：
+   一个把画面搞坏的效果不该因为"装了插件"就自动生效。
+2. **位置在 OutputPass 之后**（sRGB 空间）。所以"原样透传"的 pass 不会让画面变暗；
+   你在 shader 里乘一个系数，看到的就是眼睛看到的效果，不用反推线性空间。
+3. **编不过会被跳过，不是整片黑屏**。宿主在装之前会用同一个 GL 上下文编一遍，
+   失败就跳过该 pass、画面照出，并回报一句 `[plugin-pass] 跳过「xxx」…`（会出现在
+   `list_plugin_passes`、抽帧回执、渲染任务日志里）。报错行号比你文件里的**多 1 行**，那是宿主补的 `precision` 声明。
+
+### 宿主不会替你兜的
+
+`discard`、或者把 `gl_FragColor` 写成常量黑，这类"能编能链但输出全黑"的代码**没有任何错误信号**
+——编译检查抓不到，宿主也不做像素探测（会误判"淡出到黑"这类正当效果）。
+所以**写完必须抽帧看**：`set_graph_scene { post: { passes: [...] } }` → `render_stills`。
+
+### 代价
+
+每个 pass 都是一次全屏采样。4K 下叠三四个肉眼可感地变慢，所以上限 6 个。
+不是非要不可就别叠——分镜里只有一两幕需要质感时，只给那一两幕加。
 
 ## 场景组件：需要重新打包的一类
 

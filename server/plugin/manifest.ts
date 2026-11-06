@@ -37,6 +37,7 @@ export const PROVIDE_KINDS = [
   "scene3d.sky", //      scene3d/skies.json     → 3D 天空 + 打光配方
   "scene3d.preset", //   scene3d/presets.json   → 3D 母题配方（graph 配方，套用=换起手图）
   "scene3d.look", //     scene3d/looks.json     → 3D 光线风格（内置 4 套 + 插件）
+  "scene3d.pass", //     scene3d/passes.json    → 3D 后期 pass（受控 GLSL，只在 post.passes 显式启用时上镜）
   /* ── L1 注册表层 ── */
   "brief.steps", //      brief/steps.json       → 问诊步骤（替换或追加）
   "scene", //            scenes/<type>.json + <type>.tsx → 新场景类型
@@ -54,6 +55,7 @@ export const PROVIDE_LABEL: Record<ProvideKind, string> = {
   "scene3d.sky": "3D 天空/打光",
   "scene3d.preset": "3D 母题",
   "scene3d.look": "3D 观感",
+  "scene3d.pass": "3D 后期 pass",
   "brief.steps": "问诊步骤",
   scene: "场景组件",
   hooks: "流程钩子",
@@ -82,6 +84,7 @@ export const IMPLEMENTED_PROVIDES: ProvideKind[] = [
   "elements",
   "scene3d.look",
   "scene3d.preset",
+  "scene3d.pass",
 ];
 
 /**

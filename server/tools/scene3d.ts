@@ -400,7 +400,10 @@ export const SCENE3D_TOOLS: ToolDef[] = [
         .record(z.any())
         .nullable()
         .optional()
-        .describe("后期（bloom/tonemap/exposure）；null = 回到默认"),
+        .describe(
+          "后期（bloom/tonemap/exposure/vignette/chroma/grain/passes）；null = 回到默认。" +
+            "passes 是插件提供的后期效果（list_plugin_passes 查），例如 [{ id: \"vhs\", intensity: 0.6 }]",
+        ),
     },
     run: async (a) => {
       const ops: Record<string, unknown>[] = [];
@@ -439,7 +442,35 @@ export const SCENE3D_TOOLS: ToolDef[] = [
       if (a.lights !== undefined) ops.push({ op: "set_graph_lights", sceneId: a.sceneId, lights: a.lights });
       if (a.ground !== undefined) ops.push({ op: "set_graph_ground", sceneId: a.sceneId, ground: a.ground });
       if (a.particles !== undefined) ops.push({ op: "set_graph_particles", sceneId: a.sceneId, particles: a.particles });
-      if (a.post !== undefined) ops.push({ op: "set_graph_post", sceneId: a.sceneId, post: a.post });
+      if (a.post !== undefined) {
+        /*
+         * 插件 pass 的 id 在这里校验，而不是在 DSL 里。
+         *
+         * DSL 那份 schema 同时被服务端与渲染端使用，两边注册表可能不同步；
+         * 而且如果写成"未知 id 就报错"，插件被删之后老工程会直接打不开。
+         * 所以：**写入时严格**（现在就告诉你写错了、列出可用的），
+         * **渲染时宽容**（跳过并告警，画面照出）。
+         */
+        const passes = (a.post as { passes?: unknown } | null)?.passes;
+        if (Array.isArray(passes) && passes.length) {
+          const { syncPluginPasses } = await import("../plugin/content-sync");
+          syncPluginPasses();
+          const { allPassIds } = await import("../../shared/scene3dPasses");
+          const ids = allPassIds();
+          const unknown = passes
+            .map((x) => String((x as { id?: unknown })?.id ?? "").trim())
+            .filter((id) => !id || !ids.includes(id));
+          if (unknown.length) {
+            throw new Error(
+              `没有这些后期 pass：${unknown.map((x) => `「${x || "(空)"}」`).join("、")}。` +
+                (ids.length
+                  ? `可用：${ids.join("、")}（详情用 list_plugin_passes）`
+                  : "当前没有插件提供后期 pass（plugins/<名>/scene3d/passes.json）"),
+            );
+          }
+        }
+        ops.push({ op: "set_graph_post", sceneId: a.sceneId, post: a.post });
+      }
       if (!ops.length) {
         throw new Error(
           "set_graph_scene 没有要改的东西：给 camera / lights / world / worldPreset / ground / particles / post / graphPreset 之一",
@@ -451,6 +482,55 @@ export const SCENE3D_TOOLS: ToolDef[] = [
         body: JSON.stringify({ actor: "agent", ops }),
       });
       return fmtSummary(res.summary);
+    },
+  },
+  {
+    name: "list_plugin_passes",
+    description:
+      "列出插件提供的 **3D 后期效果**（受控 GLSL）：VHS 扫描线、故障色偏、水波扭曲这类内置做不出来的画面处理。\n" +
+      "用 `set_graph_scene { post: { passes: [{ id, intensity }] } }` 启用，**最多 6 个**，按数组顺序叠加。\n" +
+      "什么时候用：① 用户要「复古 / 故障 / 老录像带 / 像素化 / 水波」这类质感；② 内置的 vignette/chroma/grain 不够。\n" +
+      "⚠ 这些 pass **默认不生效**，必须在 post.passes 里显式写出来。装上不会自动变，写错 id 会在写入时直接报错。\n" +
+      "⚠ 每个 pass 都要多一次全屏采样，4K 下叠三四个肉眼可感地变慢；不是非要不可就别叠。\n" +
+      "自己写一个：plugins/<名>/scene3d/passes.json，只写 fragment（写法见 get_guide('scene3d')）。\n" +
+      "编不过的 shader 会被**跳过**（画面照出、效果缺失），并在这里和渲染日志里报出来。",
+    shape: {},
+    run: async () => {
+      const { syncPluginPasses } = await import("../plugin/content-sync");
+      const synced = syncPluginPasses();
+      const { allPassDefs } = await import("../../shared/scene3dPasses");
+      const list = allPassDefs();
+
+      const out: string[] = [];
+      if (synced.issues.length) {
+        out.push("⚠ 有 pass 没能加载：");
+        for (const i of synced.issues) out.push(`  · ${i}`);
+        out.push("");
+      }
+      if (!list.length) {
+        out.push("当前没有插件提供后期效果（pass）。");
+        out.push("");
+        out.push("放法：plugins/<名>/scene3d/passes.json，内容形如");
+        out.push("  { \"passes\": [ { \"id\": \"vhs\", \"label\": \"VHS 扫描线\", \"summary\": \"老录像带\",");
+        out.push("      \"fragment\": \"uniform sampler2D tDiffuse; uniform float uFrame; varying vec2 vUv; void main(){ gl_FragColor = texture2D(tDiffuse, vUv); }\" } ] }");
+        out.push("可用 uniform：tDiffuse / uResolution / uFrame / uFps / uAmount，以及你自己在 params 里声明的数值。");
+        return out.join("\n");
+      }
+
+      out.push(`插件 3D 后期效果（${list.length} 个）`);
+      for (const d of list) {
+        out.push(`· ${d.id}（${d.label}）`);
+        if (d.summary) out.push(`  ${d.summary}`);
+        const ps = Object.entries(d.params);
+        out.push(
+          `  ${ps.length ? `可调：${ps.map(([k, v]) => `${k} ${v.min}–${v.max}（默认 ${v.default}）`).join("、")}` : "无可调参数"}` +
+            `${d.from ? ` · 来自插件 ${d.from}` : ""}`,
+        );
+      }
+      out.push("");
+      out.push('启用：set_graph_scene { sceneId: "scene_xxx", post: { passes: [{ id: "vhs", intensity: 0.6, params: { lines: 120 } }] } }');
+      out.push("⚠ 最多 6 个；intensity 不写当 1（全量）。写完**必须抽一帧看**：这类效果只有在画面里才判断得出好坏。");
+      return out.join("\n");
     },
   },
   {

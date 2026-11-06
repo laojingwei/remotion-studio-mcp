@@ -2247,6 +2247,136 @@ await testAsync("图形配方：list_graph_presets 能列出来（agent 的发�
   syncPluginGraphPresets();
 });
 
+/* ──────────────── 3D 后期 pass（受控 GLSL，2026-11-06） ──────────────── */
+
+const { syncPluginPasses } = await import("../server/plugin/content-sync");
+const { allPassDefs, allPassIds, passDefOf, unregisterPassDef, registerPassDef } = await import(
+  "../shared/scene3dPasses"
+);
+
+/** 一段能过文本校验的 fragment（真要编译还要 GL 上下文，那部分在渲染端自检） */
+const FRAG_OK = `
+uniform sampler2D tDiffuse;
+uniform float uAmount;
+varying vec2 vUv;
+void main() {
+  gl_FragColor = texture2D(tDiffuse, vUv) * uAmount;
+}
+`;
+
+const pluginPass = {
+  id: "vhs-scan",
+  label: "VHS 扫描线",
+  summary: "老录像带的横向扫过",
+  params: { lines: { min: 10, max: 400, default: 120 } },
+  fragment: FRAG_OK,
+};
+
+test("后期 pass：插件的 passes.json 进注册表，参数与来源都在", () => {
+  resetPlugins();
+  write("pp/scene3d/passes.json", JSON.stringify({ passes: [pluginPass] }));
+
+  const r = syncPluginPasses();
+  assert.equal(r.issues.length, 0, `不该有报错：${JSON.stringify(r.issues)}`);
+  const def = passDefOf("vhs-scan");
+  assert.ok(def, "注册表里要有它");
+  assert.equal(def?.from, "pp", "要记得来自哪个插件");
+  assert.equal(def?.params.lines.default, 120);
+  assert.ok(allPassIds().includes("vhs-scan"));
+
+  setPluginEnabled("pp", false);
+  syncPluginPasses();
+  assert.equal(passDefOf("vhs-scan"), undefined, "停用插件后不该还能选到");
+  setPluginEnabled("pp", true);
+  resetPlugins();
+  syncPluginPasses();
+  unregisterPassDef("vhs-scan");
+});
+
+/**
+ * 文本级校验（服务端能做的那一半）。
+ *
+ * 另一半是"真编一次"——那要 GL 上下文，在 `bloom.ts` 的 compileCheck。
+ * 这里卡住的每一条都对应一种"装了会静默出事"的写法。
+ */
+test("后期 pass：六种坏定义分别被拒，且理由说清", () => {
+  const cases: [string, unknown, RegExp][] = [
+    ["id 非法", { ...pluginPass, id: "VHS Scan" }, /id/],
+    ["没有 gl_FragColor", { ...pluginPass, id: "no-out", fragment: "uniform sampler2D tDiffuse;\nvoid main(){}" }, /gl_FragColor/],
+    ["写了 #version", { ...pluginPass, id: "ver", fragment: "#version 300 es\nvoid main(){ gl_FragColor = vec4(1.0); }" }, /#version/],
+    ["声明了第二个 sampler", { ...pluginPass, id: "tex2", fragment: "uniform sampler2D tDiffuse;\nuniform sampler2D uOther;\nvoid main(){ gl_FragColor = texture2D(uOther, vec2(0.5)); }" }, /tDiffuse/],
+    ["参数名和内置 uniform 冲突", { ...pluginPass, id: "clash", params: { uFrame: { min: 0, max: 1, default: 0 } } }, /内置/],
+    ["参数范围反了", { ...pluginPass, id: "range", params: { x: { min: 10, max: 1, default: 5 } } }, /min/],
+  ];
+  for (const [name, raw, re] of cases) {
+    const r = registerPassDef(raw, "pp");
+    assert.equal(r.ok, false, `${name} 应该被拒`);
+    assert.match(String(r.reason), re, `${name} 的理由要指明问题：${r.reason}`);
+  }
+  // 一个都不该进注册表
+  assert.equal(passDefOf("no-out"), undefined);
+  assert.equal(passDefOf("ver"), undefined);
+});
+
+test("后期 pass：同一 id 被两个插件抢 → 第二个被拒（先装的优先）", () => {
+  resetPlugins();
+  write("pp2/scene3d/passes.json", JSON.stringify({ passes: [pluginPass] }));
+  write("pp3/scene3d/passes.json", JSON.stringify({ passes: [{ ...pluginPass, label: "抢注的" }] }));
+  const r = syncPluginPasses();
+  assert.ok(r.issues.some((i) => i.includes("占用")), `要报 id 冲突：${JSON.stringify(r.issues)}`);
+  assert.equal(passDefOf("vhs-scan")?.label, "VHS 扫描线", "先注册的不该被顶掉");
+  resetPlugins();
+  syncPluginPasses();
+  unregisterPassDef("vhs-scan");
+});
+
+test("后期 pass：写进生成文件（渲染端只有这一条通道，源码必须进 bundle）", () => {
+  resetPlugins();
+  const out = path.join(TMP, "gen-pass", "_plugins.generated.ts");
+  fs.mkdirSync(path.dirname(out), { recursive: true });
+  generatePluginEntry({ outFile: out });
+  write("pp4/scene3d/passes.json", JSON.stringify({ passes: [pluginPass] }));
+
+  const res = generatePluginEntry({ outFile: out });
+  assert.equal(res.passCount, 1, `应统计到 1 个 pass，实际：${res.passCount}`);
+  const text = fs.readFileSync(out, "utf8");
+  assert.ok(text.includes("PLUGIN_PASSES"), "要导出 PLUGIN_PASSES");
+  assert.ok(text.includes("registerPassDef"), "要在模块顶层注册");
+  assert.ok(text.includes("vhs-scan"), "要内联 id");
+  assert.ok(text.includes("gl_FragColor"), "**源码本身**也要内联——自检编译要用它");
+
+  resetPlugins();
+  generatePluginEntry({ outFile: out });
+  fs.rmSync(out, { force: true });
+});
+
+/**
+ * 写入时严格：写错 pass id 必须在发请求之前就报错并列出可用的。
+ * （渲染时宽容是另一条路径：跳过 + 告警，见 bloom.ts。两者刻意不对称。）
+ */
+await testAsync("后期 pass：set_graph_scene 写错 id 立刻报错并列出可用项", async () => {
+  resetPlugins();
+  write("pp5/scene3d/passes.json", JSON.stringify({ passes: [pluginPass] }));
+  syncPluginPasses();
+
+  const { TOOLS } = await import("../server/mcp-tools");
+  const setScene = TOOLS.find((t) => t.name === "set_graph_scene")!;
+  await assert.rejects(
+    () => setScene.run({ projectId: "nope", sceneId: "nope", post: { passes: [{ id: "not-a-pass" }] } } as never),
+    (err: Error) => err.message.includes("没有这些后期 pass") && err.message.includes("vhs-scan"),
+    "写错 id 要报错并列出可用的",
+  );
+
+  const list = TOOLS.find((t) => t.name === "list_plugin_passes")!;
+  const text = String(await list.run({} as never));
+  assert.ok(text.includes("vhs-scan"), "列表工具要能列出它");
+  assert.ok(text.includes("lines 10–400"), `要报可调参数范围：${text.slice(0, 300)}`);
+
+  resetPlugins();
+  syncPluginPasses();
+  unregisterPassDef("vhs-scan");
+});
+
 /* ────────────────────────── 收尾 ────────────────────────── */
 fs.rmSync(TMP, { recursive: true, force: true });
 

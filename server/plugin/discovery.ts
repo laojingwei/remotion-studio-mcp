@@ -123,6 +123,7 @@ export function inferProvides(dir: string): ProvideKind[] {
   if (has("scene3d/skies.json")) out.push("scene3d.sky");
   if (has("scene3d/presets.json")) out.push("scene3d.preset");
   if (has("scene3d/looks.json")) out.push("scene3d.look");
+  if (has("scene3d/passes.json")) out.push("scene3d.pass");
   if (has("brief/steps.json")) out.push("brief.steps");
   // 场景组件：scenes 目录里有 .json 就算（同名的 .tsx 由生成器配对检查）
   if (hasJson("scenes")) out.push("scene");
@@ -379,7 +380,14 @@ export function pluginFiles(kind: ProvideKind, ext: string): PluginFile[] {
       if (!e.isFile() || !e.name.toLowerCase().endsWith(ext)) continue;
       // scene3d 与 brief 目录里按文件名精确挑，避免把 presets 当 skies 读
       if (rel === "scene3d") {
-        const want = kind === "scene3d.sky" ? "skies" : kind === "scene3d.preset" ? "presets" : "looks";
+        const want =
+          kind === "scene3d.sky"
+            ? "skies"
+            : kind === "scene3d.preset"
+              ? "presets"
+              : kind === "scene3d.pass"
+                ? "passes"
+                : "looks";
         if (path.basename(e.name, ext).toLowerCase() !== want) continue;
       }
       if (rel === "brief" && path.basename(e.name, ext).toLowerCase() !== "steps") continue;

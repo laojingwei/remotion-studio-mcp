@@ -1,4 +1,4 @@
-# Agent 使用全书（129 个工具 = 4 常驻 + 125 按需 + 能力地图 + 铁律）
+# Agent 使用全书（130 个工具 = 4 常驻 + 126 按需 + 能力地图 + 铁律）
 
 给 agent 的完整说明书。**你不需要读源码、不需要试探参数**：这台机器能做什么、怎么组合、
 为什么没生效，全部在这页和另外 17 篇指南里（全 18 篇的索引见本文最后一节）。
@@ -101,7 +101,7 @@
 
 **稿件**：`save_script(segments[])`（一段一幕，带每段预估秒数；改稿会让确认失效）· `get_script` · `confirm_script`（稿子没确认不能写分镜，`scriptType=无稿` 除外）
 
-**3D 场景图**：`get_graph`（节点大纲：id/形状/颜色/父级，改之前先看）· `update_graph_node`（按节点局部写回，**改单个物体不要整份覆盖 graph**）· `add_graph_node` · `remove_graph_node` · `set_graph_scene`（相机/世界/灯光/粒子/辉光；`graphPreset` 可整套换成插件给的起手图）· `list_world_skies`（世界全景图配方，**顺带检查本机有没有那张图**，再用 `set_graph_scene { worldPreset }` 套用）· `list_graph_presets`（插件提供的图形配方，一套换掉当前 graph；**不含内置 6 个母题**）
+**3D 场景图**：`get_graph`（节点大纲：id/形状/颜色/父级，改之前先看）· `update_graph_node`（按节点局部写回，**改单个物体不要整份覆盖 graph**）· `add_graph_node` · `remove_graph_node` · `set_graph_scene`（相机/世界/灯光/粒子/辉光；`graphPreset` 可整套换成插件给的起手图）· `list_world_skies`（世界全景图配方，**顺带检查本机有没有那张图**，再用 `set_graph_scene { worldPreset }` 套用）· `list_graph_presets`（插件提供的图形配方，一套换掉当前 graph；**不含内置 6 个母题**）· `list_plugin_passes`（插件提供的 **3D 后期效果**：VHS/故障/水波这类受控 GLSL；写进 `set_graph_scene { post: { passes } }` 才生效，最多 6 个）
 
 **场景**：`list_scene_types` · `add_scene` · `update_scene` · `set_scene_type`（换版式，同名 key 迁移）· `set_scene_timing` · `duplicate_scene` · `reorder_scenes`（**幕序的真相是分镜表**；有被 `move_scene` 钉死的幕时必须带 `reflow:true`，否则时间轴不动） · `remove_scene` · `move_scene`（绝对帧/换轨；会给这一幕**钉死起点**）· `set_scene_box`（画中画）· `set_transition` · `set_transitions`（批量）
 
