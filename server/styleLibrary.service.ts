@@ -128,43 +128,58 @@ function bulletOf(text: string, label: string): string | undefined {
  * 「补充」节是外链附录，明确不属于提示词，在那之前停。
  */
 /**
- * 实现层/出处类章节 → 整节折叠成一行。
+ * 参考性质章节 → 标题下就地插一行「参考说明」，内容**一行都不删**。
  *
- * 判断框架（不是按内容关键词打地鼠，是按**章节标题**的封闭名单）：
- * · 折叠 = 出处与索引、引擎实现（demo/ 文件清单、构建脚本）、原工作流的流程约束
- *   （交付格式、自评步骤）——这些写给"跑 Canvas 逐帧工作流"的 AI，我们的
- *   Remotion 版式引擎既没有那些文件，也不走那个流程，留着只会诱导 agent 照做
- * · 保留 = 视觉语言（长什么样 / 什么材质配色 / 动作什么重量 / 怎么分镜 / 什么别做）
+ * 判断框架（按**章节标题**的封闭名单，不是内容关键词打地鼠）：
+ * · 引擎实现（demo/ 文件清单、绘制代码）——是"这个效果技术上怎么做出画面"的资料，
+ *   agent 该从中提取画面意图、找我们 DSL/skill 的等价做法，而不是照抄
+ * · 参考出处 / 库内索引——仅作了解
+ * · 原工作流的 Rules / 输出要求 / 自评清单——写给原仓库 AI 的流程约束，
+ *   但里面的**质量标准**往往值得借鉴
  *
- * 名单来自全库标题枚举（引擎/出处/索引/流程四类）。出现新系列先枚举标题再扩名单。
+ * 为什么标注而不折叠（2026-11 用户定调）：折叠等于替 agent 预判"这段没用"，
+ * 而实现层里常常埋着真正的技法（噪声位移怎么算、字雨密度怎么控）。我们的职责不是
+ * 删内容，是让 agent 带着正确的姿势读：这些是**外部参考**，任务是淘出能用的。
+ * 名单来自全库标题枚举。出现新系列先枚举标题再扩名单。
  */
-const FOLD_SECTIONS: [RegExp, string][] = [
-  [/^(engine|sources, facts, engine)\b/i, "原工作流的 demo/ 代码文件清单与引擎 API"],
-  [/^参考出处/, "参考原片与素材出处"],
-  [/^学的是哪张参考|^相近的旧编号/, "库内索引信息"],
-  [/^(rules|输出要求|写完后自己过一遍)\b/i, "原工作流的交付格式与自评流程约束"],
+const REF_SECTIONS: [RegExp, string][] = [
+  [
+    /^(engine|sources, facts, engine)\b/i,
+    "〔参考说明〕以下是原作者的引擎实现笔记（demo 文件清单、绘制代码）。当资料淘着读：它说的是这个效果技术上怎么做出画面——提取画面意图，在我们 DSL/skill 里找等价做法；不要去找那些文件，也不要照抄代码。",
+  ],
+  [
+    /^参考出处/,
+    "〔参考说明〕以下是原片/素材出处，仅作了解，不必去找原片。",
+  ],
+  [
+    /^学的是哪张参考|^相近的旧编号/,
+    "〔参考说明〕以下是库内索引信息，看看就行。",
+  ],
+  [
+    /^(rules|输出要求|写完后自己过一遍)\b/i,
+    "〔参考说明〕以下是原作者工作流的规则/交付格式/自评清单，写给原仓库的 AI。逐条判断：画面与质量层面的标准值得借鉴并翻进我们的做法；文件与流程层面的忽略。",
+  ],
 ];
 
-/** 折叠态遇到同级或更高层级标题结束；折叠节替换为一行说明，让 agent 知道内容存在但被略去 */
-function foldImplSections(body: string): string {
+/** 标注遇到同级或更高层级标题结束；标注只是插一行，正文原样保留 */
+function annotateRefSections(body: string): string {
   const out: string[] = [];
-  let fold: { level: number } | null = null;
+  let note: { level: number } | null = null;
   for (const l of body.split("\n")) {
     const m = /^(#{2,4})\s+(.+)$/.exec(l);
     if (m) {
       const level = m[1].length;
       const title = m[2].trim();
-      if (fold && level <= fold.level) fold = null;
-      if (!fold) {
+      if (note && level <= note.level) note = null;
+      out.push(l);
+      if (!note) {
         const bare = title.replace(/^\d+\.\s*/, "");
-        const hit = FOLD_SECTIONS.find(([re]) => re.test(bare));
+        const hit = REF_SECTIONS.find(([re]) => re.test(bare));
         if (hit) {
-          fold = { level };
-          out.push(`〔「${bare}」已省略——${hit[1]}，我们的 Remotion 引擎用不上，不要去找文件或照做〕`);
-          continue;
+          note = { level };
+          out.push(hit[1]);
         }
       }
-    } else if (fold) {
       continue;
     }
     out.push(l);
@@ -177,9 +192,9 @@ function promptSectionOf(text: string): string {
   const start = lines.findIndex((l) => l.startsWith("## ") && l.slice(3).trim().startsWith("风格提示词"));
   if (start < 0) return "";
   // 取到文件尾，不截「补充」：O 系列的技法关键词/导演说明/成片里的分镜都在补充节内部，
-  // 截了会把视觉语言一起丢。噪音（参考出处/引擎/流程）交给 foldImplSections 折叠。
+  // 截了会把视觉语言一起丢。参考性质章节（出处/引擎/流程）交给 annotateRefSections 原位标注。
   return (
-    foldImplSections(
+    annotateRefSections(
       lines
         .slice(start + 1)
         // 「原片/源码」元信息行（V 系列独有）是噪音：评审分数会让 agent 误判质量等级、
@@ -525,12 +540,15 @@ export function readPrompt(id: string): string | null {
   try {
     const text = fs.readFileSync(path.join(LIB_ROOT, it.file), "utf8");
     const body = promptSectionOf(text);
-    // 正文薄（只有一句简介）→ 提示词原文在外链那边，把补充节附上，否则这条等于读了个寂寞。
-    // 不截补充后正文可能已含外链，查重避免贴两遍
-    if ([...body].length < 200 && !body.includes("http")) {
+    // 薄判定看**本体**（「## 风格提示词」到下一个 ##），不能看 body：
+    // 不截补充后补充节连着外链，body.includes("http") 永真 → 薄分支成死代码，
+    // M 系列条目加不上「原文在外链」的指路标记（M11 实测踩中）
+    const core = sectionOf(text, "风格提示词");
+    if ([...core].length < 200 && !core.includes("http")) {
       const sup = supplementOf(text);
       if (sup) {
-        return `${body}\n\n—— 这条在 md 里只有简介，**提示词原文要去下面这些链接找**（参考原片 / 源码）：\n${sup}`;
+        // body 已含补充节（promptSectionOf 取到文件尾），只加指路句，不重复附
+        return `${body}\n\n—— 这条在 md 里只有简介，**提示词原文要去上面补充节的外链找**（参考原片 / 源码）`;
       }
     }
     return body;

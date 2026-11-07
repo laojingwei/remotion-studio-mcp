@@ -33,6 +33,7 @@ import { readScript, saveScript, confirmScript, scriptToText, estimateSeconds, s
 import { BLOCKING_LEVELS, REVIEW_LEVELS, blockingIssues, readReview, markReviewRequested, markReviewConfirmed, markNeedsWork, markSelfRender, markProbe, markChosenStyle, reviewToText, type ReviewIssue, type ReviewLevel } from "./review.service";
 import { listStyles, presetBackdropIssue, presetOf, readStyle, stylePresetIssues, styleSummary } from "./styles.service";
 import { itemById as styleLibItem, listLibrary as listStyleLib, picksSummary, readPrompt as readStylePrompt } from "./styleLibrary.service";
+import { fetchLinkHints } from "./style-link.service";
 import { readStoryboard, saveStoryboard, storyboardToText, type Storyboard } from "./storyboard.service";
 import { readTiming, saveTiming } from "./narration-timing.service";
 import {
@@ -724,18 +725,22 @@ const TOOLS: ToolDef[] = [
         return `「${a.id} ${it.name}」这条在源库里还是空的（只有编号和分类，没有正文）。换一条候选。`;
       }
       /**
-       * 砍掉参考实现代码：源库很多条目后半段是一整段 Canvas 绘制函数。
-       * 只砍有 js/ts 标签的围栏——V 系列的 ```text 围栏里装的就是提示词本体，
-       * 按位置砍会把它的正文砍没了（V11 只剩 178 字元信息）。
+       * 参考实现代码**不再砍**（2026-11 用户定调）：js 绘制函数里常常埋着真技法
+       * （位移怎么算、密度怎么控），agent 的任务是淘金，不能替它删。
+       * token 压力交给下面 MAX_PROMPT 截断——只截尾，且留读全文的文件路径。
        */
-      const codeFence = prompt.search(/^```(?:js|javascript|ts)\b/m);
-      let body =
-        codeFence > 0 && prompt.length - codeFence > 400
-          ? `${prompt.slice(0, codeFence).trimEnd()}${nl}（后面附带的参考实现代码已省略：那是 Canvas 绘制函数，我们的 Remotion 版式用不上）`
-          : prompt;
-      // L/X 系列（成套方案）的完整正文有 8–13KB：整段塞给 agent 是几千 token，
-      // 而它要的只是"翻成我们引擎的画面规则"。给前 6000 字 + 指路读文件。
-      const MAX_PROMPT = 6000;
+      let body = prompt;
+      // 薄条目（M 系列「一句简介」型）：正文只有简介，提示词原文在外链页面上——
+      // agent 打不开链接，服务端代抓（带缓存）。抓不到时 fetchLinkHints 如实说明，
+      // agent 按一句话简介淘意图、不硬编细节。
+      if (prompt.includes("提示词原文要去")) {
+        const hints = await fetchLinkHints(prompt);
+        if (hints) body = `${body}${nl}${nl}${hints}`;
+      }
+      // L/X 系列（成套方案）的完整正文 8–13KB：上限定 20000 字**全库条目都能整篇过**
+      // （最大 L10 = 13248 字），截断只作为防手滑的兜底。别压回 6000——那次截断把
+      // 实现层技法也截掉了，用户明确要求给足。单次只读 1–3 条候选，这个量级可控。
+      const MAX_PROMPT = 20000;
       if (body.length > MAX_PROMPT) {
         body =
           `${body.slice(0, MAX_PROMPT).trimEnd()}${nl}…（正文共 ${body.length} 字，只给了前 ${MAX_PROMPT} 字。` +
@@ -750,11 +755,13 @@ const TOOLS: ToolDef[] = [
         it.fit ? `适合：${it.fit}` : "",
         "",
         "⚠ 这份参考怎么读（先看这段再往下）：" + nl +
-          "它是给「Canvas/代码逐帧工作流」写的完整制作方案——原仓库有 demo/ 源码、构建脚本、评分交付流程。" + nl +
-          "我们的引擎是 Remotion 版式，两者只有【视觉语言】是通的：" + nl +
-          "· 有用的：它长什么样、什么材质配色、动作有什么重量、怎么分镜、什么别做 → 翻成我们的 theme + 版式（get_guide(\"style-translate\") 六槽位）" + nl +
-          "· 不适用的（正文里标了〔已省略〕的章节）：任何 .js/.py 文件名、demo/ 路径、构建渲染流程、交付格式要求——不要去找文件，也不要照那个流程走" + nl +
-          "· 拿不准一段能不能用：凡是要写代码文件、跑构建、引用外部 md 的，跳过；只留画面描述",
+          "库里 341 条都是**外部参考**：原作者用 Canvas/代码逐帧工作流做的 demo 笔记，我们的引擎是 Remotion 版式。" + nl +
+          "所以它**不是给你的指令清单，是原矿**——你的任务是把能用的淘出来，翻成我们的语言（get_guide(\"style-translate\") 六槽位）：" + nl +
+          "· 直接可用：长什么样、材质配色、构图版式、动作重量、节奏、分镜思路、什么别做" + nl +
+          "· 要翻译的：引擎实现/代码段落——不必逐行读懂，读出它想做出什么**画面效果**，在我们 DSL/skill 里找等价做法；没有等价就近似或舍弃" + nl +
+          "· 标了〔参考说明〕的章节：已就地注明它是什么性质、怎么淘——内容**没有删**，值得挖的信息在里面" + nl +
+          "· 通常不照做：文件名/demo 路径（别去找文件）、交付格式、评分；但规则与自评清单里的**质量标准**可以借鉴" + nl +
+          "· 与本仓库既有约定冲突时（读窗、转场、ease 白名单等），以本仓库为准",
         "",
         body,
         "",

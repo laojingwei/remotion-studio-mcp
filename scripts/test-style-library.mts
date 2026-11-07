@@ -29,6 +29,7 @@ import {
   writeOverride,
   writePicks,
 } from "../server/styleLibrary.service";
+import { extractHttpLinks } from "../server/style-link.service";
 import { listSkills, readSkill, resolveSkillName } from "../server/skills.service";
 import { DATA_ROOT } from "../server/paths";
 import { STYLE_USES } from "../shared/style-library";
@@ -211,10 +212,10 @@ check("L 系列的 DEMO.md 自指指令不进正文（库里没这文件，agent
   const l10 = readPrompt("L10") ?? "";
   assert.ok(!l10.includes("How our demo was made"), "整行工作流指令还在——agent 会去找不存在的 DEMO.md");
   assert.ok(!l10.includes("](DEMO.md"), "行内死链接没转纯文字");
-  // L17 的 crayon.js 引擎清单在 Engine 节里 → 整节折叠是正确行为（那正是要省的实现层）
+  // L17 的 crayon.js 引擎清单在 Engine 节里 → 不折叠（里面可能是真技法），原位标注性质
   const l17 = readPrompt("L17") ?? "";
-  assert.ok(!l17.includes("crayon.js"), "L17 的引擎清单没折叠");
-  assert.ok(l17.includes("已省略"), "折叠节没留标记，agent 会以为内容缺失");
+  assert.ok(l17.includes("crayon.js"), "L17 的引擎清单被删了——机制已改为只标注不删");
+  assert.ok(l17.includes("参考说明"), "Engine 节前没插〔参考说明〕标注");
   assert.ok(l10.includes("Essence"), "删噪音行不能伤到方案本体");
 });
 
@@ -222,8 +223,9 @@ check("L 系列完整方案在提示词节之后，不能只取 128 字", () => 
   const l10 = readPrompt("L10") ?? "";
   assert.ok(l10.length > 8000, `L10 正文只有 ${l10.length} 字——完整方案在「1. Essence…11. Variation space」，全在风格提示词节之后`);
   assert.ok(l10.includes("Essence"), "L10 的方案本体没进正文");
-  // 补充节现在进正文（O 系列的导演说明/分镜都在里面），但出处类子节必须折叠
-  assert.ok(!l10.includes("Sources, facts, engine") || l10.includes("已省略"), "Sources/Engine 节没折叠或没留标记");
+  // 补充节进正文（O 系列的导演说明/分镜都在里面）；参考性质子节保留内容，只插标注
+  assert.ok(l10.includes("Sources, facts, engine"), "Sources/Engine 节被删了——机制已改为只标注不删");
+  assert.ok(l10.includes("参考说明"), "Sources/Engine 节没插〔参考说明〕标注");
 });
 
 check("摘要兜底：V 用视觉特征行、L 用 Essence 首段，表格头不许当摘要", () => {
@@ -243,12 +245,17 @@ check("摘要兜底：V 用视觉特征行、L 用 Essence 首段，表格头不
 check("正文薄的条目（M10 型）：原文外链必须在正文里——那是唯一的原文入口", () => {
   const m10 = readPrompt("M10") ?? "";
   assert.ok(m10.includes("prompt-motion.com"), `M10 正文 ${m10.length} 字却没有原文外链：agent 和用户都没地方找原文`);
+  // 薄判定看**本体**（风格提示词节到下一个 ##）：补充节连着外链会让 body.includes("http")
+  // 永真、薄分支成死代码——M11 实测踩中，指路标记加不上，agent 的外链代抓也就不触发
+  const m11 = readPrompt("M11") ?? "";
+  assert.ok(m11.includes("提示词原文要去"), "M11 薄条目没带「原文在外链找」指路标记");
 });
 
-check("O 系列：补充节里的视觉语言（导演说明/分镜）要回来，出处要折叠", () => {
+check("O 系列：补充节里的视觉语言（导演说明/分镜）要回来，出处保留内容并标注", () => {
   const o10 = readPrompt("O10") ?? "";
   assert.ok(o10.includes("导演说明") && o10.includes("成片里的分镜"), "O 系列的分镜与导演说明丢了——它们在补充节里，截断会连视觉语言一起丢");
-  assert.ok(!o10.includes("Dieterle"), "参考出处（William Dieterle, 1937…）没折叠，agent 会想去找原片");
+  assert.ok(o10.includes("Dieterle"), "参考出处被删了——机制已改为只标注不删");
+  assert.ok(o10.includes("参考说明"), "出处节没插〔参考说明〕标注");
 });
 
 check("库外相对链接已中性化（demos 连源盘都没有，死链不能再进面板）", () => {
@@ -260,7 +267,19 @@ check("库外相对链接已中性化（demos 连源盘都没有，死链不能�
   assert.deepEqual(bad, [], `还有 ${bad.length} 个文件带 ](../ 死链：${bad.slice(0, 3).join("、")}`);
 });
 
-console.log("翻译技能（style-translate）可达性");console.log("翻译技能（style-translate）可达性");
+check("外链提取：只收 http(s)、去重保序、封顶 3 条（薄条目代抓的入口）", () => {
+  const links = extractHttpLinks(
+    "[人生循环](https://a.com/x) [重复](https://a.com/x) [死链](../no.md) [相对](no.md) " +
+      "[b](https://b.com) [c](https://c.com) [d](https://d.com)",
+  );
+  assert.deepEqual(
+    links.map((l) => l.url),
+    ["https://a.com/x", "https://b.com", "https://c.com"],
+    "提取结果：去重、跳过相对链接、封顶 3 条",
+  );
+});
+
+console.log("翻译技能（style-translate）可达性");
 check("技能能被扫到（否则 agent 永远找不到这篇）", () => {
   assert.ok(
     listSkills().some((s) => s.name === "style-translate"),
