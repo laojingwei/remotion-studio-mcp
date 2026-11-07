@@ -279,6 +279,12 @@ export const elementSchema = z.object({
 
   /* svg */
   svg: z.string().optional().describe('SVG 内部标记，如 <path d="…"/>'),
+  /**
+   * 大 SVG 的文件引用（绝对路径）：服务端在写库前读文件注入 `svg` 并删掉本键，不落盘。
+   * 为什么要给叠加层通道也加：elementSchema 默认**静默丢弃**未知字段——不加的话
+   * agent 写了 svgSrcFile 会得到一个没有 svg 的空元素，零报错（见 server/element-from-file.ts）。
+   */
+  svgSrcFile: z.string().optional().describe("本地 SVG 文件的绝对路径；服务端读文件注入 svg，写库前解析、不落盘。大图用文件引用，别内联长 path"),
   viewBox: z.string().default("0 0 24 24"),
   stroke: z.boolean().default(false).describe("true 用描边画（线稿图标），false 用填充"),
   strokeWidth: z.number().default(2),

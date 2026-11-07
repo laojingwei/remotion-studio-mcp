@@ -23,6 +23,22 @@ export const freeElSchema = z.object({
   shape: z.enum(["rect", "circle", "line", "triangle"]).optional(),
   src: z.string().optional(),
   svg: z.string().optional(),
+  /**
+   * 大 SVG 的文件引用（绝对路径）：服务端读文件注入 `svg`，**写库前解析、不落盘**。
+   *
+   * 为什么存在：手绘白板/复杂插画的 SVG 路径动辄 6k–21k 字符，内联进工具调用受
+   * LLM 单轮输出限制且极易抄错；agent 的 Read 工具对单行 >2000 字符还会截断，
+   * 想自己读全文再拼回来根本做不到。正确姿势是脚本把 SVG 写到盘上、这里给路径。
+   */
+  svgSrcFile: z
+    .string()
+    .optional()
+    .describe(
+      "本地 SVG 文件的**绝对路径**（Windows 写 D:/… 或 D:\\…，不要 Git Bash 的 /d/…）。" +
+        "服务端读文件注入 svg，写库前解析、不落盘；只收 .svg/.txt，≤200KB。" +
+        "大图（几千字符的手绘路径）用这个，别把长 path 手写进工具调用。" +
+        "文件内容会进工程并被渲染，别指向敏感文件。",
+    ),
   viewBox: z.string().optional(),
 
   /* 颜色 / 描边 */

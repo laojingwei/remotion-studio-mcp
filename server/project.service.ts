@@ -2,6 +2,7 @@ import type { Project } from "../shared/schema";
 import { applyOps, type Op, type OpResult } from "../shared/ops";
 import { deleteProjectDir, listProjectIds, listSnapshots, projectFileTimes, readProject, readSnapshot, writeLastProjectId, writeProject } from "./store";
 import { assertTextureAssets } from "./texture-asset-check";
+import { resolveElementFromFile } from "./element-from-file";
 import { forgetArchived, pruneArchived, readArchive, setArchived } from "./archive.service";
 import { frozenSnapshot, hasHook, runHook } from "./plugin/hooks";
 
@@ -199,6 +200,10 @@ class ProjectService {
       revMismatch = { expected: opts.expectedRev, actual: current.rev };
     }
 
+    // 大 SVG 文件引用先解引用（svgSrcFile → svg）：后面的校验 / 插件钩子 / 落盘
+    // 看到的都是解析后的最终数据。抛错即整批拒绝，工程未动。
+    const fromFileNotes = resolveElementFromFile(ops);
+
     // 贴图素材校验（存在性/格式/体积/尺寸）在写库前挡——渲染端加载失败只会静默回退，agent 看不到
     assertTextureAssets(ops);
 
@@ -233,6 +238,7 @@ class ProjectService {
 
     const result: AppliedResult = applyOps(current, ops);
     if (beforeWarnings.length) result.summary.unshift(...beforeWarnings);
+    if (fromFileNotes.length) result.summary.unshift(...fromFileNotes);
 
     /*
      * 插件复盘（ops:review）：拿到写入前/后两份快照，只能往回调回执里加文字。

@@ -5601,7 +5601,7 @@ const TOOLS: ToolDef[] = [
   {
     name: "add_element",
     description:
-      "往场景里放一个自由元素（贴纸 / 图标 / 标签 / 图片 / 视频 / 音频 / **序列帧特效**）。可以用 libraryId 取素材库现成的，也可以自己给 svg（矢量）、text（文字）、imageSrc（图片）、videoSrc（视频）、audioSrc（音频）、imageSeqSrc（序列帧：src 带 {frame} 占位符 + seqFrom/seqTo/frameDigits，每帧换一张透明 PNG 叠画面上，爆炸/烟雾/光效就用它）——素材库没有合适的就自己造。放进去之后用户可以正常拖动/旋转/缩放/删除。视频默认有声、不循环；音频/视频没给 durationInFrames 会按素材真实时长。支持背景色 bg、入场 enter / 出场 exit 特效、场景内时间 from / durationInFrames。\n" +
+      "往场景里放一个自由元素（贴纸 / 图标 / 标签 / 图片 / 视频 / 音频 / **序列帧特效**）。可以用 libraryId 取素材库现成的，也可以自己给 svg（矢量；**几千字符的大图改用 svgSrcFile 传文件绝对路径**，服务端读文件注入，别内联长 path）、text（文字）、imageSrc（图片）、videoSrc（视频）、audioSrc（音频）、imageSeqSrc（序列帧：src 带 {frame} 占位符 + seqFrom/seqTo/frameDigits，每帧换一张透明 PNG 叠画面上，爆炸/烟雾/光效就用它）——素材库没有合适的就自己造。放进去之后用户可以正常拖动/旋转/缩放/删除。视频默认有声、不循环；音频/视频没给 durationInFrames 会按素材真实时长。支持背景色 bg、入场 enter / 出场 exit 特效、场景内时间 from / durationInFrames。\n" +
       "**x/y 是元素中心点**（不是左上角）：贴边放时元素有一半会被裁掉。文字宽度随字数×字号变化，长句别往 x>80 放，否则右侧超出画面（回执会算给你）。",
     shape: {
       projectId: z.string().optional().describe("要操作的工程 id，不传 = 当前默认工程（list_projects 查）"),
@@ -5835,7 +5835,8 @@ const TOOLS: ToolDef[] = [
     name: "update_freeform_element",
     description:
       "局部更新 freeform 场景里的一个元素（按 elementId 或 index），不用重发整个 elements 数组。patch 只写要改的字段（text/x/y/size/fill/bg/border/style/anim…）。\n" +
-      "分清：freeform 自由画布场景用本工具（patch 包裹式）；内置版式场景的元素用 update_element（平铺字段式）。",
+      "分清：freeform 自由画布场景用本工具（patch 包裹式）；内置版式场景的元素用 update_element（平铺字段式）。\n" +
+      "换大 SVG 时 patch 里只写 svgSrcFile（绝对路径，服务端读文件注入），别把几千字符的 path 手写进来——见 get_guide(\"freeform\") 的「大 SVG」节。",
     shape: {
       projectId: z.string().optional().describe("要操作的工程 id，不传 = 当前默认工程（list_projects 查）"),
       sceneId: z.string(),
@@ -5870,6 +5871,7 @@ const TOOLS: ToolDef[] = [
     name: "add_freeform_element",
     description:
       "往 freeform 场景追加一个元素（上限 40 个）。svg 图形、fx 氛围层（glow/noise/dust/beam…）、带 anim 关键帧动画的元素**只能走这里**——add_element 的叠加层通道不支持这些。返回分配的元素 id。常用字段：type(svg/text/shape/image/fx)、x/y(百分比)、size(短边百分比)、width/height(短边百分比，矩形单独定宽高；不传=size，所以 size:76 画横条会变成 76%×76% 的方块)、from(出现帧)、anim(关键帧，from/to 是绝对值)、viewBox(改 svg 必须一起传，否则内容被压成一个点)。\n" +
+      "**大 SVG（几千字符的手绘路径）用 svgSrcFile**：脚本把 SVG 落盘（绝对路径 D:/…），元素里只写 svgSrcFile，服务端读文件注入——别内联长 path，也别说 Read 截断读不全（你根本不用读它）。详见 get_guide(\"freeform\")。\n" +
       "半透明有两条路且等价：元素级 opacity:0.22（会乘进 fill/stroke 的 alpha）或 fill:\"rgba(90,200,250,0.22)\"。\n" +
       "⚠️ svg 元素：内容里自带的 fill 会盖掉外层 fill（改外层没反应就是这原因）——要能改色，svg 内容里别写 fill。",
     shape: {
