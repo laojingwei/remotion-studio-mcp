@@ -8954,3 +8954,563 @@ select.tts-input {
   font-size: 10px;
   color: var(--muted);
 }
+
+/* ─────────────────── 风格库面板（341 条外部风格提示词） ───────────────────
+   两个分区（参考 / 内置）的视觉必须能一眼分开：上区是网格大图，下区是窄卡片。
+   混在一起用户会以为"勾了就能套用"，那是这套东西最容易发生的误会。 */
+
+.sl-dialog {
+  width: min(1320px, 95vw);
+  height: 90vh;
+  display: flex;
+  flex-direction: column;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  overflow: hidden;
+  box-shadow: 0 24px 80px rgba(0, 0, 0, 0.6);
+}
+
+.sl-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--line);
+  flex: none;
+}
+.sl-title {
+  font-size: 14px;
+  font-weight: 600;
+}
+.sl-count,
+.sl-hint {
+  color: var(--muted);
+  font-size: 12px;
+}
+.sl-spacer {
+  flex: 1;
+}
+
+.sl-filters {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--line);
+  flex: none;
+}
+/* 分区切换：341 条参考滚到底才看得见内置 43 个，标签页把"往下找"变成"点一下" */
+.sl-tabs {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.sl-tab {
+  height: 28px;
+  padding: 0 12px;
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  background: var(--panel-2);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  color: var(--muted);
+  font-size: 12px;
+  cursor: pointer;
+}
+.sl-tab:hover {
+  color: var(--text);
+  border-color: var(--line-strong);
+}
+.sl-tab.is-on {
+  background: var(--accent-dim);
+  border-color: var(--accent);
+  color: var(--text);
+  font-weight: 600;
+}
+.sl-tab em {
+  font-style: normal;
+  font-size: 11px;
+  font-weight: 400;
+  color: var(--muted);
+  padding: 0 5px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.07);
+}
+.sl-tab.is-on em {
+  color: var(--text);
+  background: rgba(0, 0, 0, 0.22);
+}
+.sl-tabs-hint {
+  margin-left: auto;
+}
+
+.sl-search {
+  width: 100%;
+  height: 30px;
+  padding: 0 10px;
+  background: var(--panel-2);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  color: var(--text);
+}
+.sl-search:focus {
+  outline: none;
+  border-color: var(--accent-dim);
+}
+.sl-chips {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  align-items: center;
+}
+.sl-chip {
+  height: 24px;
+  padding: 0 9px;
+  background: var(--panel-2);
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  color: var(--muted);
+  font-size: 12px;
+  cursor: pointer;
+}
+.sl-chip:hover {
+  color: var(--text);
+  border-color: var(--line-strong);
+}
+.sl-chip.is-on {
+  background: var(--accent-dim);
+  border-color: var(--accent);
+  color: var(--text);
+}
+.sl-check-still {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  color: var(--muted);
+  font-size: 12px;
+  margin-left: 6px;
+  cursor: pointer;
+}
+
+.sl-empty {
+  padding: 24px 16px;
+  color: var(--muted);
+  text-align: center;
+}
+.sl-empty code {
+  background: var(--panel-2);
+  padding: 1px 5px;
+  border-radius: 4px;
+}
+
+.sl-body {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+}
+.sl-grid-wrap {
+  flex: 1;
+  min-width: 0;
+  overflow: auto;
+  padding: 12px 14px 20px;
+}
+.sl-section-title {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text);
+  margin: 2px 0 10px;
+}
+
+.sl-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(158px, 1fr));
+  gap: 10px;
+}
+
+.sl-card {
+  position: relative;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  overflow: hidden;
+  background: var(--panel-2);
+  cursor: pointer;
+  transition: border-color 0.12s ease, transform 0.12s ease;
+}
+.sl-card:hover {
+  border-color: var(--line-strong);
+  transform: translateY(-1px);
+}
+.sl-card.is-on {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 1px var(--accent-dim);
+}
+
+.sl-thumb {
+  position: relative;
+  aspect-ratio: 16 / 10;
+  background: #0b0b10;
+}
+.sl-thumb img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+.sl-ph {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 3px;
+  /* 下边留出角标的位置：无样张角标压在摘要最后一行上会看不清 */
+  padding: 10px 10px 22px;
+  overflow: hidden;
+}
+.sl-ph b {
+  font-size: 15px;
+  letter-spacing: 0.02em;
+  color: #fff;
+}
+.sl-ph span {
+  font-size: 12px;
+  color: rgba(255, 255, 255, 0.9);
+  line-height: 1.3;
+}
+.sl-ph i {
+  font-size: 11px;
+  font-style: normal;
+  color: rgba(255, 255, 255, 0.55);
+  line-height: 1.35;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.sl-badge {
+  position: absolute;
+  left: 6px;
+  bottom: 6px;
+  padding: 1px 6px;
+  border-radius: 999px;
+  font-size: 10px;
+  color: #f5f5f5;
+  border: 1px solid #2a1c60;
+  background: #1c1b1bd1;
+}
+.sl-no-still {
+  position: absolute;
+  right: 6px;
+  bottom: 6px;
+  padding: 1px 6px;
+  border-radius: 999px;
+  font-size: 10px;
+  color: var(--muted);
+  background: rgba(0, 0, 0, 0.55);
+  border: 1px solid var(--line);
+}
+.sl-check {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  background: var(--accent);
+  color: #0b0b10;
+  font-size: 12px;
+  font-weight: 700;
+  display: grid;
+  place-items: center;
+}
+
+.sl-meta {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 8px;
+}
+.sl-id {
+  color: var(--muted);
+  font-size: 11px;
+  flex: none;
+}
+.sl-name {
+  flex: 1;
+  min-width: 0;
+  font-size: 12px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.sl-info {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  flex: none;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  border: 1px solid var(--line);
+  background: #4b4fff12;
+  color: var(--muted);
+  font-size: 11px;
+  cursor: pointer;
+  line-height: 1;
+}
+.sl-info:hover {
+  color: var(--text);
+  border-color: var(--line-strong);
+}
+
+.sl-more {
+  padding: 14px 0 4px;
+  text-align: center;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+/* 放大按钮：压在缩略图右下角，hover 才显形——常显会让整屏卡片都很吵 */
+.sl-zoom {
+  position: absolute;
+  right: 6px;
+  bottom: 6px;
+  width: 22px;
+  height: 22px;
+  display: grid;
+  place-items: center;
+  border: none;
+  border-radius: 5px;
+  background: rgba(0, 0, 0, 0.62);
+  color: #fff;
+  font-size: 13px;
+  line-height: 1;
+  cursor: zoom-in;
+  opacity: 0;
+  transition: opacity 0.12s ease, background 0.12s ease;
+}
+.sl-card:hover .sl-zoom,
+.sl-zoom:focus-visible {
+  opacity: 1;
+}
+.sl-zoom:hover {
+  background: rgba(0, 0, 0, 0.85);
+}
+
+/* 详情抽屉 */
+.sl-detail {
+  width: 342px;
+  flex: none;
+  border-left: 1px solid var(--line);
+  overflow: auto;
+  padding: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.sl-detail-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 13px;
+}
+.sl-detail-img {
+  width: 100%;
+  border-radius: 7px;
+  border: 1px solid var(--line);
+  display: block;
+}
+.sl-detail-nostill {
+  padding: 22px 12px;
+  text-align: center;
+  color: var(--muted);
+  font-size: 12px;
+  border: 1px dashed var(--line);
+  border-radius: 7px;
+}
+.sl-detail-sum {
+  margin: 0;
+  line-height: 1.6;
+  font-size: 12px;
+}
+.sl-detail-fit {
+  margin: 0;
+  font-size: 12px;
+  color: var(--muted);
+  line-height: 1.6;
+}
+.sl-detail-fit i {
+  font-style: normal;
+  color: var(--accent);
+  margin-right: 4px;
+}
+.sl-detail-label {
+  font-size: 11px;
+  color: var(--muted);
+  margin-top: 2px;
+}
+.sl-prompt {
+  margin: 0;
+  padding: 10px;
+  background: var(--panel-2);
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  font-size: 12px;
+  line-height: 1.65;
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 340px;
+  overflow: auto;
+  color: var(--text);
+  font-family: inherit;
+}
+
+.sl-foot {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 14px;
+  border-top: 1px solid var(--line);
+  flex: none;
+}
+.sl-picked {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  font-size: 12px;
+}
+.sl-picked-list {
+  color: var(--muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.sl-picked-empty {
+  color: var(--muted);
+}
+.sl-note {
+  width: 240px;
+  height: 28px;
+  padding: 0 9px;
+  background: var(--panel-2);
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  color: var(--text);
+  font-size: 12px;
+}
+.sl-note:focus {
+  outline: none;
+  border-color: var(--accent-dim);
+}
+.sl-msg {
+  color: var(--accent);
+  font-size: 12px;
+  max-width: 320px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.sl-primary {
+  height: 30px;
+  padding: 0 14px;
+  border-radius: 8px;
+  border: 1px solid var(--accent);
+  background: var(--accent);
+  color: #0b0b10;
+  font-weight: 600;
+  cursor: pointer;
+}
+.sl-primary:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+/* 放大图：铺满视口。图片按 contain 展示，不裁切——放大就是为了看全、看细节 */
+.sl-lightbox {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  background: rgba(0, 0, 0, 0.8);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  padding: 28px;
+  cursor: zoom-out;
+}
+.sl-lightbox img {
+  max-width: 94vw;
+  max-height: 82vh;
+  object-fit: contain;
+  border-radius: 6px;
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.6);
+  cursor: default;
+  border: 1px solid #fff;
+}
+.sl-lightbox-cap {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  max-width: 94vw;
+  color: #fff;
+  font-size: 12px;
+}
+.sl-lightbox-cap b {
+  font-size: 13px;
+}
+.sl-lightbox-cap span {
+  color: rgba(255, 255, 255, 0.62);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* 抽屉里的图也能点开：缩略图 342px 宽，看不清字重和纹理 */
+.sl-clickable {
+  cursor: zoom-in;
+}
+
+/* 内置抽屉的标签行与色板 */
+.sl-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+}
+.sl-tag {
+  padding: 1px 7px;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  background: var(--panel-2);
+  color: var(--muted);
+  font-size: 11px;
+}
+.sl-tag.is-ok {
+  border-color: var(--accent-dim);
+  color: var(--accent);
+}
+.sl-swatches {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+}
+.sl-swatch {
+  width: 26px;
+  height: 26px;
+  border-radius: 5px;
+  border: 1px solid var(--line);
+}
+.sl-mono {
+  font-size: 11px;
+  color: var(--muted);
+  line-height: 1.6;
+  word-break: break-word;
+}

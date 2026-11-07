@@ -22,6 +22,7 @@ import { RenderDialog, type RenderFormat, type RenderQuality } from "./panels/Re
 import { TtsDialog } from "./panels/TtsDialog";
 import { WorkspaceDialog } from "./panels/WorkspaceDialog";
 import { PluginsDialog } from "./panels/PluginsDialog";
+import { StyleLibraryDialog } from "./panels/StyleLibraryDialog";
 
 type RenderState = {
   id: string;
@@ -332,6 +333,7 @@ export default function App() {
   const [outputsRefresh, setOutputsRefresh] = useState(0);
   const [workspaceOpen, setWorkspaceOpen] = useState(false);
   const [pluginsOpen, setPluginsOpen] = useState(false);
+  const [styleLibOpen, setStyleLibOpen] = useState(false);
   const [ttsOpen, setTtsOpen] = useState(false);
   const [showTpls, setShowTpls] = useState(false);
   const [formatMenu, setFormatMenu] = useState(false);
@@ -1164,6 +1166,18 @@ export default function App() {
           <span>插件</span>
         </button>
 
+        {/*
+          风格库和插件同级放顶栏，理由同上：341 条风格提示词只有从这里进得去，
+          用户不可能知道"磁盘上有个文件夹"。
+        */}
+        <button
+          className="ghost plugin-entry"
+          onClick={() => setStyleLibOpen(true)}
+          title="风格库：浏览 341 条风格，勾选后交给 agent"
+        >
+          <span>风格库</span>
+        </button>
+
         {/* 低频操作收进一个「⋯」菜单，顶栏只留折叠开关 + 渲染 */}
         <div className="topbar-more" ref={moreRef}>
           <button
@@ -1540,6 +1554,7 @@ export default function App() {
       <LogDrawer open={logOpen} onClose={() => setLogOpen(false)} />
       <WorkspaceDialog open={workspaceOpen} onClose={() => setWorkspaceOpen(false)} />
       <PluginsDialog open={pluginsOpen} onClose={() => setPluginsOpen(false)} />
+      <StyleLibraryDialog open={styleLibOpen} onClose={() => setStyleLibOpen(false)} />
       <TtsDialog open={ttsOpen} onClose={() => setTtsOpen(false)} />
       <RenderDialog
         open={renderOpen}

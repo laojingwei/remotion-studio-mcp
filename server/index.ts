@@ -100,6 +100,20 @@ import { z } from "zod";
 import { zodToJsonSchema } from "zod-to-json-schema";
 import { TOOLS, CORE_TOOL_NAMES, exposeAllTools, validateToolArgs } from "./mcp-tools";
 import { library } from "./library.service";
+import {
+  buildIndex,
+  builtinStillAbsOf,
+  isLibraryEmpty,
+  listBuiltinStyles,
+  listLibrary,
+  readBuiltinStyle,
+  readPicks,
+  readPrompt,
+  stillAbsOf,
+  writeOverride,
+  writePicks,
+} from "./styleLibrary.service";
+import { STYLE_MOODS, STYLE_USES, type StyleMood, type StyleUse } from "../shared/style-library";
 import { readBrief, saveBrief } from "./brief.service";
 import { markNarrationHeard, readTiming, saveTiming } from "./narration-timing.service";
 import { appendDecision, readDecisions, type DecisionKind } from "./decision-log.service";
@@ -1214,6 +1228,155 @@ app.get("/resources/:category/*", (c) => {
     })
     .join("/");
   return serveResourceFile(c, catId, rel);
+});
+
+/**
+ * 风格库（341 条外部风格提示词）——编辑器「风格库」面板的数据面。
+ *
+ * 和 `list_styles` / `apply_style` 那 43 个内置风格**是两套东西**：
+ * 这里是「画风文字描述 + 一张静帧」，只能当视觉参考；内置风格才有 palette/font 预设。
+ * 面板因此分两个分区显示，接口也分两个字段返回，别合并。
+ *
+ * 静帧走 `/api/style-library/still/:id` 而不是 `/assets/`：库在 `server/skills/` 下，
+ * 不在 public 里，也不该被复制进 public（341 张图会跟着 bundle 打包）。
+ */
+app.get("/api/style-library", (c) => {
+  const q = c.req.query();
+  const use = q.use as StyleUse | "all" | undefined;
+  const mood = q.mood as StyleMood | "all" | undefined;
+  const { items, total, withStill } = listLibrary({
+    q: q.q,
+    use,
+    mood,
+    withStill: q.withStill === "1" || q.withStill === "true",
+  });
+  return c.json({
+    items,
+    total,
+    withStill,
+    empty: isLibraryEmpty(),
+    uses: STYLE_USES,
+    moods: STYLE_MOODS,
+    builtin: listBuiltinStyles(),
+    picks: readPicks(),
+  });
+});
+
+app.post("/api/style-library/rebuild", (c) => {
+  const blocked = localOnly(c, "重建风格库索引");
+  if (blocked) return blocked;
+  const idx = buildIndex(true);
+  return c.json({ ok: true, total: idx.total, withStill: idx.withStill, builtAt: idx.builtAt });
+});
+
+/** 单条提示词全文：面板抽屉里显示，也是「复制给 agent」的来源 */
+app.get("/api/style-library/prompt/:id", (c) => {
+  const id = c.req.param("id");
+  const prompt = readPrompt(id);
+  if (prompt === null) return c.json({ error: `库里没有「${id}」这一条` }, 404);
+  return c.json({ id, prompt });
+});
+
+/** 顺带把 webp 流出去。缓存 7 天：库更新靠 rebuild，不靠浏览器过期 */
+function serveWebp(c: Context, abs: string): Response {
+  try {
+    const stat = fs.statSync(abs);
+    const etag = `W/"${stat.size.toString(16)}-${Math.round(stat.mtimeMs).toString(16)}"`;
+    if (c.req.header("if-none-match") === etag) return c.body(null, 304);
+    return c.body(new Uint8Array(fs.readFileSync(abs)), 200, {
+      "content-type": "image/webp",
+      "cache-control": "public, max-age=604800",
+      etag,
+    });
+  } catch {
+    return c.json({ error: "读不到静帧文件" }, 404);
+  }
+}
+
+app.get("/api/style-library/still/:id", (c) => {
+  const abs = stillAbsOf(c.req.param("id"));
+  if (!abs) return c.json({ error: "这一条没有静帧" }, 404);
+  return serveWebp(c, abs);
+});
+
+/** 内置 43 风格的静帧：约定放在 server/styles/stills/<slug>.webp，没有就 404 由前端画占位 */
+app.get("/api/style-library/builtin-still/:slug", (c) => {
+  const abs = builtinStillAbsOf(c.req.param("slug"));
+  if (!abs) return c.json({ error: "这个内置风格还没有样张" }, 404);
+  return serveWebp(c, abs);
+});
+
+/** 内置风格的规则正文 + 结构化预设：面板右抽屉里给用户看「这风格到底是什么」 */
+app.get("/api/style-library/builtin/:slug", (c) => {
+  const detail = readBuiltinStyle(c.req.param("slug"));
+  if (!detail) return c.json({ error: "没有这个内置风格" }, 404);
+  return c.json(detail);
+});
+
+app.get("/api/style-library/picks", (c) => c.json({ picks: readPicks() }));
+
+/**
+ * 勾选写盘 + 顺手给 agent 留一条言。
+ *
+ * 为什么要留言而不是只落盘：agent 只在"被调用"时才知道发生了什么。用户点完「告诉 agent」
+ * 就切回对话窗口，如果只写了 picks.json，agent 不会主动去读——它会等用户打字。
+ * 两个通道一起走，用户就不用再把选好的编号手打一遍。
+ */
+app.post("/api/style-library/picks", async (c) => {
+  const blocked = localOnly(c, "保存风格勾选");
+  if (blocked) return blocked;
+  const body = (await c.req.json().catch(() => ({}))) as {
+    ids?: unknown;
+    builtinSlugs?: unknown;
+    note?: unknown;
+    projectId?: unknown;
+    notify?: unknown;
+  };
+  const ids = Array.isArray(body.ids) ? body.ids.map((x) => String(x)) : [];
+  const builtinSlugs = Array.isArray(body.builtinSlugs) ? body.builtinSlugs.map((x) => String(x)) : [];
+  const note = typeof body.note === "string" ? body.note : undefined;
+  const projectId = typeof body.projectId === "string" ? body.projectId : undefined;
+  const { picks, dropped } = writePicks({ ids, builtinSlugs, note, projectId });
+
+  let notified = false;
+  const pickedSlugs = picks.builtinSlugs ?? [];
+  if (body.notify && (picks.ids.length || pickedSlugs.length)) {
+    // 留言分两段：内置和参考对 agent 是两种动作，混成一句话它就会拿画风描述去 apply_style
+    const lib = listLibrary().items;
+    const refNames = picks.ids.map((id) => {
+      const it = lib.find((x) => x.id === id);
+      return it ? `${it.id} ${it.name}` : id;
+    });
+    const all = listBuiltinStyles();
+    const builtinNames = pickedSlugs.map((slug) => {
+      const b = all.find((x) => x.slug === slug);
+      return b ? `${slug}（${b.name}）` : slug;
+    });
+    const parts: string[] = [];
+    if (builtinNames.length) parts.push(`内置我选了 ${builtinNames.join("、")}，这些直接套`);
+    if (refNames.length) parts.push(`参考我选了 ${refNames.join("、")}，这些给我出参考图`);
+    addMessage(
+      "user",
+      `风格我选好了：${parts.join("；")}。${note ? `（备注：${note}）` : ""}我看过图再往下做。`,
+    );
+    notified = true;
+  }
+  return c.json({ picks, dropped, notified });
+});
+
+/** 人工改气质/用途：面板里点一下就存，只存 diff（没有 diff 就删掉那条） */
+app.post("/api/style-library/override", async (c) => {
+  const blocked = localOnly(c, "修改风格标注");
+  if (blocked) return blocked;
+  const body = (await c.req.json().catch(() => ({}))) as { id?: unknown; moods?: unknown; use?: unknown };
+  const id = String(body.id ?? "");
+  if (!id) return c.json({ error: "缺少 id" }, 400);
+  const moods = Array.isArray(body.moods)
+    ? (body.moods.filter((m) => (STYLE_MOODS as readonly string[]).includes(String(m))) as StyleMood[])
+    : undefined;
+  const use = STYLE_USES.some((u) => u.id === body.use) ? (body.use as StyleUse) : undefined;
+  writeOverride(id, { moods, use });
+  return c.json({ ok: true });
 });
 
 /**

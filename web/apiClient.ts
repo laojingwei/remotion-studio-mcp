@@ -1,6 +1,7 @@
 import type { Op } from "@shared/ops";
 import type { Project } from "@shared/schema";
 import type { CustomAsset } from "@shared/assetLibrary";
+import type { BuiltinStyleDetail, BuiltinStyleItem, StyleItem, StylePicks, StyleUseDef } from "@shared/style-library";
 
 export type OpResponse = {
   project: Project;
@@ -1412,3 +1413,98 @@ export async function removeOrphanDir(dir: string): Promise<{ dir: string; trash
   if (!res.ok) throw new Error(data.error ?? "删除失败");
   return data;
 }
+
+/* ── 风格库（341 条外部风格提示词）────────────────────────────────── */
+
+export type StyleLibraryResponse = {
+  items: StyleItem[];
+  total: number;
+  withStill: number;
+  /** 库里一条都没有：前端提示"先跑 npm run style:import" */
+  empty: boolean;
+  uses: StyleUseDef[];
+  moods: string[];
+  builtin: BuiltinStyleItem[];
+  picks: StylePicks | null;
+};
+
+export async function fetchStyleLibrary(params: {
+  q?: string;
+  use?: string;
+  mood?: string;
+  withStill?: boolean;
+}): Promise<StyleLibraryResponse> {
+  const sp = new URLSearchParams();
+  if (params.q) sp.set("q", params.q);
+  if (params.use && params.use !== "all") sp.set("use", params.use);
+  if (params.mood && params.mood !== "all") sp.set("mood", params.mood);
+  if (params.withStill) sp.set("withStill", "1");
+  const res = await jfetch(`/api/style-library?${sp.toString()}`);
+  const data = await res.json();
+  if (!res.ok) throw new Error(data.error ?? "读取风格库失败");
+  return data;
+}
+
+/** 用户加/删了文件后点「刷新」：强制重建索引 */
+export async function rebuildStyleLibrary(): Promise<{ total: number; withStill: number }> {
+  const res = await fetch("/api/style-library/rebuild", { method: "POST" });
+  const data = await res.json();
+  if (!res.ok) throw new Error(data.error ?? "重建索引失败");
+  return data;
+}
+
+export async function fetchStylePrompt(id: string): Promise<string> {
+  const res = await jfetch(`/api/style-library/prompt/${encodeURIComponent(id)}`);
+  const data = await res.json();
+  if (!res.ok) throw new Error(data.error ?? "读不到提示词");
+  return data.prompt as string;
+}
+
+/** 内置风格的详情：规则正文 + 结构化预设（palette/font/radius），右抽屉展示用 */
+export async function fetchBuiltinStyle(slug: string): Promise<BuiltinStyleDetail> {
+  const res = await jfetch(`/api/style-library/builtin/${encodeURIComponent(slug)}`);
+  const data = await res.json();
+  if (!res.ok) throw new Error(data.error ?? "读不到这个内置风格");
+  return data;
+}
+
+/**
+ * 保存勾选。`notify` 为真时服务端同时给 agent 留一条言——
+ * 这是"用户勾完回来说一声"的实际实现，所以面板上那个按钮不是纯 UI 效果。
+ *
+ * `ids` 是参考风格编号（要翻译），`builtinSlugs` 是内置风格 slug（能直接 apply_style）。
+ * 两个字段分开送：混成一个数组后服务端就得猜哪个是哪个，猜错会让 agent 拿画风描述去套配色。
+ */
+export async function saveStylePicks(input: {
+  ids: string[];
+  builtinSlugs?: string[];
+  note?: string;
+  projectId?: string;
+  notify?: boolean;
+}): Promise<{ picks: StylePicks; dropped: string[]; notified: boolean }> {
+  const res = await fetch("/api/style-library/picks", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(input),
+  });
+  const data = await res.json();
+  if (!res.ok) throw new Error(data.error ?? "保存勾选失败");
+  return data;
+}
+
+/** 人工改气质（面板里点标签） */
+export async function saveStyleOverride(id: string, patch: { moods?: string[]; use?: string }): Promise<void> {
+  const res = await fetch("/api/style-library/override", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ id, ...patch }),
+  });
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({}));
+    throw new Error(data.error ?? "保存标注失败");
+  }
+}
+
+/** 静帧 URL：没有静帧时返回 null，前端画占位卡 */
+export const styleStillUrl = (id: string): string => `/api/style-library/still/${encodeURIComponent(id)}`;
+export const builtinStillUrl = (slug: string): string => `/api/style-library/builtin-still/${encodeURIComponent(slug)}`;
