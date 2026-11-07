@@ -9514,3 +9514,202 @@ select.tts-input {
   line-height: 1.6;
   word-break: break-word;
 }
+
+/* ─────────────────── 设计稿面板（export_design 出的 markdown） ───────────────────
+   这是一篇给人读的文章，不是表单：行长限制在 78 字左右，表格横向可滚，
+   勾选项带方框——用户是拿着鼠标一行行划过去确认，不是扫一眼。 */
+
+.dd-dialog {
+  width: min(940px, 94vw);
+  height: 88vh;
+  display: flex;
+  flex-direction: column;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  overflow: hidden;
+  box-shadow: 0 24px 80px rgba(0, 0, 0, 0.6);
+}
+
+.dd-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--line);
+  flex: none;
+}
+.dd-title {
+  font-size: 14px;
+  font-weight: 600;
+}
+.dd-sub,
+.dd-msg {
+  color: var(--muted);
+  font-size: 12px;
+}
+.dd-msg {
+  color: var(--accent);
+}
+.dd-spacer {
+  flex: 1;
+}
+
+.dd-body {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: 20px 26px 28px;
+}
+.dd-empty {
+  padding: 40px 10px;
+  text-align: center;
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.9;
+}
+.dd-empty code {
+  background: var(--panel-2);
+  padding: 1px 6px;
+  border-radius: 4px;
+  color: var(--text);
+}
+
+.dd-foot {
+  flex: none;
+  padding: 9px 14px;
+  border-top: 1px solid var(--line);
+  color: var(--muted);
+  font-size: 12px;
+}
+
+/* 正文排版：和 markdown 的语义层级对齐 */
+.dd-md {
+  max-width: 78ch;
+  margin: 0 auto;
+  font-size: 13.5px;
+  line-height: 1.85;
+  color: var(--text);
+}
+.dd-md .md-h1 {
+  font-size: 20px;
+  font-weight: 650;
+  margin: 0 0 10px;
+  letter-spacing: 0.01em;
+}
+.dd-md .md-h2 {
+  font-size: 15px;
+  font-weight: 650;
+  margin: 26px 0 8px;
+  padding-bottom: 6px;
+  border-bottom: 1px solid var(--line);
+}
+.dd-md .md-h3 {
+  font-size: 13.5px;
+  font-weight: 650;
+  margin: 18px 0 6px;
+}
+.dd-md .md-h4 {
+  font-size: 13px;
+  font-weight: 600;
+  margin: 14px 0 4px;
+  color: var(--muted);
+}
+.dd-md p {
+  margin: 6px 0;
+}
+.dd-md strong {
+  font-weight: 650;
+}
+.dd-md code {
+  background: var(--panel-2);
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  padding: 0 4px;
+  font-size: 12px;
+}
+.dd-md .md-quote {
+  margin: 10px 0;
+  padding: 8px 12px;
+  border-left: 2px solid var(--accent-dim);
+  background: var(--panel-2);
+  border-radius: 0 6px 6px 0;
+  color: var(--muted);
+  font-size: 12.5px;
+}
+.dd-md .md-quote p {
+  margin: 3px 0;
+}
+.dd-md .md-hr {
+  border: none;
+  border-top: 1px solid var(--line);
+  margin: 22px 0;
+}
+.dd-md ul,
+.dd-md ol {
+  margin: 6px 0;
+  padding-left: 20px;
+}
+.dd-md li {
+  margin: 3px 0;
+}
+.dd-md .md-table-wrap {
+  overflow-x: auto;
+  margin: 10px 0 14px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+}
+.dd-md .md-table {
+  border-collapse: collapse;
+  width: 100%;
+  font-size: 12.5px;
+}
+.dd-md .md-table th {
+  text-align: left;
+  padding: 7px 10px;
+  background: var(--panel-2);
+  border-bottom: 1px solid var(--line);
+  color: var(--muted);
+  font-weight: 600;
+  white-space: nowrap;
+}
+.dd-md .md-table td {
+  padding: 7px 10px;
+  border-bottom: 1px solid var(--line);
+  vertical-align: top;
+  line-height: 1.6;
+}
+.dd-md .md-table tr:last-child td {
+  border-bottom: none;
+}
+.dd-md .md-table td:first-child,
+.dd-md .md-table th:first-child {
+  color: var(--muted);
+  white-space: nowrap;
+}
+
+/* 勾选项：用户是拿它一项项确认，方框必须看得见 */
+.dd-md .md-check {
+  list-style: none;
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin-left: -20px;
+}
+.dd-md .md-box {
+  flex: none;
+  width: 14px;
+  height: 14px;
+  margin-top: 5px;
+  border: 1px solid var(--line-strong);
+  border-radius: 3px;
+  font-size: 10px;
+  line-height: 1;
+  display: grid;
+  place-items: center;
+  color: var(--accent);
+}
+.dd-md .md-check.is-done {
+  color: var(--muted);
+  text-decoration: line-through;
+}

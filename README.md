@@ -3,7 +3,7 @@
 一份 `Project JSON`，三个消费方：**Agent 改它、用户在 Web 上拖它、Remotion 渲染它**。
 因为共用同一个数据源，agent 和用户的编辑天然互通 —— 不是后期加的功能，是架构的结果。
 
-> **版本** 1.2.0（开发线 v1.02）· **MCP 工具** 135 个（4 个常驻 + 131 个按需）·
+> **版本** 1.2.0（开发线 v1.02）· **MCP 工具** 136 个（4 个常驻 + 132 个按需）·
 > **变更** 每一版改了什么见 [CHANGELOG.md](CHANGELOG.md)
 > **许可** 本仓库代码 MIT，依赖里有两个非宽松（Remotion License / AGPL），见 [开源协议](#开源协议)
 
@@ -139,9 +139,9 @@ http://127.0.0.1:4380/mcp
 
 > 注意地址要带 `/mcp`：`/` 是编辑器本身的 HTTP API（REST + SSE），不是 MCP 端点。
 
-### 工具清单（135 个 = 4 常驻 + 131 按需）
+### 工具清单（136 个 = 4 常驻 + 132 按需）
 
-**门面模式**：宿主只看到 4 个常驻工具，其余 131 个按需调用——其中 127 个能用 `tool_search` 按意图现找，
+**门面模式**：宿主只看到 4 个常驻工具，其余 132 个按需调用——其中 128 个能用 `tool_search` 按意图现找，
 4 个是**退役别名**（旧名字，搜索结果里不再出现，但直接 `tool_call` 仍能命中原工具，老脚本不用改）。
 找到后用 `tool_call(name, args)` 执行。
 这样工具描述不占常驻上下文（否则光工具说明就要几万 token）。
@@ -174,7 +174,7 @@ get_guide(name="manual", section="…")   → 按需读指南（不常驻）
 | 素材 | `upload_asset` / `get_asset_info` / `list_assets`（共用库）/ `list_project_assets`（本工程）/ `delete_project_asset` / `organize_assets`（老文件归位）/ `rename_asset` / `delete_asset` |
 | 风格 | `list_styles` / `get_style` / `apply_style`（一键套风格） |
 | 风格库（341 条参考风格） | `list_style_library`（按用途/气质/关键词检索）/ `get_style_pick`（读用户在编辑器面板勾选的）/ `get_style_library_prompt`（读某一条完整提示词）。**是画风描述、不能 apply_style** |
-| 需求 / 分镜 | `intake`（9 步问诊）/ `save_brief` / `get_brief` / `confirm_brief` / `save_storyboard` / `get_storyboard` / `build_storyboard` / `check_project`（只读诊断） |
+| 需求 / 分镜 | `intake`（9 步问诊）/ `save_brief` / `get_brief` / `confirm_brief` / `save_storyboard` / `get_storyboard` / `export_design`（出给人看的设计稿）/ `build_storyboard` / `check_project`（只读诊断） |
 | 技能 / 记忆 | `list_guides` / `remember` / `recall` |
 | 插件 | `list_plugins`（装了哪些、为什么没生效）/ `toggle_plugin`（临时停用） |
 | 协作 | `get_user_messages` / `reply_user` / `get_annotations`（逐帧批注）/ `resolve_annotation`（标已修） |
@@ -1040,7 +1040,7 @@ server/              唯一写入口 + 渲染队列 + MCP 代理
   bundle.service    工程包导入导出（project.json + assets + manifest）
   zip.ts            最小 zip 读写（写 stored，读兼容 deflate）
   render.service    bundle 缓存 + 素材同步 + 渲染队列
-  mcp-tools.ts      工具聚合与门面（135 个 = 4 常驻 + 131 按需）
+  mcp-tools.ts      工具聚合与门面（136 个 = 4 常驻 + 132 按需）
   mcp-proxy.ts      stdio 代理（工具调用转发给 HTTP 服务）
   skills/           18 篇技能指南（list_guides / get_guide 读）
 web/                 编辑器：预览 / 属性面板 / 时间轴 / 素材面板 / 详情浮窗

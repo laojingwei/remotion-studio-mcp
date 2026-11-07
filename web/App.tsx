@@ -23,6 +23,7 @@ import { TtsDialog } from "./panels/TtsDialog";
 import { WorkspaceDialog } from "./panels/WorkspaceDialog";
 import { PluginsDialog } from "./panels/PluginsDialog";
 import { StyleLibraryDialog } from "./panels/StyleLibraryDialog";
+import { DesignDialog } from "./panels/DesignDialog";
 
 type RenderState = {
   id: string;
@@ -334,6 +335,7 @@ export default function App() {
   const [workspaceOpen, setWorkspaceOpen] = useState(false);
   const [pluginsOpen, setPluginsOpen] = useState(false);
   const [styleLibOpen, setStyleLibOpen] = useState(false);
+  const [designOpen, setDesignOpen] = useState(false);
   const [ttsOpen, setTtsOpen] = useState(false);
   const [showTpls, setShowTpls] = useState(false);
   const [formatMenu, setFormatMenu] = useState(false);
@@ -1178,6 +1180,18 @@ export default function App() {
           <span>风格库</span>
         </button>
 
+        {/*
+          设计稿和风格库同级：它回答的是"这部片子每幕说什么"，
+          用户第一次该看的就是它，而不是等成片渲染完。
+        */}
+        <button
+          className="ghost plugin-entry"
+          onClick={() => setDesignOpen(true)}
+          title="设计稿：每幕的字、口播、时长（agent 出稿后可在这里整篇读）"
+        >
+          <span>设计稿</span>
+        </button>
+
         {/* 低频操作收进一个「⋯」菜单，顶栏只留折叠开关 + 渲染 */}
         <div className="topbar-more" ref={moreRef}>
           <button
@@ -1555,6 +1569,12 @@ export default function App() {
       <WorkspaceDialog open={workspaceOpen} onClose={() => setWorkspaceOpen(false)} />
       <PluginsDialog open={pluginsOpen} onClose={() => setPluginsOpen(false)} />
       <StyleLibraryDialog open={styleLibOpen} onClose={() => setStyleLibOpen(false)} />
+      <DesignDialog
+        open={designOpen}
+        projectId={project?.id ?? ""}
+        projectName={project?.name}
+        onClose={() => setDesignOpen(false)}
+      />
       <TtsDialog open={ttsOpen} onClose={() => setTtsOpen(false)} />
       <RenderDialog
         open={renderOpen}

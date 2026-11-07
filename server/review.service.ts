@@ -62,6 +62,8 @@ export type Review = {
   probeSlugs?: string[];
   /** 用户挑定的风格（confirm_style_probe 写入） */
   chosenStyle?: string;
+  /** 设计稿出给用户看的时间（export_design 写入）：建场景前该有这一笔 */
+  designAt?: string;
   updatedAt?: string;
 };
 
@@ -113,6 +115,16 @@ export function markNeedsWork(projectId: string, feedback: string[], issues?: Re
     // 新一轮的 issues 追加在旧的前面：旧的多半已修，新的才是当前要看的
     ...(issues?.length ? { issues: [...issues, ...(prev.issues ?? [])] } : {}),
   });
+}
+
+/**
+ * 记一笔"设计稿出过了"。
+ *
+ * 用途不是闸门，是让 build_storyboard 能提醒：50 幕一次建完再让用户看，
+ * 等于让他第一次读到这部片子是在成片里 —— 那时候改一句要重建场景。
+ */
+export function markDesignExported(projectId: string): Review {
+  return write(projectId, { ...(readReview(projectId) ?? {}), designAt: new Date().toISOString() });
 }
 
 export function markSelfRender(projectId: string): Review {

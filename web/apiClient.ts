@@ -1508,3 +1508,18 @@ export async function saveStyleOverride(id: string, patch: { moods?: string[]; u
 /** 静帧 URL：没有静帧时返回 null，前端画占位卡 */
 export const styleStillUrl = (id: string): string => `/api/style-library/still/${encodeURIComponent(id)}`;
 export const builtinStillUrl = (slug: string): string => `/api/style-library/builtin-still/${encodeURIComponent(slug)}`;
+
+/* ── 设计稿（export_design 生成，给人看的那一版）──────────────────── */
+
+export type DesignCardResponse = {
+  /** 没生成过时为 null（面板显示"让 agent 先出一次"） */
+  markdown: string | null;
+  empty: boolean;
+};
+
+export async function fetchDesignCard(projectId: string): Promise<DesignCardResponse> {
+  const res = await jfetch(`/api/projects/${encodeURIComponent(projectId)}/design`);
+  const data = await res.json();
+  if (!res.ok) throw new Error(data.error ?? "读取设计稿失败");
+  return data;
+}

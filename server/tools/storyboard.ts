@@ -24,7 +24,9 @@ import { briefProgress, readBrief, stepMissingFields } from "../brief.service";
 
 import { densitySummary, projectDensity, rhythmIssues } from "../../shared/density";
 import { readScript } from "../script.service";
-import { readReview } from "../review.service";
+import { markDesignExported, readReview } from "../review.service";
+import { buildDesignCard, writeDesignCard } from "../design.service";
+import { readPicks } from "../styleLibrary.service";
 import {
   SHOT_RELATIONS,
   readStoryboard,
@@ -175,6 +177,60 @@ export const STORYBOARD_TOOLS: ToolDef[] = [
     run: async (a) => {
       const p = await resolveProject(a.projectId);
       return storyboardToText(readStoryboard(p.id));
+    },
+  },
+  {
+    name: "export_design",
+    description:
+      "把分镜整理成一份**给用户看**的设计稿（markdown），落到工程目录 design.md 并全文返回。\n" +
+      "分镜表是给 agent 的（type + props），用户读不懂；设计稿写的是「每幕屏幕上出现什么字、口播说什么、几秒、承担什么关系」。\n" +
+      "**用户第一眼该看到的是这份，不该是成片。** 建场景前出一次，把返回的 markdown 原样发给用户（或贴进对话），" +
+      "让他对着改字；改完重出一次，成本几秒——建完 50 幕再改是重建场景。\n" +
+      "回执末尾「要你拍板的」清单分必须修（信息缺失/禁用词，不修建出来就是错的）与建议改（关系不足/字幕超长/还没出样张）。",
+    shape: {
+      projectId: z.string().optional().describe("要操作的工程 id，不传 = 当前默认工程"),
+      summaryOnly: z
+        .boolean()
+        .optional()
+        .describe("true = 只回统计与「要你拍板的」清单，不贴全文（长片 40 幕以上用；全文仍在 design.md）"),
+    },
+    run: async (a) => {
+      const p = await resolveProject(a.projectId);
+      const nl = String.fromCharCode(10);
+      const sb = readStoryboard(p.id);
+      if (!sb?.shots?.length) {
+        throw new Error("还没有分镜表：先 save_storyboard 写下每一幕，再出设计稿");
+      }
+      const card = buildDesignCard({
+        project: { name: p.name, fps: p.fps, formats: p.formats },
+        brief: readBrief(p.id),
+        storyboard: sb,
+        picks: readPicks(),
+        review: readReview(p.id),
+      });
+      const file = writeDesignCard(p.id, card.markdown);
+      markDesignExported(p.id);
+
+      const { shots, totalSec, relationCount, plainCount, unsetCount } = card.stats;
+      const blocks = card.gaps.filter((g) => g.level === "block");
+      const warns = card.gaps.filter((g) => g.level === "warn");
+      const head = [
+        `设计稿已生成：${shots} 幕 ｜ 合计 ${totalSec.toFixed(1)}s ｜ 承担关系 ${relationCount}/${shots} 幕，换页 ${plainCount}，未标 ${unsetCount}`,
+        `文件：${file}`,
+      ].join(nl);
+
+      const tail = [
+        "",
+        `必须修 ${blocks.length} 条 / 建议改 ${warns.length} 条：`,
+        ...blocks.map((g) => `  ✗ ${g.text}`),
+        ...warns.map((g) => `  · ${g.text}`),
+        "",
+        "下一步：把这份稿子**原样发给用户**，等他说「就按这个建」再 build_storyboard。",
+        "他改字之后：改 storyboard 对应幕（save_storyboard 整份重存）→ 再 export_design 一次，别自己口头答应完就建。",
+      ].join(nl);
+
+      if (a.summaryOnly) return `${head}${tail}`;
+      return `${head}${nl}${nl}${card.markdown}${tail}`;
     },
   },
   {
@@ -601,6 +657,13 @@ export const STORYBOARD_TOOLS: ToolDef[] = [
         problems.push(`总时长偏离 brief 超过 15%：段落表 / 稿子 / 幕长需要重新对齐（口播片以 TTS 实测为准）`);
       }
 
+      // 没出过设计稿就铺了 6 幕以上：用户第一次读到这部片子会是在成片里
+      const designHint =
+        built.length >= 6 && !readReview(p.id)?.designAt
+          ? `${nl}⚠ 还没出过设计稿（export_design）：这 ${built.length} 幕的字与顺序，用户还没读过一遍。` +
+            `现在出只要几秒，等他看完成片再改是重建场景。`
+          : "";
+
       return (
         skipNote +
         `已建成 ${built.length} 幕${a.replace ? "（已清空原有场景）" : "（追加）"}，rev=${res.project.rev}` +
@@ -610,6 +673,7 @@ export const STORYBOARD_TOOLS: ToolDef[] = [
           ? `${nl}转场已按设计锁套用（${lockApplied} 幕）：${(brief as any)?.designLock?.transitionWhitelist?.join(" / ") ?? ""} ` +
             `${Number((brief as any)?.designLock?.transitionMaxFrames ?? 0) || TRANSITION_DEFAULT_FRAMES} 帧（单幕显式指定优先）`
           : "") +
+        designHint +
         (problems.length ? `${nl}⚠️ ${problems.join(`${nl}⚠️ `)}` : "") +
         `${nl}下一步：render_preview_clip 出一段 6 秒看动态（转场/字幕/BGM）→ 再 check_project 自检 → request_review`
       );

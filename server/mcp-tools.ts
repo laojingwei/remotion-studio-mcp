@@ -236,6 +236,7 @@ const TOOLS: ToolDef[] = [
         "9. 分镜【闸口⑥】 → get_guide(\"formats\") 定结构 → **get_guide(\"meaning\") 想清每幕让观众看懂什么变化** → 2–3 个拉开差距的提案给用户选 → save_storyboard（每幕 text 直接取自稿件分段）",
         "   ↳ 只写计划，不建场景。长片分多次提交用 append=true（50 幕一次传会超长被截断）。",
         "   ↳ 每幕补 `relation`（七类关系之一，纯换页写 plain）+ `change`/`carry`/`sync` 三问。回执里有「设计体检」：一幕都没标 relation、note 里写\"丝滑/大气\"、plain 过半，都会被点出来——设计错误在这一步定型，等成片再改要重建场景。",
+        "   ↳ 存完立刻 `export_design` 出一份**给人看的设计稿**（每幕屏幕上什么字、口播说什么、几秒、承担什么关系），把返回的 markdown 原样发给用户对一遍。他这时的改动只是改字，几秒钟；等 50 幕建完再改是重建场景。**他没说「就按这个建」之前不要 build_storyboard。**",
         "10. 风格帧【闸口⑦】 → build_storyboard(shot=1) 只建第 1 幕 → preview_frames 抽 1–3 帧 + **render_preview_clip 出一段 6 秒带声片段**给用户过目",
         "   ↳ 静帧只能看配色；转场、节奏、字幕可读性、BGM 大小必须看动/听声——用 render_preview_clip，几十秒出片，别等整片。",
         "   ⚠ **判断动画好不好看必须看动**：连出 6 张静帧等于没验——静帧里看不出动画问题，用户一句「动画太少」就是整轮返工。",

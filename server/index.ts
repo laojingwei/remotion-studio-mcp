@@ -118,6 +118,7 @@ import { readBrief, saveBrief } from "./brief.service";
 import { markNarrationHeard, readTiming, saveTiming } from "./narration-timing.service";
 import { appendDecision, readDecisions, type DecisionKind } from "./decision-log.service";
 import { readStoryboard, saveStoryboard } from "./storyboard.service";
+import { readDesignCard } from "./design.service";
 import {
   activeRenderTask,
   bundleState,
@@ -2192,6 +2193,22 @@ app.put("/api/projects/:id/storyboard", async (c) => {
 app.get("/api/projects/:id/brief", (c) => {
   try {
     return c.json({ brief: readBrief(c.req.param("id")) });
+  } catch (err) {
+    return fail(c, err);
+  }
+});
+
+/**
+ * 设计稿（export_design 写入的 design.md）。
+ *
+ * 单独一条只读路由，是因为它和 storyboard 的用途正相反：storyboard 是给 agent 的
+ * 结构化计划，设计稿是给人读的一篇文章。编辑器面板只需要后者，不该为了看一段文字
+ * 去拉整份 JSON 再自己排版。
+ */
+app.get("/api/projects/:id/design", (c) => {
+  try {
+    const markdown = readDesignCard(c.req.param("id"));
+    return c.json({ markdown, empty: !markdown });
   } catch (err) {
     return fail(c, err);
   }

@@ -1,4 +1,4 @@
-# Agent 使用全书（135 个工具 = 4 常驻 + 131 按需 + 能力地图 + 铁律）
+# Agent 使用全书（136 个工具 = 4 常驻 + 132 按需 + 能力地图 + 铁律）
 
 给 agent 的完整说明书。**你不需要读源码、不需要试探参数**：这台机器能做什么、怎么组合、
 为什么没生效，全部在这页和另外 17 篇指南里（全 18 篇的索引见本文最后一节）。
@@ -71,6 +71,7 @@
 | 字幕 | 硬字幕烧录（**一屏 8–16 字、不带标点**，写入自动拆段）+ SRT/VTT 导出，两者同一套时间 | `set_subtitle` `fix_subtitles` `set_subtitle_style` `export_subtitles` |
 | 叙事 | 每幕标一个**关系类型**（七类：因果/否定对比/部分整体/尺度/取舍/累积/感受转变 + plain），把"这句话像什么版式"换成"这句话让观众看懂什么变化"。`save_storyboard` 回执带设计体检：没标关系、plain 过半、note 写"丝滑/大气"都会被点出来——设计错误在分镜阶段定型，成片再改要重建场景 | `get_guide("meaning")` `save_storyboard`（relation / change / carry / sync） |
 | 风格 | **43 种风格规则库，全部带结构化预设**（`apply_style` 一键套：主题色+字体+圆角+转场+推荐版式+禁止项），也都能 `probe_style` 出真样张；风格文件可改造/混搭/自定义 | `list_styles` `get_style` `apply_style` |
+| 设计稿 | 分镜写完、建场景**之前**出的一份**给人看**的稿子：每幕屏幕上什么字、口播说什么、几秒、承担什么关系。用户读它改字（几秒），而不是等 50 幕建完再改（重建场景）。回执分「必须修」（必须信息缺失/禁用词，不修建出来就是错的）与「建议改」（关系不足/字幕超长/还没出样张/总时长偏离） | `export_design` · 编辑器顶栏「设计稿」可整篇读 |
 | 风格库 | 编辑器「风格库」面板两个分区**都能勾选并一起发给 agent**：上区 **341 条参考风格**（画风描述，**不能 apply_style**，要翻译成 theme/版式）；下区 **43 个内置风格**（带 palette/font 预设，`apply_style(slug)` 直接套）。`get_style_pick()` 会分两组返回，别搞反。参考那一组怎么翻读 `get_guide("style-translate")` | `list_style_library` `get_style_pick` `get_style_library_prompt` `apply_style` |
 | 画幅 | 多画幅并存（9:16 / 16:9 / 1:1 / 自定义 16–7680）。**`set_formats` 默认覆盖**：没写进 formats 的画幅会被删掉（用户说「只要竖屏」就只传 portrait，否则编辑器顶栏会留着横屏按钮）；只改尺寸传 `merge:true` | `set_formats` |
 | 预览 | 单帧/多帧抽帧（按场景偏移）、真实浏览器渲染前 dryRun 预检 | `preview_frames`（单帧 `frames:[f]`） `render_video(dryRun)` |
