@@ -519,7 +519,7 @@ export function picksSummary(): string {
       else out.push(`· ${it.id} ${it.name}${it.summary ? ` —— ${it.summary}` : ""}${it.still ? "（有静帧）" : "（无静帧）"}`);
     }
     out.push(
-      "→ 这些是**参考风格**，不能 apply_style：先用 get_style_library_prompt(id) 读原文，翻成本片的主题/版式/氛围，再用 probe_style 出我们引擎的样张给用户确认。",
+      "→ 这些是**参考风格**，不能 apply_style。顺序：get_guide(\"style-translate\") 学怎么翻（六槽位 + 三条降级路径）→ get_style_library_prompt(id) 读原文 → 翻成本片的主题/版式/氛围 → probe_style 出我们引擎的样张给用户确认。",
     );
   }
 

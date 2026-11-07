@@ -229,7 +229,7 @@ const TOOLS: ToolDef[] = [
         "   ↳ 这五项决定\"好不好看、专不专业\"。写分镜时可以先不齐（会软提醒），但**请用户看片前必须齐**——标准没定，他只能说「感觉不对」。",
         "7. 风格样张【闸口⑤】 → **先请用户去编辑器「风格库」面板挑**（顶栏按钮 → 勾选 → 「告诉 agent」）→ get_style_pick() 拿到编号 → probe_style(slugs=[候选1,候选2,候选3])：同一幕出 2–3 张不同风格的图 → **发给用户挑** → confirm_style_probe(slug)",
         "   ↳ 这是\"别一股脑开干\"最硬的一道防线。用户没看过图就往下做，等于让他在成片里做第一次审美判断——那时候改一张图要动 50 幕。",
-        "   ↳ get_style_pick() 会分两组回来：**内置风格（slug）直接 apply_style 就能落 palette/font，不要翻译**；**参考风格（编号）不能套**——先 get_style_library_prompt 读原文，翻译成本片的主题/版式/氛围，再 probe_style 出我们引擎的样张。两组搞反，一边是白扔现成预设，一边是拿画风参考图当成片效果。",
+        "   ↳ get_style_pick() 会分两组回来：**内置风格（slug）直接 apply_style 就能落 palette/font，不要翻译**；**参考风格（编号）不能套**——先 get_guide(\"style-translate\") 学怎么翻（六槽位 / 三条降级路径），再 get_style_library_prompt 读原文，翻成本片的主题/版式/氛围，最后 probe_style 出我们引擎的样张。两组搞反，一边是白扔现成预设，一边是拿画风参考图当成片效果。",
         "   ↳ 用户没挑、或说\"你定\"：list_style_library(q/use/mood) 自己找 2–3 个候选，把「编号 + 一句长什么样」发给他选——别替他决定审美。",
         "   ↳ 没 probe 过，build_storyboard 会直接拒绝。",
         "8. 风格落地 → 定好 slug 后按需微调：get_style 读规则 → set_theme / apply_style；用 mood 反查一遍（要「高级」就别上弹跳动效）",
@@ -736,7 +736,7 @@ const TOOLS: ToolDef[] = [
         "",
         body,
         "",
-        "—— 以上是参考画风，不能直接 apply_style：按 craft / fy-visual 的「五列翻译」把它换成 theme + 版式 + 氛围，再用 probe_style 出我们引擎的样张给用户确认。",
+        "—— 以上是参考画风，不能直接 apply_style：按 get_guide(\"style-translate\") 的六槽位把它换成 theme + 版式 + 氛围，再用 probe_style 出我们引擎的样张给用户确认。",
       );
       return lines.join(nl);
     },

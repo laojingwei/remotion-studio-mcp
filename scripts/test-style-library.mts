@@ -29,6 +29,7 @@ import {
   writeOverride,
   writePicks,
 } from "../server/styleLibrary.service";
+import { listSkills, readSkill, resolveSkillName } from "../server/skills.service";
 import { DATA_ROOT } from "../server/paths";
 import { STYLE_USES } from "../shared/style-library";
 
@@ -192,6 +193,44 @@ check("覆盖改气质后立刻生效（不重启、不只改内存）", () => {
   const again = getIndex();
   assert.deepEqual(again.items.find((i) => i.id === target)!.moods, ["克制"], "磁盘索引的路径没应用覆盖");
   writeOverride(target, { moods: before.length ? before : ["克制"] });
+});
+
+console.log("翻译技能（style-translate）可达性");
+check("技能能被扫到（否则 agent 永远找不到这篇）", () => {
+  assert.ok(
+    listSkills().some((s) => s.name === "style-translate"),
+    "server/skills/style-translate.md 没被 skills.service 扫到",
+  );
+});
+
+check("用户嘴里的词能直连这篇，不掉进\"你可能想读\"", () => {
+  for (const q of ["风格库", "参考风格", "画风翻译", "字雨", "翻译"]) {
+    assert.equal(resolveSkillName(q).name, "style-translate", `「${q}」没直连到 style-translate`);
+  }
+  // 反向：宽词不能被这条抢走，否则"质感"类问题会被导到翻译技能
+  assert.equal(resolveSkillName("质感").name, "craft", "「质感」被截胡了");
+});
+
+check("按节读取只回那一节", () => {
+  const sec = readSkill("style-translate", "降级");
+  assert.ok(sec.includes("降级路径"), "按节读取没命中「八、翻不过去的怎么办」");
+  assert.ok(sec.split("\n")[0].startsWith("## "), "返回内容不是从标题开始的");
+  assert.ok(sec.split("\n").filter((l) => l.startsWith("## ")).length === 1, "带出了别的小节");
+});
+
+check("全部技能里的 get_guide(\"x\") 引用都真的存在", () => {
+  const names = new Set(listSkills().map((s) => s.name));
+  const dir = path.join(ROOT, "server", "skills");
+  const bad: string[] = [];
+  for (const f of fs.readdirSync(dir).filter((x) => x.endsWith(".md"))) {
+    const text = fs.readFileSync(path.join(dir, f), "utf8");
+    for (const m of text.matchAll(/get_guide\("([^"]+)"\)/g)) {
+      // manual.md 里有一句 get_guide("名字") 是占位示例，不是真引用
+      if (m[1] === "名字") continue;
+      if (!names.has(m[1])) bad.push(`${f}: get_guide("${m[1]}")`);
+    }
+  }
+  assert.deepEqual(bad, [], `技能里引用了不存在的技能：${bad.join("；")}`);
 });
 
 // 还原用户数据：测试不该留下"用户勾了 A1"这种假状态

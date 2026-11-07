@@ -1,4 +1,4 @@
-# Agent 使用全书（135 个工具 = 4 常驻 + 128 按需 + 能力地图 + 铁律）
+# Agent 使用全书（135 个工具 = 4 常驻 + 131 按需 + 能力地图 + 铁律）
 
 给 agent 的完整说明书。**你不需要读源码、不需要试探参数**：这台机器能做什么、怎么组合、
 为什么没生效，全部在这页和另外 17 篇指南里（全 18 篇的索引见本文最后一节）。
@@ -70,7 +70,7 @@
 | 音频 | TTS 配音（单段/多段**自动对齐幕长并写字幕**）、BGM 全局轨、场景内音频裁时间窗、音量调节 | `tts_narration` `add_audio_track` `set_audio` |
 | 字幕 | 硬字幕烧录（**一屏 8–16 字、不带标点**，写入自动拆段）+ SRT/VTT 导出，两者同一套时间 | `set_subtitle` `fix_subtitles` `set_subtitle_style` `export_subtitles` |
 | 风格 | **43 种风格规则库，全部带结构化预设**（`apply_style` 一键套：主题色+字体+圆角+转场+推荐版式+禁止项），也都能 `probe_style` 出真样张；风格文件可改造/混搭/自定义 | `list_styles` `get_style` `apply_style` |
-| 风格库 | 编辑器「风格库」面板两个分区**都能勾选并一起发给 agent**：上区 **341 条参考风格**（画风描述，**不能 apply_style**，要翻译成 theme/版式）；下区 **43 个内置风格**（带 palette/font 预设，`apply_style(slug)` 直接套）。`get_style_pick()` 会分两组返回，别搞反 | `list_style_library` `get_style_pick` `get_style_library_prompt` `apply_style` |
+| 风格库 | 编辑器「风格库」面板两个分区**都能勾选并一起发给 agent**：上区 **341 条参考风格**（画风描述，**不能 apply_style**，要翻译成 theme/版式）；下区 **43 个内置风格**（带 palette/font 预设，`apply_style(slug)` 直接套）。`get_style_pick()` 会分两组返回，别搞反。参考那一组怎么翻读 `get_guide("style-translate")` | `list_style_library` `get_style_pick` `get_style_library_prompt` `apply_style` |
 | 画幅 | 多画幅并存（9:16 / 16:9 / 1:1 / 自定义 16–7680）。**`set_formats` 默认覆盖**：没写进 formats 的画幅会被删掉（用户说「只要竖屏」就只传 portrait，否则编辑器顶栏会留着横屏按钮）；只改尺寸传 `merge:true` | `set_formats` |
 | 预览 | 单帧/多帧抽帧（按场景偏移）、真实浏览器渲染前 dryRun 预检 | `preview_frames`（单帧 `frames:[f]`） `render_video(dryRun)` |
 | 渲染 | 正式出片（可等完成）、进度查询、取消、历史产物清理 | `render_video` `get_render_status` `cancel_render` `cleanup_renders` |

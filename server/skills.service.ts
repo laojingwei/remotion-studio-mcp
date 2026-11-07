@@ -91,6 +91,11 @@ export function listSkills(): SkillInfo[] {
  * 所以这里先把别名和标题模糊匹配吃掉，实在匹配不上再报错，并且报错要指路。
  */
 const ALIASES: Record<string, string> = {
+  // 参考风格翻译：这几个词进不来就会掉到 ROUTES 的"你可能想读 X"提示里，多一次往返
+  参考风格: "style-translate",
+  风格库: "style-translate",
+  画风翻译: "style-translate",
+  字雨: "style-translate",
   "3d": "scene3d",
   three: "scene3d",
   threejs: "scene3d",
@@ -122,6 +127,8 @@ const ALIASES: Record<string, string> = {
 
 /** 能力关键词 → 该读哪篇（别名和标题都没命中时，给一句人话的指路） */
 const ROUTES: [RegExp, string, string][] = [
+  // 放在最前面：下面是按"质感/节奏/镜头"这类宽词匹配的，参考风格那类问题会被它们截胡
+  [/参考风格|画风翻译|翻风格|风格提示词|字雨|风格库|341/i, "style-translate", "把参考画风翻成 theme + 版式"],
   [/3d|三维|立体|太空|行星|球|装置|空间感/i, "scene3d", "3D 场景与 graph 场景图"],
   [/iso|anatomy|图解|插图|等轴|零件|剖面/i, "external-tools", "等轴测图解（anatomy）"],
   [/自由|排版|画布|freeform/i, "freeform", "自由画布全部写法"],
