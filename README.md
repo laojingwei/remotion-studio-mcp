@@ -195,7 +195,7 @@ get_guide(name="manual", section="…")   → 按需读指南（不常驻）
 
 ### 技能与记忆（给 agent 的经验层）
 
-技能文件在 `server/skills/*.md`，通过 `list_guides` / `get_guide(name, section?)` 按需读取——不常驻、不占工具描述，需要时只读一节。共 18 篇（名字认别名：`3d` → `scene3d`、`iso` → `external-tools`，猜错时返回的报错会指路）：
+技能文件在 `server/skills/*.md`，通过 `list_guides` / `get_guide(name, section?)` 按需读取——不常驻、不占工具描述，需要时只读一节。共 22 篇（名字认别名：`3d` → `scene3d`、`iso` → `external-tools`，猜错时返回的报错会指路）：
 
 | 技能 | 内容 |
 |---|---|
@@ -207,6 +207,10 @@ get_guide(name="manual", section="…")   → 按需读指南（不常驻）
 | `subtitle` | 字幕：一屏一句、不带标点、时间对齐 |
 | `scene-recipes` | 75 个版式配方（适用场景 / items 建议 / 坑） |
 | `craft` | 画面质感：签名时刻、层次、留白、动效节奏 |
+| `meaning` | **每幕让观众看懂什么变化**：七类关系 → 可视频 → 必须成立的证据 → 用哪个版式 |
+| `text-events` | **文字事件**：读窗公式、意群断行、四段时序、文字手法 → 我们版式的映射 |
+| `motion-rules` | **动作**：时长与缓动边界、错峰总长、重量与接触、按两幕关系选转场、接缝 |
+| `style-translate` | 参考画风 → 本片 theme/版式/氛围（含三条降级路径） |
 | `freeform` | 自由画布写法（`add_freeform_element` 的元素/关键帧/fx） |
 | `scene3d` | **3D 场景**：6 个预设、`graph` 全字段、世界背景/全景图/地面阴影、公转/卫星、太阳系完整示例、13 个坑 |
 | `external-tools` | **iso 图解**：anatomy 出图 → 落盘 → 套主题 |
@@ -1042,7 +1046,7 @@ server/              唯一写入口 + 渲染队列 + MCP 代理
   render.service    bundle 缓存 + 素材同步 + 渲染队列
   mcp-tools.ts      工具聚合与门面（136 个 = 4 常驻 + 132 按需）
   mcp-proxy.ts      stdio 代理（工具调用转发给 HTTP 服务）
-  skills/           18 篇技能指南（list_guides / get_guide 读）
+  skills/           22 篇技能指南（list_guides / get_guide 读）
 web/                 编辑器：预览 / 属性面板 / 时间轴 / 素材面板 / 详情浮窗
 scripts/             启动 / 出片 / 恢复示例（demo、demo3d）/ 单测 / 端到端验证
 data/projects/<id>/  工程文件（可直接 git、可手改）+ history/ 快照 + brief.json

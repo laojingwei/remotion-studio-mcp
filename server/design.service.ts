@@ -224,7 +224,25 @@ export function designGaps(input: {
     });
   }
 
-  // ⑨ brief 自身的机器缺口：只取影响画面内容的那几类（core / form / segments）。
+  // ⑨ 读窗不够：字数 × 0.25s + 0.3s 的落字时间还没走完，幕就切走了
+  //    （和 ⑥ 的"超 18 字"不是一回事：那条管单屏太长，这条管这幕给的时间不够读完）
+  const tooFast = shots
+    .map((s, i) => {
+      const chars = [...String(s.text ?? "").replace(/\s/g, "")].length;
+      const need = chars * 0.25 + 0.3;
+      const have = shotFrames(s) / fps;
+      return { i: i + 1, chars, need, have };
+    })
+    .filter((x) => x.chars > 0 && x.have < x.need)
+    .map((x) => `第 ${x.i} 幕 ${x.chars} 字只给了 ${x.have.toFixed(1)}s（需 ${x.need.toFixed(1)}s）`);
+  if (tooFast.length) {
+    gaps.push({
+      level: "warn",
+      text: `${tooFast.slice(0, 4).join("、")}${tooFast.length > 4 ? " 等" : ""}——读不完，观众只能"看到"不能"读到"。拆句或加时长（见 get_guide("text-events") 第一节）`,
+    });
+  }
+
+  // ⑩ brief 自身的机器缺口：只取影响画面内容的那几类（core / form / segments）。
   // 参考标注、素材责任人、交付清单属于流程文件，放进"设计稿待确认"只会稀释信号。
   if (brief) {
     const cov = briefCoverage(brief);

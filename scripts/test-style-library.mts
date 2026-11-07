@@ -218,6 +218,43 @@ check("按节读取只回那一节", () => {
   assert.ok(sec.split("\n").filter((l) => l.startsWith("## ")).length === 1, "带出了别的小节");
 });
 
+console.log("文字 / 动作两篇的可达性（用户抱怨直连）");
+check("text-events 与 motion-rules 能被扫到", () => {
+  const names = listSkills().map((s) => s.name);
+  for (const n of ["text-events", "motion-rules"]) {
+    assert.ok(names.includes(n), `server/skills/${n}.md 没被扫到，agent 永远找不到这篇`);
+  }
+});
+
+check("用户说的是症状，不是篇名：这些词必须直连", () => {
+  for (const q of ["文字太小", "字看不清", "读窗", "断行", "断句", "字号", "打字机"]) {
+    assert.equal(resolveSkillName(q).name, "text-events", `「${q}」没直连到 text-events`);
+  }
+  for (const q of ["转场", "接缝", "错峰", "缓动", "弹簧", "过冲", "太黏", "太拖"]) {
+    assert.equal(resolveSkillName(q).name, "motion-rules", `「${q}」没直连到 motion-rules`);
+  }
+});
+
+check("新路由不许截胡老目的地", () => {
+  // 这两条是"排版"与"质感"的宽词路由：被新篇抢走的话，自由画布和整体质感的问题会走错门
+  assert.notEqual(resolveSkillName("排版").name, "text-events", "「排版」被文字篇截胡（应指向 freeform）");
+  assert.equal(resolveSkillName("自由画布").name, "freeform", "「自由画布」没到 freeform");
+  assert.equal(resolveSkillName("质感").name, "craft", "「质感」没到 craft");
+});
+
+check("两篇都能按节读（节名是真标题，不是正文里的词）", () => {
+  for (const [name, sec, must] of [
+    ["text-events", "先算够不够读", "读窗"],
+    ["text-events", "手法谱系", "typewriter"],
+    ["motion-rules", "错峰", "间隔"],
+    ["motion-rules", "接缝", "速度"],
+  ] as const) {
+    const t = readSkill(name, sec);
+    assert.ok(t.includes(must), `${name} 按「${sec}」读不到 ${must}`);
+    assert.equal(t.split("\n").filter((l) => l.startsWith("## ")).length, 1, `${name} 按节读取带出了别的小节`);
+  }
+});
+
 check("全部技能里的 get_guide(\"x\") 引用都真的存在", () => {
   const names = new Set(listSkills().map((s) => s.name));
   const dir = path.join(ROOT, "server", "skills");

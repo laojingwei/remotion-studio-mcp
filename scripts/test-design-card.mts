@@ -137,6 +137,18 @@ check("没出过样张 → 建议改里提醒；出过就不提", () => {
   assert.ok(!done.gaps.some((g) => g.text.includes("风格样张")), "已经出过样张还提，清单会失去可信度");
 });
 
+check("读窗不够要报：字多、幕短就是「只能看到不能读到」", () => {
+  // 20 字 × 0.25s + 0.3s 落字 = 5.3s，只给 3s（90 帧）
+  const tight = card([shot({ text: "一个月稳定出十二条内容，第三个月开始有询盘进来", durationInFrames: 90 })]);
+  assert.ok(
+    tight.gaps.some((g) => g.text.includes("读不完")),
+    "20 字给 3 秒没报，用户会觉得「一闪而过」而不知道为什么",
+  );
+  // 同一句话给 8 秒就不该报
+  const loose = card([shot({ text: "一个月稳定出十二条内容，第三个月开始有询盘进来", durationInFrames: 240 })]);
+  assert.ok(!loose.gaps.some((g) => g.text.includes("读不完")), "给够时间还报，属于噪音");
+});
+
 check("空幕（无字也无口播）被点出来", () => {
   const c = card([shot({ props: {}, text: "", name: "" })]);
   assert.ok(c.gaps.some((g) => g.text.includes("空白")), "建出来是几秒空白，必须提醒");

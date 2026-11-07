@@ -96,6 +96,28 @@ const ALIASES: Record<string, string> = {
   风格库: "style-translate",
   画风翻译: "style-translate",
   字雨: "style-translate",
+  // 文字这一篇：用户说的是"字太小/读不完/断行断了意思"，别让它们掉进 freeform 的"排版"路由
+  文字: "text-events",
+  文字排版: "text-events",
+  读窗: "text-events",
+  断行: "text-events",
+  断句: "text-events",
+  字太小: "text-events",
+  文字太小: "text-events",
+  看不清: "text-events",
+  字看不清: "text-events",
+  字号: "text-events",
+  打字机: "text-events",
+  // 动作这一篇：按症状直连，别掉进 craft 的"质感/节奏"宽词
+  转场: "motion-rules",
+  接缝: "motion-rules",
+  错峰: "motion-rules",
+  缓动: "motion-rules",
+  弹簧: "motion-rules",
+  过冲: "motion-rules",
+  太黏: "motion-rules",
+  太拖: "motion-rules",
+  动作重量: "motion-rules",
   // 用户看完片的四种抱怨，直接进"意义→画面"，别让它掉进 formats/director 的宽词路由
   像ppt: "meaning",
   逐句贴卡: "meaning",
@@ -135,9 +157,12 @@ const ALIASES: Record<string, string> = {
 const ROUTES: [RegExp, string, string][] = [
   // 放在最前面：下面是按"质感/节奏/镜头"这类宽词匹配的，参考风格那类问题会被它们截胡
   [/参考风格|画风翻译|翻风格|风格提示词|字雨|风格库|341/i, "style-translate", "把参考画风翻成 theme + 版式"],
+  // 放在 freeform / craft 之前：这两条正则更具体，但顺序错了会被"排版""质感"截胡
+  [/转场|接缝|错峰|缓动|弹簧|过冲|动作太|太黏/i, "motion-rules", "动作数值、错峰总长、转场选择与接缝"],
   [/3d|三维|立体|太空|行星|球|装置|空间感/i, "scene3d", "3D 场景与 graph 场景图"],
   [/iso|anatomy|图解|插图|等轴|零件|剖面/i, "external-tools", "等轴测图解（anatomy）"],
   [/自由|排版|画布|freeform/i, "freeform", "自由画布全部写法"],
+  [/读窗|断句|字号|字小|一闪而过|看不清|逐字|文字事件/i, "text-events", "读窗、断行与文字手法谱系"],
   [/字幕|subtitle|srt/i, "subtitle", "字幕写法"],
   [/声音|音频|bgm|音乐|混音/i, "sound", "声音设计"],
   [/配音|旁白|口播稿/i, "narration", "旁白配音"],
