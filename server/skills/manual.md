@@ -70,7 +70,7 @@
 | 音频 | TTS 配音（单段/多段**自动对齐幕长并写字幕**）、BGM 全局轨、场景内音频裁时间窗、音量调节 | `tts_narration` `add_audio_track` `set_audio` |
 | 字幕 | 硬字幕烧录（**一屏 8–16 字、不带标点**，写入自动拆段）+ SRT/VTT 导出，两者同一套时间 | `set_subtitle` `fix_subtitles` `set_subtitle_style` `export_subtitles` |
 | 叙事 | 每幕标一个**关系类型**（七类：因果/否定对比/部分整体/尺度/取舍/累积/感受转变 + plain），把"这句话像什么版式"换成"这句话让观众看懂什么变化"。`save_storyboard` 回执带设计体检：没标关系、plain 过半、note 写"丝滑/大气"都会被点出来——设计错误在分镜阶段定型，成片再改要重建场景 | `get_guide("meaning")` `save_storyboard`（relation / change / carry / sync） |
-| 风格 | **43 种风格规则库，全部带结构化预设**（`apply_style` 一键套：主题色+字体+圆角+转场+推荐版式+禁止项），也都能 `probe_style` 出真样张；风格文件可改造/混搭/自定义 | `list_styles` `get_style` `apply_style` |
+| 风格 | **43 种风格规则库，全部带结构化预设**（`apply_style` 一键套：主题色+字体+圆角+转场+推荐版式+禁止项；**21 个氛围型风格还会给每幕垫 backdrop**——没有氛围层，hologram-hud 就只是张深蓝底），也都能 `probe_style` 出真样张；风格文件可改造/混搭/自定义 | `list_styles` `get_style` `apply_style` |
 | 设计稿 | 分镜写完、建场景**之前**出的一份**给人看**的稿子：每幕屏幕上什么字、口播说什么、几秒、承担什么关系。用户读它改字（几秒），而不是等 50 幕建完再改（重建场景）。回执分「必须修」（必须信息缺失/禁用词，不修建出来就是错的）与「建议改」（关系不足/字幕超长/还没出样张/总时长偏离） | `export_design` · 编辑器顶栏「设计稿」可整篇读 |
 | 文字 | 一屏写多少字、停多久、断在哪。读窗按每字 0.25s 算（18 字就要 4.5s），断行按意群不按长度（切错会把"不是…才…"切成反义）；13 种文字手法只有一部分有对应版式，没有的走降级并说明 | `get_guide("text-events")` · `maskreveal`/`stomp`/`typewriter`/`highlight`/`counter`/`scramble` |
 | 动作 | 动作只承担引导/反馈/关系/转场，选不出就删。错峰总长 = 单项时长+(n−1)×间隔；转场按两幕关系选不按效果名选；接缝看速度匹配不看位置 | `get_guide("motion-rules")` · `set_transitions` · `anim[].ease` |

@@ -2,6 +2,8 @@ import fs from "node:fs";
 import { ROOT as PROJECT_ROOT } from "./root";
 import path from "node:path";
 import { pluginFiles } from "./plugin";
+import { BACKDROP_TYPES } from "../shared/sceneKinds";
+import { getMeta } from "../shared/sceneMetas";
 
 /**
  * 风格库：`server/styles/<slug>.md` 是风格规则（来自 garden-skills/motion-showreel 的风格库），
@@ -21,6 +23,9 @@ export type StylePreset = {
   radius: number;
   motion?: string;
   transition?: { type: string; durationInFrames: number };
+  /** 氛围层：套风格时垫在每个没有 backdrop 的场景下。没有它，风格只剩配色——
+   * hologram-hud 不垫 gridflow 就只是一张深蓝底（实跑验收的结论） */
+  backdrop?: { type: string; props?: Record<string, unknown> };
   sceneBias?: string[];
   subtitle?: Record<string, unknown>;
   forbidden?: string[];
@@ -222,8 +227,32 @@ export function styleSummary(slug: string): string {
     `圆角：${preset.radius}`,
     ...(preset.motion ? [`运动：${preset.motion}`] : []),
     ...(preset.transition ? [`转场：${preset.transition.type} ${preset.transition.durationInFrames} 帧`] : []),
+    ...(preset.backdrop
+      ? [`氛围层：${preset.backdrop.type}${getMeta(preset.backdrop.type) ? `（${getMeta(preset.backdrop.type)!.name}）` : ""}`]
+      : []),
     ...(preset.sceneBias?.length ? [`推荐版式：${preset.sceneBias.join("、")}`] : []),
     ...(preset.forbidden?.length ? [`禁止：${preset.forbidden.join("、")}`] : []),
   ];
   return lines.join("\n");
+}
+
+/**
+ * 预设里 backdrop 字段的校验：数据文件代码不会替你检查，写错 type 或 props key
+ * 要到 apply 那一刻才炸——挪到这里，测试和 apply 共用同一套判定。
+ * 返回 null = 合法；否则返回人话错误。
+ */
+export function presetBackdropIssue(preset: StylePreset): string | null {
+  const bd = preset.backdrop;
+  if (!bd) return null;
+  if (!BACKDROP_TYPES.includes(bd.type as never)) {
+    return `backdrop.type「${bd.type}」不在可用清单里（可用：${BACKDROP_TYPES.join(" / ")}）`;
+  }
+  const meta = getMeta(bd.type);
+  const schemaShape = (meta?.schema as { shape?: Record<string, unknown> } | undefined)?.shape ?? {};
+  for (const k of Object.keys(bd.props ?? {})) {
+    if (!(k in schemaShape)) {
+      return `backdrop.props 的「${k}」不是 ${bd.type} 的参数（可用：${Object.keys(schemaShape).join("、") || "该类型无参数"}）`;
+    }
+  }
+  return null;
 }

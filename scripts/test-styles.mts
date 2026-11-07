@@ -22,7 +22,7 @@ import path from "node:path";
 import { applyOps, createSeedProject } from "../shared/ops";
 import { SCENE_METAS } from "../shared/sceneMetas";
 import { TRANSITION_TYPES } from "../shared/transitions";
-import { STYLE_DIR, listStyles, presetOf } from "../server/styles.service";
+import { STYLE_DIR, listStyles, presetBackdropIssue, presetOf } from "../server/styles.service";
 
 let passed = 0;
 const failures: string[] = [];
@@ -104,6 +104,25 @@ test("palette：正文与底色对比度 ≥ 3（深色风最容易糊）", () =
     if (c < 3) bad.push(`${slug} text/background = ${c.toFixed(2)}（${p.palette.text} on ${p.palette.background}）`);
   }
   assert.equal(bad.length, 0, bad.join("\n"));
+});
+
+test("backdrop：type 在可用清单里、props 的 key 是该类型的真参数", () => {
+  // 数据文件代码不会替你检查：写错要到 apply 那一刻才炸，用户看到的是一次失败的套用
+  const withBd = presetSlugs.filter((s) => presetOf(s)!.backdrop);
+  assert.ok(withBd.length >= 15, `带氛围层的风格只有 ${withBd.length} 个——布局没写进去还是被误删了`);
+  for (const slug of withBd) {
+    const issue = presetBackdropIssue(presetOf(slug)!);
+    assert.equal(issue, null, `${slug} 的 backdrop 配置有误：${issue}`);
+  }
+});
+
+test("backdrop：只挑「氛围是身份一部分」的风格，干净风格不许乱垫", () => {
+  // swiss/minimal 的身份就是干净，垫一层光斑反而毁掉它——这个反向断言防止以后手滑全量加
+  for (const slug of ["swiss-editorial", "minimal-ui", "whiteboard-explainer", "flat-vector"]) {
+    const p = presetOf(slug);
+    if (!p) continue;
+    assert.equal(p.backdrop, undefined, `${slug} 是靠"干净"立身的风格，不该带氛围层`);
+  }
 });
 
 test("palette：强调色不要太贴近底色（否则「强调」等于没强调）", () => {

@@ -172,7 +172,7 @@ get_guide(name="manual", section="…")   → 按需读指南（不常驻）
 | 主题 / 画幅 | `set_theme` / `set_formats` |
 | 渲染 | `preview_frame` / `preview_frames` / `render_video` / `get_render_status` / `cancel_render` / `refresh_bundle` / `cleanup_renders` |
 | 素材 | `upload_asset` / `get_asset_info` / `list_assets`（共用库）/ `list_project_assets`（本工程）/ `delete_project_asset` / `organize_assets`（老文件归位）/ `rename_asset` / `delete_asset` |
-| 风格 | `list_styles` / `get_style` / `apply_style`（一键套风格） |
+| 风格 | `list_styles` / `get_style` / `apply_style`（一键套风格，21 个氛围型风格连带垫每幕的氛围层） |
 | 风格库（341 条参考风格） | `list_style_library`（按用途/气质/关键词检索）/ `get_style_pick`（读用户在编辑器面板勾选的）/ `get_style_library_prompt`（读某一条完整提示词）。**是画风描述、不能 apply_style** |
 | 需求 / 分镜 | `intake`（9 步问诊）/ `save_brief` / `get_brief` / `confirm_brief` / `save_storyboard` / `get_storyboard` / `export_design`（出给人看的设计稿）/ `build_storyboard` / `check_project`（只读诊断） |
 | 技能 / 记忆 | `list_guides` / `remember` / `recall` |

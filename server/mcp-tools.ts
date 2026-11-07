@@ -31,7 +31,7 @@ import { pickPreviewRange } from "../shared/previewWindow";
 import { densitySummary, projectDensity, rhythmIssues } from "../shared/density";
 import { readScript, saveScript, confirmScript, scriptToText, estimateSeconds, scriptChars, SCRIPT_TYPES, type Script } from "./script.service";
 import { BLOCKING_LEVELS, REVIEW_LEVELS, blockingIssues, readReview, markReviewRequested, markReviewConfirmed, markNeedsWork, markSelfRender, markProbe, markChosenStyle, reviewToText, type ReviewIssue, type ReviewLevel } from "./review.service";
-import { listStyles, presetOf, readStyle, stylePresetIssues, styleSummary } from "./styles.service";
+import { listStyles, presetBackdropIssue, presetOf, readStyle, stylePresetIssues, styleSummary } from "./styles.service";
 import { itemById as styleLibItem, listLibrary as listStyleLib, picksSummary, readPrompt as readStylePrompt } from "./styleLibrary.service";
 import { readStoryboard, saveStoryboard, storyboardToText, type Storyboard } from "./storyboard.service";
 import { readTiming, saveTiming } from "./narration-timing.service";
@@ -779,8 +779,8 @@ const TOOLS: ToolDef[] = [
   {
     name: "apply_style",
     description:
-      "一键套用风格：改主题（配色/字体/圆角）+ 场景入场转场，返回推荐版式与禁止项。**只能套带预设的风格**（list_styles 里没标「仅规则」的），仅规则风格会报错。只覆盖「系统的值」，版式与文案仍按风格规则重做。\n" +
-      "转场只改**还是版本默认（fade 12 帧 / 未设）**的场景：已经用 set_transitions 显式设过的不动，要全覆盖传 overwriteTransitions=true。",
+      "一键套用风格：改主题（配色/字体/圆角）+ 场景入场转场 + **氛围层**（预设带 backdrop 的风格会给没有氛围层的幕垫一层，如全息风格的网格流动）——没有氛围层，hologram-hud 这类风格就只是一张深蓝底。返回推荐版式与禁止项。**只能套带预设的风格**（list_styles 里没标「仅规则」的），仅规则风格会报错。只覆盖「系统的值」，版式与文案仍按风格规则重做。\n" +
+      "转场只改**还是版本默认（fade 12 帧 / 未设）**的场景：已经用 set_transitions 显式设过的不动，要全覆盖传 overwriteTransitions=true；氛围层同理，已有 backdrop 的幕不动。",
     shape: {
       slug: z.string().describe("风格 slug"),
       transitions: z.boolean().optional().describe("是否同时应用转场，默认 true"),
@@ -809,6 +809,11 @@ const TOOLS: ToolDef[] = [
         );
       }
       const p = await resolveProject(a.projectId);
+      // backdrop.type 写错会在 ops 层才炸，先在这里给出人话（presetBackdropIssue 与测试共用同一套判定）
+      const bdIssue = presetBackdropIssue(preset);
+      if (bdIssue) {
+        throw new Error(`风格预设「${a.slug}」的 backdrop 配置有误：${bdIssue}（修 server/styles/presets.json）`);
+      }
       const ops: Record<string, unknown>[] = [
         {
           op: "set_theme",
@@ -841,11 +846,28 @@ const TOOLS: ToolDef[] = [
           ops.push({ op: "update_scene", sceneId: sc.id, patch: { transitionIn: t } });
         }
       }
+      // 氛围层：只垫「还没有 backdrop」的场景——用户显式设过的（set_scene_backdrop）不动，
+      // 和转场同一个原则：风格不该覆盖人为选择。
+      let backdropSet = 0;
+      if (preset.backdrop) {
+        for (const sc of p.scenes ?? []) {
+          if ((sc as { backdrop?: unknown }).backdrop) continue;
+          ops.push({
+            op: "set_scene_backdrop",
+            sceneId: sc.id,
+            backdrop: {
+              type: preset.backdrop.type,
+              ...(preset.backdrop.props ? { props: preset.backdrop.props } : {}),
+            },
+          });
+          backdropSet++;
+        }
+      }
       const res = await api<{ summary: string[] }>(`/api/projects/${p.id}/ops`, {
         method: "POST",
         body: JSON.stringify({ actor: "agent", ops }),
       });
-      return `已套用风格（${res.summary.length} 处改动）${String.fromCharCode(10)}${styleSummary(a.slug)}${String.fromCharCode(10)}${keptCustom ? `转场：保留了 ${keptCustom} 个你显式设过的入场转场（要统一成风格值传 overwriteTransitions=true）。${String.fromCharCode(10)}` : ""}注意：转场只应用到**现有**场景，之后新建的场景默认转场是 fade 12 帧——要一致就给新场景补 set_transitions 或重跑 apply_style。${String.fromCharCode(10)}下一步：save_storyboard 写分镜（见 get_guide("director","分镜")）`;
+      return `已套用风格（${res.summary.length} 处改动）${String.fromCharCode(10)}${styleSummary(a.slug)}${String.fromCharCode(10)}${keptCustom ? `转场：保留了 ${keptCustom} 个你显式设过的入场转场（要统一成风格值传 overwriteTransitions=true）。${String.fromCharCode(10)}` : ""}${backdropSet ? `氛围层：${backdropSet} 幕垫了「${preset.backdrop!.type}」（已有氛围层的幕没动；之后新建的场景没有氛围层，重跑本工具或手动 set_scene_backdrop）。${String.fromCharCode(10)}` : ""}注意：转场只应用到**现有**场景，之后新建的场景默认转场是 fade 12 帧——要一致就给新场景补 set_transitions 或重跑 apply_style。${String.fromCharCode(10)}下一步：save_storyboard 写分镜（见 get_guide("director","分镜")）`;
     },
   },
   {
