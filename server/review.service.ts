@@ -11,6 +11,40 @@ import path from "node:path";
  * 所以渲染前必须让用户自己去编辑器看一遍工程，看完点头才渲染；
  * 用户愿意自己点导出也行（那本来就是他的片子）。
  */
+/**
+ * 反馈的严重级别。**决定"能不能交付"，不只是分类标签**：
+ *   P0 意思错了（事实/结论/因果反了）——改了才算拍完
+ *   P1 观众会误解（字幕压字、顺序反了、看不出来在说什么）——必须改完才能再请他看
+ *   P2 体验问题（节奏、转场突兀、音量、停留太短）——能改就改，能解释也可以过
+ *   P3 打磨（错别字、间距、图标大小）——记下来，别为它重做结构
+ *
+ * 为什么要有级别：用户说"还行"时，agent 无法判断那是"能交付"还是"不好意思直说"。
+ * 先把每条反馈标上级别，P0/P1 的存在与否就是客观答案。
+ */
+export type ReviewLevel = "P0" | "P1" | "P2" | "P3";
+
+export const REVIEW_LEVELS: ReviewLevel[] = ["P0", "P1", "P2", "P3"];
+
+/** 必须先修完才能提交的级别（approved=true 时会被拦） */
+export const BLOCKING_LEVELS: ReviewLevel[] = ["P0", "P1"];
+
+export type ReviewIssue = {
+  level: ReviewLevel;
+  text: string;
+  /** 第几幕（1 起）；整片级问题不填 */
+  scene?: number;
+};
+
+/**
+ * 必须先修完才能提交的条目（P0/P1）。
+ *
+ * 抽成纯函数是因为这条判断要能被测试直接覆盖：它决定"能不能渲染"，
+ * 而它的失败方式是**安静地放行**——放行一次，返工的就是整片。
+ */
+export function blockingIssues(issues: ReviewIssue[] | undefined): ReviewIssue[] {
+  return (issues ?? []).filter((x) => BLOCKING_LEVELS.includes(x.level));
+}
+
 export type Review = {
   /** 什么时候请用户去看的（request_review 写入） */
   requestedAt?: string;
@@ -18,9 +52,11 @@ export type Review = {
   confirmedAt?: string;
   /** 用户在编辑器里提出的问题（留档，便于逐条改） */
   feedback?: string[];
+  /** 带级别的反馈：与 feedback 并存（feedback 保留原话，这里保留判断） */
+  issues?: ReviewIssue[];
   /** 用户决定自己导出时记一笔（agent 不再渲染） */
   selfRender?: boolean;
-  /** 开工前的风格样张：抽过帧给用户看过没有（probe_style 写入） */
+  /** 开工前的风格样张：抽帧给用户看过没有（probe_style 写入） */
   probeAt?: string;
   /** 样张用过的风格 slug */
   probeSlugs?: string[];
@@ -57,21 +93,25 @@ export function markReviewRequested(projectId: string): Review {
  * 记录用户验收结果。
  * 通过：confirmedAt 写入；不通过：confirmedAt 清掉 + 反馈留档（防止"上版通过"被误用于这一版）。
  */
-export function markReviewConfirmed(projectId: string, feedback?: string[]): Review {
+export function markReviewConfirmed(projectId: string, feedback?: string[], issues?: ReviewIssue[]): Review {
   const prev = readReview(projectId) ?? {};
   return write(projectId, {
     ...prev,
     confirmedAt: new Date().toISOString(),
     feedback: feedback?.length ? [...(prev.feedback ?? []), ...feedback] : prev.feedback,
+    // 通过时也可能有一堆 P2/P3：留档，别因为它们不阻断就丢掉
+    ...(issues?.length ? { issues: [...(prev.issues ?? []), ...issues] } : {}),
   });
 }
 
-export function markNeedsWork(projectId: string, feedback: string[]): Review {
+export function markNeedsWork(projectId: string, feedback: string[], issues?: ReviewIssue[]): Review {
   const prev = readReview(projectId) ?? {};
   return write(projectId, {
     ...prev,
     confirmedAt: undefined,
     feedback: [...(prev.feedback ?? []), ...feedback],
+    // 新一轮的 issues 追加在旧的前面：旧的多半已修，新的才是当前要看的
+    ...(issues?.length ? { issues: [...issues, ...(prev.issues ?? [])] } : {}),
   });
 }
 

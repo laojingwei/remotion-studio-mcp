@@ -76,6 +76,7 @@
 | 预览 | 单帧/多帧抽帧（按场景偏移）、真实浏览器渲染前 dryRun 预检 | `preview_frames`（单帧 `frames:[f]`） `render_video(dryRun)` |
 | 渲染 | 正式出片（可等完成）、进度查询、取消、历史产物清理 | `render_video` `get_render_status` `cancel_render` `cleanup_renders` |
 | 素材 | **分两层目录**：`assets/library/`（我的素材，跨工程复用）+ `assets/projects/<工程id>/`（工程私有，删工程连带清）；素材库上传/列表/改名、探测真实时长、图标装饰元素库 | `upload_asset` `list_assets` `list_project_assets` `delete_project_asset` `organize_assets` `get_asset_info` |
+| 验收 | 用户在编辑器看完整片后的结论。反馈**必须标 P0–P3**：P0 意思错了 / P1 观众会误解 / P2 体验 / P3 打磨。**有 P0/P1 时 approved=true 会被直接拒绝**——用户点头不等于意思对了；用户说"还行"要先追问拆成具体条目 | `request_review` `confirm_review(issues)` `get_annotations` |
 | 自检 | 只读诊断：空场景/素材缺失/音频超长/freeform 异常/字幕超标/安全区与竖屏构图（提醒级），一条条给修法。多画幅工程默认只查交付那一版，另一版传 `format` | `check_project(format?)` |
 | 需求管线 | 9 步问诊落需求 → 用户确认 → 定稿件类型 → 稿子确认 → 分镜表确认 → 一次建好全部幕+字幕 | `intake` `save_brief` `confirm_brief` `save_script` `confirm_script` `save_storyboard` `build_storyboard` |
 | 交付闸口 | 渲染前请用户到编辑器看片（抽帧查不出节奏/转场/音画错位）；用户也可自己导出；封面单独出图 | `request_review` `confirm_review` `render_cover` |

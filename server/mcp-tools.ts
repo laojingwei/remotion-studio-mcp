@@ -30,7 +30,7 @@ import { listNarrationClips, markVoiceHeard, narrationFingerprint, voiceHeardSta
 import { pickPreviewRange } from "../shared/previewWindow";
 import { densitySummary, projectDensity, rhythmIssues } from "../shared/density";
 import { readScript, saveScript, confirmScript, scriptToText, estimateSeconds, scriptChars, SCRIPT_TYPES, type Script } from "./script.service";
-import { readReview, markReviewRequested, markReviewConfirmed, markNeedsWork, markSelfRender, markProbe, markChosenStyle, reviewToText } from "./review.service";
+import { BLOCKING_LEVELS, REVIEW_LEVELS, blockingIssues, readReview, markReviewRequested, markReviewConfirmed, markNeedsWork, markSelfRender, markProbe, markChosenStyle, reviewToText, type ReviewIssue, type ReviewLevel } from "./review.service";
 import { listStyles, presetOf, readStyle, stylePresetIssues, styleSummary } from "./styles.service";
 import { itemById as styleLibItem, listLibrary as listStyleLib, picksSummary, readPrompt as readStylePrompt } from "./styleLibrary.service";
 import { readStoryboard, saveStoryboard, storyboardToText, type Storyboard } from "./storyboard.service";
@@ -200,7 +200,7 @@ const TOOLS: ToolDef[] = [
         "    在 → 按 get_guide(\"external-tools\") 画图并落盘；",
         "    不在 → 询问用户是让你来处理下载还是让用户自己下载，下载好后放进 .other_modules（主路径）。",
         "    工具没下载时 iso 幕仍可引用已有 SVG（素材在 public/assets/projects/<id>/iso/），只是画不了新图。",
-        "0. 定位《导演》 → get_guide(\"director\")；连续做同类片子可只读一节：get_guide(\"director\",\"流程\")",
+        "0. 定位《导演》 → get_guide(\"director\")，第一次使用时必须认真读完里面的内容；连续做同类片子可只读一节：get_guide(\"director\",\"流程\")",
         "1. 查记忆 → recall()：先看以前踩过什么坑、这个用户有什么偏好（一次调用，别省）",
         "2. 定工程归属【闸口①】 → list_projects() → **问用户：这次是新增一支，还是改已有工程？**",
         "   ↳ 改已有：先 get_project + get_history 复述现状（几幕 / 现在什么风格 / 上次改到哪），再问「这次只动什么」→ 写进 brief 的 editMode + changeScope；别顺手改他没让改的地方",
@@ -253,7 +253,8 @@ const TOOLS: ToolDef[] = [
         "   ↳ 字幕超 26 字 render_video 会直接拒：先 fix_subtitles(dryRun=true) 看预演 → fix_subtitles 落盘",
         "15. 验收【闸口⑧】 → request_review：**请用户去编辑器把整片播一遍**（节奏 / 转场 / 字幕 / 音画同步只有整片看得出）",
         "   ↳ 让他把问题**标在帧上**（编辑器画面右上「批注」）：他会拿到精确到幕内帧的定位 → 你读 get_annotations 逐条改、改完 resolve_annotation，比一句\"这里怪怪的\"少返工好几轮",
-        "   ↳ 通过 → confirm_review(approved=true)　要改 → confirm_review(approved=false, feedback=[...]) 改完再请他看　他自己导出 → selfRender=true",
+        "   ↳ 通过 → confirm_review(approved=true)　要改 → confirm_review(approved=false, feedback=[用户原话], issues=[{level:\"P1\",scene:3,text:\"字幕压住二维码\"}])　他自己导出 → selfRender=true",
+        "   ↳ 反馈**必须标级**：P0 意思错了（事实/结论/因果反了）、P1 观众会误解、P2 体验（节奏/转场/音量）、P3 打磨（错别字/间距）。有 P0/P1 时 approved=true 会被拒——**用户点头不等于意思对了**。用户说\"还行/差不多\"要先追问拆成具体条目，别直接记通过。见 get_guide(\"qa\") 的 P0–P3 一节。",
         "16. 渲染 → render_video(dryRun) → render_video（没验收过 / 刚改过没抽帧都会被拒；用户明确说「不用看了直接渲」才 force=true + forceUserQuote=他的原话）",
         "   ↳ 长片别用 wait 硬等（上限 240s，超过也等不到）：拿 taskId 用 **get_render_status(taskId, waitSec=25)**，状态一变立刻返回，12 分钟的片子约 30 次就够——别几秒一查，纯浪费轮次。",
         "   ↳ 渲染期间不要抽帧 / 出封面（共用同一个浏览器实例，会 delayRender 超时）：等它结束，或先 cancel_render。",
@@ -4310,7 +4311,8 @@ const TOOLS: ToolDef[] = [
         `重点让他看：${focus}`,
         `看完三种回法：`,
         `  · 可以 → confirm_review(approved=true)`,
-        `  · 要改 → confirm_review(approved=false, feedback=["第 3 幕字幕压住了二维码", "结尾太急"])——反馈逐条记，改完再请他看一次`,
+        `  · 要改 → confirm_review(approved=false, feedback=["第 3 幕字幕压住了二维码", "结尾太急"], issues=[{level:"P1",scene:3,text:"字幕压住二维码"},{level:"P2",text:"结尾太急"}])`,
+        `    ↳ 逐条标级：P0 意思错 / P1 观众会误解 / P2 体验 / P3 打磨。有 P0/P1 就不算通过，改完再请他看一次。`,
         `  · 他自己在编辑器里导出 → confirm_review(approved=true, selfRender=true)，你不用再渲染`,
         `没验收过，render_video 会拒绝（用户明确让你直接渲染时传 force=true + forceUserQuote=他的原话）。`,
       ].join(nl);
@@ -4319,11 +4321,26 @@ const TOOLS: ToolDef[] = [
   {
     name: "confirm_review",
     description:
-      "记录用户在编辑器看片后的结论。approved=true 才允许 render_video；approved=false 时必须给 feedback（逐条记，改完要再 request_review 一次）。",
+      "记录用户在编辑器看片后的结论。approved=true 才允许 render_video。" +
+      "\n不通过时给 feedback（原话）+ issues（带 P0–P3 级别）。" +
+      "**approved=true 但 issues 里有 P0/P1 会被直接拒绝**——意思错了或观众会误解，不算通过。" +
+      "\n用户说\"还行/差不多\"这种含糊话时，先把他的话拆成 issues 问一句\"这几条要改吗\"，别直接当通过。",
     shape: {
       projectId: z.string().optional().describe("要操作的工程 id，不传 = 当前默认工程（list_projects 查）"),
       approved: z.boolean().describe("用户觉得可以吗"),
-      feedback: z.array(z.string()).optional().describe("不通过时：用户提的问题，逐条记原话"),
+      feedback: z.array(z.string()).optional().describe("不通过时：用户提的问题，逐条记原话（原话最有价值，别转述）"),
+      issues: z
+        .array(
+          z.object({
+            level: z
+              .enum(["P0", "P1", "P2", "P3"])
+              .describe("P0 意思错了/事实错；P1 观众会误解（字幕压字、顺序反了）；P2 体验（节奏/转场/音量）；P3 打磨（错别字/间距）"),
+            text: z.string().describe("具体是什么问题，一句话说清"),
+            scene: z.number().int().optional().describe("第几幕（1 起）；整片级问题不填"),
+          }),
+        )
+        .optional()
+        .describe("带级别的反馈。P0/P1 存在时不能算通过；P2 能改就改，P3 记下别为它重做结构"),
       selfRender: z.boolean().optional().describe("用户决定自己在编辑器里导出（agent 不再渲染）"),
     },
     run: async (a) => {
@@ -4335,6 +4352,26 @@ const TOOLS: ToolDef[] = [
         a.approved && dirtySincePreview
           ? `${nl}⚠ 提醒：验收通过后工程又改过画面且没再抽帧——若用户看的就是最新版就没问题，否则建议 preview_frames 复核一次再渲染。`
           : "";
+
+      // 级别是本次判定的依据：P0/P1 存在 = 还没拍完，跟他点没点头无关
+      const rawIssues = (a.issues ?? []) as ReviewIssue[];
+      const issues: ReviewIssue[] = rawIssues
+        .map((x: ReviewIssue) => ({ level: x.level, scene: x.scene, text: String(x.text ?? "").trim() }))
+        .filter((x: ReviewIssue) => x.text.length > 0);
+      const blocking = blockingIssues(issues);
+      const byLevel = (lv: ReviewLevel) => issues.filter((x) => x.level === lv);
+
+      if (a.approved && blocking.length) {
+        throw new Error(
+          `不能记成通过：还有 ${blocking.length} 条 P0/P1 没修完——` +
+            blocking
+              .map((x) => `${x.level}${x.scene ? ` 第 ${x.scene} 幕` : ""}「${x.text}」`)
+              .join("；") +
+            `${nl}意思错了或观众会误解，不算拍完。先改这几条再 confirm_review(approved=true)。` +
+            `${nl}（如果用户明确说\"就这版，我知道\"——那就把这几条降级成 P2/P3 再记，别默默放过。）`,
+        );
+      }
+
       if (a.approved) {
         if (a.selfRender) {
           markSelfRender(p.id);
@@ -4343,22 +4380,42 @@ const TOOLS: ToolDef[] = [
             `${nl}你不用渲染了；收尾可以 get_guide("memory") 做沉淀，需要时再帮他改。`
           );
         }
-        const r = markReviewConfirmed(p.id, a.feedback);
+        const r = markReviewConfirmed(p.id, a.feedback, issues);
         const memo = rememberDeliveryPreferences(p as never, readBrief(p.id));
+        const softNote = issues.length
+          ? `${nl}另有 ${issues.length} 条非阻断反馈已留档（${REVIEW_LEVELS.filter((lv) => byLevel(lv).length)
+              .map((lv) => `${lv}×${byLevel(lv).length}`)
+              .join(" / ")}）：能顺手改完更稳，但不必为此再请他看一遍；别在渲染前大改结构。`
+          : "";
         return (
-          `已记：用户验收通过（${r.confirmedAt}）✅${dirtyNote}${nl}下一步：render_video（先 dryRun 预检，再正式渲染）` +
+          `已记：用户验收通过（${r.confirmedAt}）✅${dirtyNote}${softNote}${nl}下一步：render_video（先 dryRun 预检，再正式渲染）` +
           (memo.length ? `${nl}已沉淀 ${memo.length} 条偏好（下次开工 recall 就能命中，不用再问）：${memo.join("；")}` : "")
         );
       }
-      if (!a.feedback?.length) {
-        throw new Error("不通过要记原因：把用户在编辑器里提的问题逐条放进 feedback（原话最好），否则改什么全靠猜");
+
+      const fb = (a.feedback as string[] | undefined) ?? [];
+      if (!fb.length && !issues.length) {
+        throw new Error(
+          "不通过要记原因：把用户在编辑器里提的问题逐条放进 feedback（原话最好）或 issues（带级别），否则改什么全靠猜",
+        );
       }
-      const r = markNeedsWork(p.id, a.feedback);
-      return (
-        `已记 ${a.feedback.length} 条反馈（验收状态已重置）：${nl}` +
-        `${(a.feedback as string[]).map((x: string, i: number) => `${i + 1}. ${x}`).join(nl)}${nl}` +
-        `改完再 request_review 请他看一次——别改完直接渲染。`
-      );
+      const r = markNeedsWork(p.id, fb, issues);
+
+      const groups = REVIEW_LEVELS.filter((lv) => byLevel(lv).length)
+        .map((lv) => {
+          const items = byLevel(lv)
+            .map((x) => `- ${x.scene ? `[第 ${x.scene} 幕] ` : ""}${x.text}`)
+            .join(nl);
+          return `${lv}${BLOCKING_LEVELS.includes(lv) ? "（必须改完才能提交）" : lv === "P2" ? "（能改就改）" : "（记着，别为它重做结构）"}${nl}${items}`;
+        })
+        .join(`${nl}${nl}`);
+
+      const rest = fb.length ? `${nl}${nl}用户原话：${nl}${fb.map((x, i) => `${i + 1}. ${x}`).join(nl)}` : "";
+      const gate = blocking.length
+        ? `P0/P1 共 ${blocking.length} 条：改完再 request_review 请他看一次——别改完直接渲染。`
+        : `这一轮没有 P0/P1（都是体验/打磨级）：改完可以直接渲染，或问一句\"这几条要现在改吗\"。`;
+
+      return `已记 ${fb.length || issues.length} 条反馈（验收状态已重置）：${nl}${groups || "（未标级别）"}${rest}${nl}${gate}`;
     },
   },
   {
