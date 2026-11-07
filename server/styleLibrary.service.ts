@@ -138,7 +138,15 @@ function promptSectionOf(text: string): string {
       break;
     }
   }
-  return lines.slice(start + 1, end).join("\n").trim();
+  return (
+    lines
+      .slice(start + 1, end)
+      // 「原片/源码」元信息行（V 系列独有）是噪音：评审分数会让 agent 误判质量等级、
+      // demos 路径会诱导它去找根本不存在的源码。读的人要的只有提示词本身。
+      .filter((l) => !/^\*\*(原片|源码)\*\*：/.test(l))
+      .join("\n")
+      .trim()
+  );
 }
 
 /**

@@ -200,6 +200,11 @@ check("V 系列正文完整：text 围栏里的提示词本体没被切掉", () 
   const v11 = readPrompt("V11") ?? "";
   assert.ok(v11.length > 4000, `V11 正文只有 ${v11.length} 字——sectionOf 按「下一个 ##」截断了，真正的提示词（嵌在「怎么用/提示词」小节里）全丢`);
   assert.ok(v11.includes("Signature features"), "V11 的提示词本体没进正文");
+  // 「原片/源码」元信息行是噪音：评审分数诱导 agent 误判质量、demos 路径诱导它找不存在的源码。
+  // 只断言这两类行——「怎么用」节正文里的 rubric 提及（含"未随库分发"）是操作指引，保留
+  for (const noise of ["AI 评审终评", "demos/"]) {
+    assert.ok(!v11.includes(noise), `V11 正文里有噪音「${noise}」——原片/源码元信息行该过滤`);
+  }
 });
 
 check("L 系列完整方案在提示词节之后，不能只取 128 字", () => {
