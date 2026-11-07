@@ -1,4 +1,4 @@
-# Agent 使用全书（132 个工具 = 4 常驻 + 128 按需 + 能力地图 + 铁律）
+# Agent 使用全书（135 个工具 = 4 常驻 + 128 按需 + 能力地图 + 铁律）
 
 给 agent 的完整说明书。**你不需要读源码、不需要试探参数**：这台机器能做什么、怎么组合、
 为什么没生效，全部在这页和另外 17 篇指南里（全 18 篇的索引见本文最后一节）。
@@ -70,6 +70,7 @@
 | 音频 | TTS 配音（单段/多段**自动对齐幕长并写字幕**）、BGM 全局轨、场景内音频裁时间窗、音量调节 | `tts_narration` `add_audio_track` `set_audio` |
 | 字幕 | 硬字幕烧录（**一屏 8–16 字、不带标点**，写入自动拆段）+ SRT/VTT 导出，两者同一套时间 | `set_subtitle` `fix_subtitles` `set_subtitle_style` `export_subtitles` |
 | 风格 | **43 种风格规则库，全部带结构化预设**（`apply_style` 一键套：主题色+字体+圆角+转场+推荐版式+禁止项），也都能 `probe_style` 出真样张；风格文件可改造/混搭/自定义 | `list_styles` `get_style` `apply_style` |
+| 风格库 | 编辑器「风格库」面板两个分区**都能勾选并一起发给 agent**：上区 **341 条参考风格**（画风描述，**不能 apply_style**，要翻译成 theme/版式）；下区 **43 个内置风格**（带 palette/font 预设，`apply_style(slug)` 直接套）。`get_style_pick()` 会分两组返回，别搞反 | `list_style_library` `get_style_pick` `get_style_library_prompt` `apply_style` |
 | 画幅 | 多画幅并存（9:16 / 16:9 / 1:1 / 自定义 16–7680）。**`set_formats` 默认覆盖**：没写进 formats 的画幅会被删掉（用户说「只要竖屏」就只传 portrait，否则编辑器顶栏会留着横屏按钮）；只改尺寸传 `merge:true` | `set_formats` |
 | 预览 | 单帧/多帧抽帧（按场景偏移）、真实浏览器渲染前 dryRun 预检 | `preview_frames`（单帧 `frames:[f]`） `render_video(dryRun)` |
 | 渲染 | 正式出片（可等完成）、进度查询、取消、历史产物清理 | `render_video` `get_render_status` `cancel_render` `cleanup_renders` |
@@ -126,6 +127,8 @@ fx 类的序列帧文件夹会整体成一个结果，直接给带 `{frame}` 的
 
 **风格与主题**：`list_styles` · `get_style` · `apply_style` · `set_theme`（配色/字体/motion）· `set_formats`
 
+**风格库（341 条参考风格，不是可套用的内置风格）**：`list_style_library`（按 用途/气质/关键词 检索）· `get_style_pick`（读用户在编辑器面板里勾选的）· `get_style_library_prompt`（读某一条的完整提示词）
+
 **验收与渲染**：`render_cover`（某帧导出封面 PNG）· `request_review`（请用户到编辑器看片，返回地址+重点看什么）· `confirm_review(approved, feedback[], selfRender)`（没通过 → `render_video` 拒绝）· `preview_frame` · `preview_frames` · `render_video`（`wait` / `dryRun` / `force`）· `get_render_status` · `cancel_render` · `cleanup_renders` · `refresh_bundle`（改了 public 素材后渲染前调用）
 
 **自检**：`check_project`（只读，交付前必跑）
@@ -167,6 +170,7 @@ fx 类的序列帧文件夹会整体成一个结果，直接给带 `{frame}` 的
 | 卡点 | 有 BGM 文件：`analyze_audio(src)` 拿 BPM + 拍点帧号（**置信度 <2.5 别自动用**，问用户 BPM 后 `set_beat_grid`）；再把转场/特效的 from 对着拍点放 |
 | 配音前发现 TTS 没开 | `tts_check()` 探连通 → `tts_check(deep=true)` 验配置。**开工时做**，别等第 6 步 |
 | 换全套视觉 | `list_styles` → `get_style`（读规则）→ `apply_style`（43 种都能一键套：配色/字体/圆角/转场）。预设只覆盖"系统的值"，版式与文案仍要按风格规则重做；要改得更像品牌，再 `set_theme` 覆盖三个值 |
+| 用户说"风格我选好了" | `get_style_pick()`（分两组）：**内置 slug → 直接 `apply_style`**；**参考编号 → `get_style_library_prompt(id)` 读原文 → 翻译成 theme/版式**。两组都 `probe_style` 出**我们引擎的**样张给用户确认。用户没挑就 `list_style_library(q/use/mood)` 给 2–3 个候选 |
 | 数字/图表页 | `stats`/`chart`/`ring` 版式自带滚动；数据只能来自用户或可靠来源 |
 | 元素动画 | `update_element(anim=[{frame,from,to}])`；弹簧手感 = 过冲关键帧（craft §4） |
 | 完全自定义画面 | `freeform` 场景（`get_guide("freeform")`），上限 40 元素，`layout_grid`/`align_elements` 辅助排版 |

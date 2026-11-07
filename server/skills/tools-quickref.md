@@ -1,11 +1,11 @@
 # 工具速查（入口页）
 
-完整说明书在 **`get_guide("manual")`**：《Agent 使用全书》——132 个工具全表（4 常驻 + 128 按需）、能力地图、
+完整说明书在 **`get_guide("manual")`**：《Agent 使用全书》——135 个工具全表（4 常驻 + 128 按需）、能力地图、
 「我想…」意图速查、落地铁律（为什么没生效）。本页只留最快的域索引：
 
 **两层调用**：常驻核心 4 个（start_guide / get_guide / tool_search / tool_call）；
-其余 128 个工具 `tool_search("意图")` 找 → `tool_call(name, args)` 执行（`all=true` 看全量目录，`names=[...]` 取完整参数表）。
-这 128 个里有 **4 个退役别名**（旧名字，如 `rename_scene`）：搜索里不出现，但直接 `tool_call` 仍能命中原工具——老脚本不必改。
+其余 131 个工具 `tool_search("意图")` 找 → `tool_call(name, args)` 执行（`all=true` 看全量目录，`names=[...]` 取完整参数表）。
+这 131 个里有 **4 个退役别名**（旧名字，如 `rename_scene`）：搜索里不出现，但直接 `tool_call` 仍能命中原工具——老脚本不必改。
 
 - 工程：list / switch / create / get / **archive（收进抽屉，不删文件）** / delete / 模板（含删除）/ 历史 / 导入导出
   （当前工程只在 create / import / switch / 删除当前工程时变；显式 projectId 只影响本次调用）
@@ -25,6 +25,9 @@
 - 音频字幕：tts_narration、**revise_script（改一句台词 → 只重配那段）**、add_audio_track、set_subtitle、export_subtitles
 - 预览渲染：preview_frames（单帧 frames:[f]）、render_video(dryRun/wait)、check_project
 - 风格主题：list_styles / apply_style / set_theme / set_formats
+- **风格库（341 条参考风格）**：用户先在编辑器「风格库」面板勾选 → `get_style_pick` 读他选了什么；
+  用户没挑就 `list_style_library(q/use/mood)` 找候选 → `get_style_library_prompt(id)` 读原文。
+  **这些是画风描述、不能 apply_style**，要翻译成 theme/版式后用 `probe_style` 出我们引擎的样张
 - 批量：apply_ops（整批原子）
 - 协作记忆：reply_user / remember / recall
 

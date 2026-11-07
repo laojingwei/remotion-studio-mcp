@@ -32,6 +32,7 @@ import { densitySummary, projectDensity, rhythmIssues } from "../shared/density"
 import { readScript, saveScript, confirmScript, scriptToText, estimateSeconds, scriptChars, SCRIPT_TYPES, type Script } from "./script.service";
 import { readReview, markReviewRequested, markReviewConfirmed, markNeedsWork, markSelfRender, markProbe, markChosenStyle, reviewToText } from "./review.service";
 import { listStyles, presetOf, readStyle, stylePresetIssues, styleSummary } from "./styles.service";
+import { itemById as styleLibItem, listLibrary as listStyleLib, picksSummary, readPrompt as readStylePrompt } from "./styleLibrary.service";
 import { readStoryboard, saveStoryboard, storyboardToText, type Storyboard } from "./storyboard.service";
 import { readTiming, saveTiming } from "./narration-timing.service";
 import {
@@ -226,8 +227,10 @@ const TOOLS: ToolDef[] = [
         "   ↳ 骨架确认后 → save_storyboard(useNarrationTiming=true) 自动回填每幕 durationInFrames；段数必须和幕数一致（对不上直接拒）。",
         "6. 观感规格 → intake(11)：mood 三个形容词 / 安全区 / 封面 / 字幕规格 / 音效层 → save_brief(step=11)",
         "   ↳ 这五项决定\"好不好看、专不专业\"。写分镜时可以先不齐（会软提醒），但**请用户看片前必须齐**——标准没定，他只能说「感觉不对」。",
-        "7. 风格样张【闸口⑤】 → probe_style(slugs=[候选1,候选2,候选3])：同一幕出 2–3 张不同风格的图 → **发给用户挑** → confirm_style_probe(slug)",
+        "7. 风格样张【闸口⑤】 → **先请用户去编辑器「风格库」面板挑**（顶栏按钮 → 勾选 → 「告诉 agent」）→ get_style_pick() 拿到编号 → probe_style(slugs=[候选1,候选2,候选3])：同一幕出 2–3 张不同风格的图 → **发给用户挑** → confirm_style_probe(slug)",
         "   ↳ 这是\"别一股脑开干\"最硬的一道防线。用户没看过图就往下做，等于让他在成片里做第一次审美判断——那时候改一张图要动 50 幕。",
+        "   ↳ get_style_pick() 会分两组回来：**内置风格（slug）直接 apply_style 就能落 palette/font，不要翻译**；**参考风格（编号）不能套**——先 get_style_library_prompt 读原文，翻译成本片的主题/版式/氛围，再 probe_style 出我们引擎的样张。两组搞反，一边是白扔现成预设，一边是拿画风参考图当成片效果。",
+        "   ↳ 用户没挑、或说\"你定\"：list_style_library(q/use/mood) 自己找 2–3 个候选，把「编号 + 一句长什么样」发给他选——别替他决定审美。",
         "   ↳ 没 probe 过，build_storyboard 会直接拒绝。",
         "8. 风格落地 → 定好 slug 后按需微调：get_style 读规则 → set_theme / apply_style；用 mood 反查一遍（要「高级」就别上弹跳动效）",
         "9. 分镜【闸口⑥】 → get_guide(\"formats\") 定结构 → 2–3 个拉开差距的提案给用户选 → save_storyboard（每幕 text 直接取自稿件分段）",
@@ -634,6 +637,108 @@ const TOOLS: ToolDef[] = [
         (failed.length ? `${nl}失败 ${failed.length} 幕：${nl}${failed.join(nl)}` : "") +
         `${nl}下一步：preview_frames 抽 2–3 幕看效果（别假设全片都对了）`
       );
+    },
+  },
+  /**
+   * 风格库（341 条外部风格提示词）和内置 43 个风格是两回事，工具也分开：
+   * 这两个只负责"找"和"读用户挑的"，出图仍然走 probe_style。
+   */
+  {
+    name: "list_style_library",
+    description:
+      "检索风格库（341 条外部风格提示词，按用途/气质分类）。**用户没挑风格时**用它找候选；" +
+      "用户已经在编辑器「风格库」面板挑过，就直接 get_style_pick，别重复检索。" +
+      "返回编号 + 名称 + 一句长什么样 + 有无静帧。这些是**参考风格**，不是能 apply_style 的内置风格。",
+    shape: {
+      q: z.string().optional().describe("关键词：名称/关键词/适合里搜，如「手绘」「纸」「数据」"),
+      use: z
+        .enum(["structure", "technique", "texture", "character", "layout", "kit"])
+        .optional()
+        .describe("用途：structure 整片结构 / technique 手法 / texture 画面质感 / character 角色画风 / layout 版式配色 / kit 成套方案"),
+      mood: z
+        .string()
+        .optional()
+        .describe("气质：克制 活泼 高级 温暖 科技 复古 东方 荒诞 压抑 浪漫（用户说\"想要安静一点\"这类就用它）"),
+      limit: z.number().optional().describe("最多回多少条，默认 40"),
+    },
+    run: async (a) => {
+      const nl = String.fromCharCode(10);
+      const { items, total } = listStyleLib({
+        q: a.q,
+        use: a.use,
+        mood: a.mood as never,
+        limit: a.limit ?? 40,
+      });
+      if (!items.length) {
+        return `没有匹配（库里共 ${total} 条）。换个更短的词，或不带条件看全部：list_style_library(limit=60)。`;
+      }
+      const lines = items.map(
+        (i) =>
+          `- ${i.id} ${i.name}${i.still ? "" : "（无样张）"}：${i.summary ?? i.fit ?? i.tags.join("、") ?? "（源库没写简介）"}` +
+          (i.moods.length ? `〔${i.moods.join("/")}〕` : ""),
+      );
+      return [
+        `命中 ${items.length} 条（库里共 ${total} 条）：`,
+        ...lines,
+        "",
+        "下一步：挑 2–3 条候选 → get_style_library_prompt 读完整提示词 → 翻译成本片的主题/版式/氛围，再用 probe_style 出我们引擎的样张。",
+        "⚠ 这些是画风**描述**，不能 apply_style；真正能一键套的是 list_styles 里的 43 个内置风格。",
+      ].join(nl);
+    },
+  },
+  {
+    name: "get_style_pick",
+    description:
+      "读用户在编辑器「风格库」面板里勾选的风格。分两组：内置（43 个，带 palette/font 预设，可直接 apply_style）+ 参考（341 条画风提示词，要翻译成本片主题/版式）。" +
+      "用户说\"风格选好了 / 我挑完了\"就先调它。有了这条就不用再问用户要编号，也不要自己另挑一套。",
+    shape: {},
+    run: async () => {
+      const text = picksSummary();
+      const nl = String.fromCharCode(10);
+      if (text.includes("还没")) return text;
+      return (
+        text +
+        `${nl}${nl}读参考条的完整提示词：get_style_library_prompt(id)` +
+        `${nl}出我们引擎的样张给用户看：probe_style(slugs=[...]) → 用户点头再往下做`
+      );
+    },
+  },
+  {
+    name: "get_style_library_prompt",
+    description:
+      "读风格库里某一条的完整「风格提示词」正文（编号，如 A1 / L36）。只在选定 1–3 条候选后读，别一次读一堆。",
+    shape: {
+      id: z.string().describe("风格编号，如 A1 / M10 / O10（list_style_library 返回的那个 id）"),
+    },
+    run: async (a) => {
+      const it = styleLibItem(a.id);
+      if (!it) {
+        return `库里没有「${a.id}」这一条。先用 list_style_library(q=...) 找编号。`;
+      }
+      const prompt = readStylePrompt(a.id);
+      const nl = String.fromCharCode(10);
+      if (!prompt) {
+        return `「${a.id} ${it.name}」这条在源库里还是空的（只有编号和分类，没有正文）。换一条候选。`;
+      }
+      /**
+       * 砍掉参考实现代码：源库很多条目后半段是一整段 Canvas 绘制函数
+       * （`S.A1(c,w,h,t,s)`）。它描述的是"效果怎么算"，不是"画面长什么样"——
+       * 我们的引擎用不上，几千 token 全花在这上面反而会把正文挤淡。
+       */
+      const fence = prompt.indexOf("```");
+      const cutCode = fence > 0 && prompt.length - fence > 400;
+      const body = cutCode ? `${prompt.slice(0, fence).trimEnd()}${nl}（后面附带的参考实现代码已省略：那是 Canvas 绘制函数，我们的 Remotion 版式用不上）` : prompt;
+      // 不 filter 空串：空串就是段落间的空行，过滤掉会把正文和结尾提示粘成一段
+      const lines = [`# ${it.id} ${it.name}`];
+      if (it.summary) lines.push(`长什么样：${it.summary}`);
+      if (it.fit) lines.push(`适合：${it.fit}`);
+      lines.push(
+        "",
+        body,
+        "",
+        "—— 以上是参考画风，不能直接 apply_style：按 craft / fy-visual 的「五列翻译」把它换成 theme + 版式 + 氛围，再用 probe_style 出我们引擎的样张给用户确认。",
+      );
+      return lines.join(nl);
     },
   },
   {
