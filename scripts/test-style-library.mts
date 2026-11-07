@@ -211,10 +211,10 @@ check("L 系列的 DEMO.md 自指指令不进正文（库里没这文件，agent
   const l10 = readPrompt("L10") ?? "";
   assert.ok(!l10.includes("How our demo was made"), "整行工作流指令还在——agent 会去找不存在的 DEMO.md");
   assert.ok(!l10.includes("](DEMO.md"), "行内死链接没转纯文字");
-  // 行内引用转纯文字后，配方描述不能跟着丢（L17 的蜡笔引擎一大段里挂着 DEMO.md 链接）
+  // L17 的 crayon.js 引擎清单在 Engine 节里 → 整节折叠是正确行为（那正是要省的实现层）
   const l17 = readPrompt("L17") ?? "";
-  assert.ok(!l17.includes("](DEMO.md"), "L17 的行内死链接没转纯文字");
-  assert.ok(l17.includes("crayon.js"), "链接转文字把技术内容也吃了");
+  assert.ok(!l17.includes("crayon.js"), "L17 的引擎清单没折叠");
+  assert.ok(l17.includes("已省略"), "折叠节没留标记，agent 会以为内容缺失");
   assert.ok(l10.includes("Essence"), "删噪音行不能伤到方案本体");
 });
 
@@ -222,8 +222,8 @@ check("L 系列完整方案在提示词节之后，不能只取 128 字", () => 
   const l10 = readPrompt("L10") ?? "";
   assert.ok(l10.length > 8000, `L10 正文只有 ${l10.length} 字——完整方案在「1. Essence…11. Variation space」，全在风格提示词节之后`);
   assert.ok(l10.includes("Essence"), "L10 的方案本体没进正文");
-  // 「补充」节是外链附录，不属于提示词
-  assert.ok(!/(^|\n)##\s+补充/.test(l10), "「补充」节混进了正文");
+  // 补充节现在进正文（O 系列的导演说明/分镜都在里面），但出处类子节必须折叠
+  assert.ok(!l10.includes("Sources, facts, engine") || l10.includes("已省略"), "Sources/Engine 节没折叠或没留标记");
 });
 
 check("摘要兜底：V 用视觉特征行、L 用 Essence 首段，表格头不许当摘要", () => {
@@ -240,13 +240,15 @@ check("摘要兜底：V 用视觉特征行、L 用 Essence 首段，表格头不
   );
 });
 
-check("正文薄的条目（M10 型）要把补充外链附上——提示词原文只在链接那边", () => {
+check("正文薄的条目（M10 型）：原文外链必须在正文里——那是唯一的原文入口", () => {
   const m10 = readPrompt("M10") ?? "";
-  assert.ok(m10.includes("prompt-motion.com"), `M10 正文 ${m10.length} 字却没附外链：agent 和用户都没地方找原文`);
-  assert.ok(m10.includes("提示词原文要去下面这些链接找"), "没说明「为什么给链接」——读的人不知道这是原文入口");
-  // 正文厚的条目不许混入链接块
-  const a1 = readPrompt("A1") ?? "";
-  assert.ok(!a1.includes("要去下面这些链接找"), "A1 正文完整，不该附链接块");
+  assert.ok(m10.includes("prompt-motion.com"), `M10 正文 ${m10.length} 字却没有原文外链：agent 和用户都没地方找原文`);
+});
+
+check("O 系列：补充节里的视觉语言（导演说明/分镜）要回来，出处要折叠", () => {
+  const o10 = readPrompt("O10") ?? "";
+  assert.ok(o10.includes("导演说明") && o10.includes("成片里的分镜"), "O 系列的分镜与导演说明丢了——它们在补充节里，截断会连视觉语言一起丢");
+  assert.ok(!o10.includes("Dieterle"), "参考出处（William Dieterle, 1937…）没折叠，agent 会想去找原片");
 });
 
 check("库外相对链接已中性化（demos 连源盘都没有，死链不能再进面板）", () => {

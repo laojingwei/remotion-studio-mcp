@@ -127,31 +127,72 @@ function bulletOf(text: string, label: string): string | undefined {
  * 也嵌在里面。按 `## ` 截断的话 L10 只剩 128 字元信息（源码死链），真正的方案全丢。
  * 「补充」节是外链附录，明确不属于提示词，在那之前停。
  */
+/**
+ * 实现层/出处类章节 → 整节折叠成一行。
+ *
+ * 判断框架（不是按内容关键词打地鼠，是按**章节标题**的封闭名单）：
+ * · 折叠 = 出处与索引、引擎实现（demo/ 文件清单、构建脚本）、原工作流的流程约束
+ *   （交付格式、自评步骤）——这些写给"跑 Canvas 逐帧工作流"的 AI，我们的
+ *   Remotion 版式引擎既没有那些文件，也不走那个流程，留着只会诱导 agent 照做
+ * · 保留 = 视觉语言（长什么样 / 什么材质配色 / 动作什么重量 / 怎么分镜 / 什么别做）
+ *
+ * 名单来自全库标题枚举（引擎/出处/索引/流程四类）。出现新系列先枚举标题再扩名单。
+ */
+const FOLD_SECTIONS: [RegExp, string][] = [
+  [/^(engine|sources, facts, engine)\b/i, "原工作流的 demo/ 代码文件清单与引擎 API"],
+  [/^参考出处/, "参考原片与素材出处"],
+  [/^学的是哪张参考|^相近的旧编号/, "库内索引信息"],
+  [/^(rules|输出要求|写完后自己过一遍)\b/i, "原工作流的交付格式与自评流程约束"],
+];
+
+/** 折叠态遇到同级或更高层级标题结束；折叠节替换为一行说明，让 agent 知道内容存在但被略去 */
+function foldImplSections(body: string): string {
+  const out: string[] = [];
+  let fold: { level: number } | null = null;
+  for (const l of body.split("\n")) {
+    const m = /^(#{2,4})\s+(.+)$/.exec(l);
+    if (m) {
+      const level = m[1].length;
+      const title = m[2].trim();
+      if (fold && level <= fold.level) fold = null;
+      if (!fold) {
+        const bare = title.replace(/^\d+\.\s*/, "");
+        const hit = FOLD_SECTIONS.find(([re]) => re.test(bare));
+        if (hit) {
+          fold = { level };
+          out.push(`〔「${bare}」已省略——${hit[1]}，我们的 Remotion 引擎用不上，不要去找文件或照做〕`);
+          continue;
+        }
+      }
+    } else if (fold) {
+      continue;
+    }
+    out.push(l);
+  }
+  return out.join("\n");
+}
+
 function promptSectionOf(text: string): string {
   const lines = text.split("\n");
   const start = lines.findIndex((l) => l.startsWith("## ") && l.slice(3).trim().startsWith("风格提示词"));
   if (start < 0) return "";
-  let end = lines.length;
-  for (let i = start + 1; i < lines.length; i++) {
-    if (/^##\s+补充/.test(lines[i])) {
-      end = i;
-      break;
-    }
-  }
+  // 取到文件尾，不截「补充」：O 系列的技法关键词/导演说明/成片里的分镜都在补充节内部，
+  // 截了会把视觉语言一起丢。噪音（参考出处/引擎/流程）交给 foldImplSections 折叠。
   return (
-    lines
-      .slice(start + 1, end)
-      // 「原片/源码」元信息行（V 系列独有）是噪音：评审分数会让 agent 误判质量等级、
-      // demos 路径会诱导它去找根本不存在的源码。读的人要的只有提示词本身。
-      .filter((l) => !/^\*\*(原片|源码)\*\*：/.test(l))
-      // L 系列的整行工作流自指（写给原仓库的 AI）：库里没有 DEMO.md，
-      // agent 读到会白找一轮，甚至把 "Read it after your treatment exists" 当成给自己的任务
-      .filter((l) => !/^How our demo was made\b/i.test(l))
-      // 行内残留的库内相对链接（DEMO.md/CREDITS.md 等）转纯文字：文字有价值，
-      // 但链接是死的——http 外链保留（M 系列薄条目的原文入口全靠它们）
-      .map((l) => l.replace(/\[([^\]]+)\]\((?!https?:\/\/)[^)]*\)/g, "$1"))
-      .join("\n")
-      .trim()
+    foldImplSections(
+      lines
+        .slice(start + 1)
+        // 「原片/源码」元信息行（V 系列独有）是噪音：评审分数会让 agent 误判质量等级、
+        // demos 路径会诱导它去找根本不存在的源码。读的人要的只有提示词本身。
+        .filter((l) => !/^\*\*(原片|源码)\*\*：/.test(l))
+        // L 系列的整行工作流自指（写给原仓库的 AI）：库里没有 DEMO.md，
+        // agent 读到会白找一轮，甚至把 "Read it after your treatment exists" 当成给自己的任务
+        .filter((l) => !/^How our demo was made\b/i.test(l))
+        // 行内残留的库内相对链接（DEMO.md/CREDITS.md 等）转纯文字：文字有价值，
+        // 但链接是死的——http 外链保留（M 系列薄条目的原文入口全靠它们）
+        .map((l) => l.replace(/\[([^\]]+)\]\((?!https?:\/\/)[^)]*\)/g, "$1"))
+        .join("\n"),
+    ).trim()
   );
 }
 
@@ -484,8 +525,9 @@ export function readPrompt(id: string): string | null {
   try {
     const text = fs.readFileSync(path.join(LIB_ROOT, it.file), "utf8");
     const body = promptSectionOf(text);
-    // 正文薄（只有一句简介）→ 提示词原文在外链那边，把补充节附上，否则这条等于读了个寂寞
-    if ([...body].length < 200) {
+    // 正文薄（只有一句简介）→ 提示词原文在外链那边，把补充节附上，否则这条等于读了个寂寞。
+    // 不截补充后正文可能已含外链，查重避免贴两遍
+    if ([...body].length < 200 && !body.includes("http")) {
       const sup = supplementOf(text);
       if (sup) {
         return `${body}\n\n—— 这条在 md 里只有简介，**提示词原文要去下面这些链接找**（参考原片 / 源码）：\n${sup}`;

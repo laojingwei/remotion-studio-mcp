@@ -742,15 +742,24 @@ const TOOLS: ToolDef[] = [
           `要全量读文件：server/skills/style-library/${it.file}）`;
       }
       // 不 filter 空串：空串就是段落间的空行，过滤掉会把正文和结尾提示粘成一段
-      const lines = [`# ${it.id} ${it.name}`];
-      if (it.summary) lines.push(`长什么样：${it.summary}`);
-      if (it.fit) lines.push(`适合：${it.fit}`);
-      lines.push(
+      // 阅读框架放正文**前面**：开头定调，agent 读到 Engine/构建脚本那类章节时，
+      // "哪些不适用"已经在注意力里——放结尾等于读完才提醒，噪音已经被吸进上下文了
+      const lines = [
+        `# ${it.id} ${it.name}`,
+        it.summary ? `长什么样：${it.summary}` : "",
+        it.fit ? `适合：${it.fit}` : "",
+        "",
+        "⚠ 这份参考怎么读（先看这段再往下）：" + nl +
+          "它是给「Canvas/代码逐帧工作流」写的完整制作方案——原仓库有 demo/ 源码、构建脚本、评分交付流程。" + nl +
+          "我们的引擎是 Remotion 版式，两者只有【视觉语言】是通的：" + nl +
+          "· 有用的：它长什么样、什么材质配色、动作有什么重量、怎么分镜、什么别做 → 翻成我们的 theme + 版式（get_guide(\"style-translate\") 六槽位）" + nl +
+          "· 不适用的（正文里标了〔已省略〕的章节）：任何 .js/.py 文件名、demo/ 路径、构建渲染流程、交付格式要求——不要去找文件，也不要照那个流程走" + nl +
+          "· 拿不准一段能不能用：凡是要写代码文件、跑构建、引用外部 md 的，跳过；只留画面描述",
         "",
         body,
         "",
         "—— 以上是参考画风，不能直接 apply_style：按 get_guide(\"style-translate\") 的六槽位把它换成 theme + 版式 + 氛围，再用 probe_style 出我们引擎的样张给用户确认。",
-      );
+      ];
       return lines.join(nl);
     },
   },
