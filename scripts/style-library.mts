@@ -159,7 +159,14 @@ function doImport(args: Args): void {
     const targetDir = path.join(LIB_ROOT, useDir);
     ensureDir(targetDir);
     const target = path.join(targetDir, `${e.base}.md`);
-    const body = fs.readFileSync(e.file);
+    // 源库里有指向库外文件的相对链接（V 系列 15 条的 `源码：[demos/09-bauhaus/](../demos/…)`、
+    // `rubric.md`）——这些 demos 连源盘上都不存在，md 直接原样复制的话，面板和 agent
+    // 读到的就是一条点不开的死链。中性化成纯文字，路径留档、链接去掉。
+    const raw = fs.readFileSync(e.file, "utf8");
+    const body = Buffer.from(
+      raw.replace(/\[([^\]]+)\]\((\.\.\/[^)]+)\)/g, (_m, label: string, href: string) => `${label}（${href}，未随库分发）`),
+      "utf8",
+    );
     if (!args.force && fs.existsSync(target)) {
       // 内容一致就跳过：重跑不该产生一堆无意义的 mtime 变化
       const old = fs.readFileSync(target);

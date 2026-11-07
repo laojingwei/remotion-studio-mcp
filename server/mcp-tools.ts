@@ -724,13 +724,23 @@ const TOOLS: ToolDef[] = [
         return `「${a.id} ${it.name}」这条在源库里还是空的（只有编号和分类，没有正文）。换一条候选。`;
       }
       /**
-       * 砍掉参考实现代码：源库很多条目后半段是一整段 Canvas 绘制函数
-       * （`S.A1(c,w,h,t,s)`）。它描述的是"效果怎么算"，不是"画面长什么样"——
-       * 我们的引擎用不上，几千 token 全花在这上面反而会把正文挤淡。
+       * 砍掉参考实现代码：源库很多条目后半段是一整段 Canvas 绘制函数。
+       * 只砍有 js/ts 标签的围栏——V 系列的 ```text 围栏里装的就是提示词本体，
+       * 按位置砍会把它的正文砍没了（V11 只剩 178 字元信息）。
        */
-      const fence = prompt.indexOf("```");
-      const cutCode = fence > 0 && prompt.length - fence > 400;
-      const body = cutCode ? `${prompt.slice(0, fence).trimEnd()}${nl}（后面附带的参考实现代码已省略：那是 Canvas 绘制函数，我们的 Remotion 版式用不上）` : prompt;
+      const codeFence = prompt.search(/^```(?:js|javascript|ts)\b/m);
+      let body =
+        codeFence > 0 && prompt.length - codeFence > 400
+          ? `${prompt.slice(0, codeFence).trimEnd()}${nl}（后面附带的参考实现代码已省略：那是 Canvas 绘制函数，我们的 Remotion 版式用不上）`
+          : prompt;
+      // L/X 系列（成套方案）的完整正文有 8–13KB：整段塞给 agent 是几千 token，
+      // 而它要的只是"翻成我们引擎的画面规则"。给前 6000 字 + 指路读文件。
+      const MAX_PROMPT = 6000;
+      if (body.length > MAX_PROMPT) {
+        body =
+          `${body.slice(0, MAX_PROMPT).trimEnd()}${nl}…（正文共 ${body.length} 字，只给了前 ${MAX_PROMPT} 字。` +
+          `要全量读文件：server/skills/style-library/${it.file}）`;
+      }
       // 不 filter 空串：空串就是段落间的空行，过滤掉会把正文和结尾提示粘成一段
       const lines = [`# ${it.id} ${it.name}`];
       if (it.summary) lines.push(`长什么样：${it.summary}`);

@@ -119,6 +119,69 @@ function bulletOf(text: string, label: string): string | undefined {
   return v || undefined;
 }
 
+/**
+ * 「风格提示词」节的取法：**取到「补充」节或文件尾**，不按下一个 `## ` 截断。
+ *
+ * 为什么不能复用 sectionOf：341 条里 245 条在 `## 风格提示词` 之后还有同级标题——
+ * L 系列把 13KB 的完整方案全放在这一节之后的 1–11 小节里、V 系列的「怎么用/提示词」
+ * 也嵌在里面。按 `## ` 截断的话 L10 只剩 128 字元信息（源码死链），真正的方案全丢。
+ * 「补充」节是外链附录，明确不属于提示词，在那之前停。
+ */
+function promptSectionOf(text: string): string {
+  const lines = text.split("\n");
+  const start = lines.findIndex((l) => l.startsWith("## ") && l.slice(3).trim().startsWith("风格提示词"));
+  if (start < 0) return "";
+  let end = lines.length;
+  for (let i = start + 1; i < lines.length; i++) {
+    if (/^##\s+补充/.test(lines[i])) {
+      end = i;
+      break;
+    }
+  }
+  return lines.slice(start + 1, end).join("\n").trim();
+}
+
+/**
+ * 摘要兜底：341 条里只有 287 条写了「长什么样」。缺的时候从正文里自动提一句——
+ * V 系列有「视觉特征」行、X 系列的描述段就在提示词节开头（`# Style:` 行后）、
+ * L 系列的 Essence 首段就是人话描述。都没有的保持 undefined（占位卡显示名字），不硬造。
+ */
+function summaryOf(text: string): string | undefined {
+  const cap = (s: string) => (s.length > 90 ? `${s.slice(0, 88)}…` : s);
+  const head = bulletOf(text, "长什么样");
+  if (head) return head;
+  const visual = /^\s*视觉特征\s+(.+)$/m.exec(text);
+  if (visual) return cap(visual[1].trim().replace(/\s*,\s*/g, "、"));
+  // 提示词节内的描述段：跳过标题/表格/围栏/「**原片**：」这类元信息行
+  const isNoise = (l: string) =>
+    !l ||
+    l.startsWith("#") ||
+    l.startsWith("|") ||
+    l.startsWith("```") ||
+    l.startsWith("**") ||
+    /^[-*\d.、\s]*$/.test(l);
+  const para = promptSectionOf(text)
+    .split("\n")
+    .map((l) => l.trim())
+    .find((l) => !isNoise(l) && [...l].length >= 16);
+  if (para) return cap(para.replace(/^[-\d.、\s]+/, "").trim());
+  for (const marker of ["## 1. Essence", "## Essence", "## Signature"]) {
+    const lines = text.split("\n");
+    const mi = lines.findIndex((l) => l.startsWith(marker));
+    if (mi < 0) continue;
+    const found = lines
+      .slice(mi + 1)
+      .map((l) => l.trim())
+      .find((l) => l && !l.startsWith("#") && !l.startsWith("```") && !l.startsWith("|") && !/^-+$/.test(l));
+    if (found) {
+      // 只剥列表符号（"- " / "1. "），别动星号——**加粗**的开头被吃掉会剩一个孤立的 "Palette**:"
+      const s = found.replace(/^[-\d.、\s]+/, "").trim();
+      if (s) return cap(s);
+    }
+  }
+  return undefined;
+}
+
 function listOf(text: string, label: string): string[] {
   return (bulletOf(text, label) ?? "")
     .split(/[、,，/／]/)
@@ -289,10 +352,10 @@ export function buildIndex(force = false): StyleLibraryIndex {
       const sub = subParts.join(" · ") || undefined;
       // 名字三级兜底：标题 → 文件名 → 子类名。空条目不硬编一个假名字，标成「未命名」让用户去补
       const name = (tm?.[2] ?? "").trim() || fileLabel || "未命名";
-      const summary = bulletOf(text, "长什么样");
+      const summary = summaryOf(text);
       const fit = bulletOf(text, "适合");
       const tags = listOf(text, "关键词");
-      const prompt = sectionOf(text, "风格提示词");
+      const prompt = promptSectionOf(text);
 
       const baseItem: Omit<StyleItem, "moods" | "use" | "dir"> = {
         id,
@@ -384,12 +447,37 @@ export function itemById(id: string): StyleItem | null {
   return getIndex().items.find((i) => i.id === id) ?? null;
 }
 
+/**
+ * 「补充」节：外链附录（参考原片、源码位置等）。**不属于提示词正文**，但不能丢——
+ * M 系列很多条 md 里只有一句话简介，提示词原文只存在于补充节的外链那边，
+ * 用户和 agent 都得靠这个链接才能找到。
+ */
+function supplementOf(text: string): string | null {
+  const lines = text.split("\n");
+  const start = lines.findIndex((l) => /^##\s+补充/.test(l));
+  if (start < 0) return null;
+  const body = lines
+    .slice(start + 1)
+    .join("\n")
+    .trim();
+  return body || null;
+}
+
 /** 该条的 `## 风格提示词` 全文；面板抽屉里显示、agent 读原文都用这个 */
 export function readPrompt(id: string): string | null {
   const it = itemById(id);
   if (!it) return null;
   try {
-    return sectionOf(fs.readFileSync(path.join(LIB_ROOT, it.file), "utf8"), "风格提示词");
+    const text = fs.readFileSync(path.join(LIB_ROOT, it.file), "utf8");
+    const body = promptSectionOf(text);
+    // 正文薄（只有一句简介）→ 提示词原文在外链那边，把补充节附上，否则这条等于读了个寂寞
+    if ([...body].length < 200) {
+      const sup = supplementOf(text);
+      if (sup) {
+        return `${body}\n\n—— 这条在 md 里只有简介，**提示词原文要去下面这些链接找**（参考原片 / 源码）：\n${sup}`;
+      }
+    }
+    return body;
   } catch {
     return null;
   }

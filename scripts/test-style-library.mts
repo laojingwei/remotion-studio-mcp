@@ -195,7 +195,54 @@ check("覆盖改气质后立刻生效（不重启、不只改内存）", () => {
   writeOverride(target, { moods: before.length ? before : ["克制"] });
 });
 
-console.log("翻译技能（style-translate）可达性");
+console.log("正文取法（245/341 条的提示词节后有同级标题）");
+check("V 系列正文完整：text 围栏里的提示词本体没被切掉", () => {
+  const v11 = readPrompt("V11") ?? "";
+  assert.ok(v11.length > 4000, `V11 正文只有 ${v11.length} 字——sectionOf 按「下一个 ##」截断了，真正的提示词（嵌在「怎么用/提示词」小节里）全丢`);
+  assert.ok(v11.includes("Signature features"), "V11 的提示词本体没进正文");
+});
+
+check("L 系列完整方案在提示词节之后，不能只取 128 字", () => {
+  const l10 = readPrompt("L10") ?? "";
+  assert.ok(l10.length > 8000, `L10 正文只有 ${l10.length} 字——完整方案在「1. Essence…11. Variation space」，全在风格提示词节之后`);
+  assert.ok(l10.includes("Essence"), "L10 的方案本体没进正文");
+  // 「补充」节是外链附录，不属于提示词
+  assert.ok(!/(^|\n)##\s+补充/.test(l10), "「补充」节混进了正文");
+});
+
+check("摘要兜底：V 用视觉特征行、L 用 Essence 首段，表格头不许当摘要", () => {
+  const items = listLibrary().items;
+  const v11 = items.find((i) => i.id === "V11")!;
+  assert.ok(v11.summary?.includes("几何"), `V11 摘要没从「视觉特征」提取：${v11.summary}`);
+  const l10 = items.find((i) => i.id === "L10")!;
+  assert.ok(l10.summary && !l10.summary.startsWith("|"), `L10 摘要抓到了表格头：${l10.summary}`);
+  // 只有源库空壳（只有编号没正文）才允许没摘要：有正文必有可提取的一句话
+  const empty = items.filter((i) => !i.summary);
+  assert.ok(
+    empty.every((i) => i.promptChars < 60),
+    `有正文却没摘要的条目：${empty.filter((i) => i.promptChars >= 60).map((i) => i.id).join("、")}`,
+  );
+});
+
+check("正文薄的条目（M10 型）要把补充外链附上——提示词原文只在链接那边", () => {
+  const m10 = readPrompt("M10") ?? "";
+  assert.ok(m10.includes("prompt-motion.com"), `M10 正文 ${m10.length} 字却没附外链：agent 和用户都没地方找原文`);
+  assert.ok(m10.includes("提示词原文要去下面这些链接找"), "没说明「为什么给链接」——读的人不知道这是原文入口");
+  // 正文厚的条目不许混入链接块
+  const a1 = readPrompt("A1") ?? "";
+  assert.ok(!a1.includes("要去下面这些链接找"), "A1 正文完整，不该附链接块");
+});
+
+check("库外相对链接已中性化（demos 连源盘都没有，死链不能再进面板）", () => {
+  const dir = path.join(ROOT, "server", "skills", "style-library");
+  const bad: string[] = [];
+  for (const f of fs.readdirSync(dir).flatMap((d) => fs.readdirSync(path.join(dir, d)).map((x) => path.join(dir, d, x))).filter((f) => f.endsWith(".md"))) {
+    if (/\]\(\.\.\//.test(fs.readFileSync(f, "utf8"))) bad.push(path.basename(f));
+  }
+  assert.deepEqual(bad, [], `还有 ${bad.length} 个文件带 ](../ 死链：${bad.slice(0, 3).join("、")}`);
+});
+
+console.log("翻译技能（style-translate）可达性");console.log("翻译技能（style-translate）可达性");
 check("技能能被扫到（否则 agent 永远找不到这篇）", () => {
   assert.ok(
     listSkills().some((s) => s.name === "style-translate"),
