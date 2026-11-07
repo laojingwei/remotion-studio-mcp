@@ -162,12 +162,22 @@ export function auditBriefAgainstProject(
     }
   }
 
-  /* ② 禁用词 / 竞品 —— 命中即违约 */
+  /* ② 禁用词 / 竞品 —— 命中即违约。带上下文报：bans「第一」命中文案「第一句」这种量词误伤，没有上下文根本没法判断 */
   const bans = (brief.bans ?? []).filter((b) => String(b ?? "").trim());
   if (bans.length) {
     const hit = bans.filter((b) => corpus.includes(normForMatch(b)));
     if (hit.length) {
-      blocking.push(`出现禁用内容：${hit.map((b) => `「${b}」`).join("、")} —— 这是你要求绝对不能出现的`);
+      const ctx = hit
+        .map((b) => {
+          const nb = normForMatch(b);
+          const i = corpus.indexOf(nb);
+          return `「${b}」→ …${i >= 0 ? corpus.slice(Math.max(0, i - 8), i + nb.length + 8) : "?"}…`;
+        })
+        .join(`${NL}    `);
+      blocking.push(
+        `出现禁用内容 —— 这是你要求绝对不能出现的：${NL}    ${ctx}` +
+          `${NL}    → 若命中的是普通量词（如「第一句」），把 bans 写得更具体（如「全网第一」）；确属宣传用语就改文案`,
+      );
     } else {
       passed.push(`禁用清单 ${bans.length} 条均未出现`);
     }

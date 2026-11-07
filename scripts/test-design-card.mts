@@ -102,6 +102,41 @@ check("禁用词出现在任何一幕 → 必须修", () => {
   assert.ok(gap, "客户明令禁止的词漏报是硬伤");
 });
 
+check("禁用词报告带幕号与上下文（量词误伤要能一眼判断）", () => {
+  // bans「第一」命中文案「第一句」是真实场景：没上下文 agent 只能来回猜是不是真违规
+  const c = card([shot({ text: "60% 的人在你讲第一句时离开" })], brief({ bans: ["第一"] }));
+  const gap = c.gaps.find((g) => g.level === "block" && g.text.includes("第一"))!;
+  assert.ok(gap, "漏报");
+  assert.ok(gap.text.includes("第 1 幕"), `没报幕号，agent 还要自己找：${gap.text}`);
+  assert.ok(gap.text.includes("第一句"), `没带上下文，分不清「行业第一」和「第一句」：${gap.text}`);
+});
+
+check("counter 的数字要出现在逐幕表的屏幕字里", () => {
+  // value=60 是那一幕最大的字：只收字符串的话逐幕表只剩 "%"，用户看不见主数字
+  const c = card([
+    shot({ type: "counter", props: { value: 60, suffix: "%", label: "的人在前 3 秒离开", decimals: 0 } }),
+  ]);
+  const row = c.markdown.split("\n").find((l) => /^\| 1 \| [\d.]+s \|/.test(l)) ?? "";
+  assert.ok(row.includes("60"), `主数字没上屏：${row}`);
+  assert.ok(!row.includes("decimals"), `参数数字（decimals）不该出现在屏幕字里：${row}`);
+});
+
+check("字幕与大标题逐字相同 → 提醒去重", () => {
+  const c = card([
+    shot({ type: "list", text: "开场三件事", props: { heading: "开场三件事", items: [{ title: "a" }] } }),
+    shot({ type: "outro", text: "今天只改第一句", props: { title: "先改第一句", action: "x" } }),
+  ]);
+  assert.ok(
+    c.gaps.some((g) => g.text.includes("逐字相同") && g.text.includes("第 1 幕")),
+    "同屏同句出现两遍没报——观众会觉得难受但说不出为什么",
+  );
+  // outro 那幕字幕≠标题（「今天只改第一句」vs「先改第一句」），不许误报
+  assert.ok(
+    !c.gaps.some((g) => g.text.includes("逐字相同") && g.text.includes("第 2 幕")),
+    "字幕只是接近但不同的大字被误报",
+  );
+});
+
 console.log("关系与时长");
 check("plain 幕写「换页」而不是催它写变化", () => {
   const c = card([shot({ relation: "plain" }), shot({ relation: "cause" })]);

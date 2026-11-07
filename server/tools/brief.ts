@@ -177,9 +177,18 @@ export const BRIEF_TOOLS: ToolDef[] = [
         const props = sc.props ?? {};
         const isFreeform =
           sc.type === "freeform" && Array.isArray((props as any).elements) && (props as any).elements.length > 0;
+        // KEY_TEXT 只认字符串会误伤两类真实场景：counter 的 value 是数字（60 不是 "60"）、
+        // maskreveal 的 lines 是字符串数组——这俩都有画面文字，报「没有文案」是噪音
         const hasText =
           isFreeform ||
-          KEY_TEXT.some((k) => typeof props[k] === "string" && props[k].trim()) ||
+          KEY_TEXT.some((k) => {
+            const v = (props as any)[k];
+            return (typeof v === "string" && v.trim()) || (typeof v === "number" && Number.isFinite(v));
+          }) ||
+          Object.values(props).some(
+            (v) => Array.isArray(v) && v.some((x) => typeof x === "string" && x.trim()),
+          ) ||
+          String(sc.subtitle ?? "").trim().length > 0 ||
           (sc.elements ?? []).some((e: any) => e.kind === "text" && String(e.text ?? "").trim());
         if (!hasText) issues.push(`ℹ️「${sc.name}」没有文案（空场景？）`);
         const hasAudio = (sc.elements ?? []).some((e: any) => e.kind === "audio");

@@ -66,14 +66,25 @@ const looksLikeMachine = (s: string): boolean =>
   /\.(png|jpe?g|webp|mp4|mp3|wav|ttf|otf)$/i.test(s);
 
 /** 从 props 里挑出"用户能在画面上看到的字"：标题、条目、数字，忽略色值/路径/id */
+/** 这些 key 上的数字是排版参数不是内容（counter 的 decimals、坐标、时长……），收进"屏幕字"全是噪音 */
+const NUM_PARAM_KEYS = new Set([
+  "decimals", "duration", "durationInFrames", "startSec", "endSec", "x", "y", "w", "h",
+  "width", "height", "size", "radius", "rotation", "opacity", "frames", "delay", "order",
+  "index", "level", "fps", "from", "to", "step", "progress",
+]);
+
 function seenOnScreen(props: Record<string, unknown> | undefined, depth = 0): string[] {
   if (!props || depth > 2) return [];
   const out: string[] = [];
-  for (const v of Object.values(props)) {
+  for (const [k, v] of Object.entries(props)) {
     if (typeof v === "string") {
       const s = v.trim();
       if (!s || s.length > 60 || looksLikeMachine(s)) continue;
       out.push(s);
+    } else if (typeof v === "number" && Number.isFinite(v)) {
+      // counter 的 value=60 是屏幕上最大的字，丢了它逐幕表只剩 "%"；
+      // 但 decimals=0 这类参数数字不能收——用 key 名单挡
+      if (!NUM_PARAM_KEYS.has(k) && Math.abs(v) < 1_000_000) out.push(String(v));
     } else if (Array.isArray(v)) {
       for (const item of v.slice(0, 4)) {
         if (typeof item === "string") {
@@ -145,12 +156,28 @@ export function designGaps(input: {
     }
   }
 
-  // ② 禁用词：出现在任何一幕都是硬伤（合规/客户明确要求）
+  // ② 禁用词：出现在任何一幕都是硬伤（合规/客户明确要求）。
+  //    按「哪一幕 + 上下文」报：bans 里写「第一」会命中文案里的「第一句」，
+  //    没有上下文的话 agent 没法一眼判断是真违规还是量词误伤，只能来回猜
   for (const b of [...(brief?.bans ?? []), ...(brief?.forbidden ?? [])]) {
     const w = String(b ?? "").trim();
     if (!w || w.length < 2) continue;
-    if (normVisible.includes(norm(w))) {
-      gaps.push({ level: "block", text: `出现了禁用词「${w}」——这条是客户明确要求的，必须删掉再建` });
+    const nw = norm(w);
+    const hits: string[] = [];
+    shots.forEach((s, i) => {
+      const hay = norm(`${s.text ?? ""} ${s.name ?? ""} ${seenOnScreen(s.props).join(" ")}`);
+      const idx = hay.indexOf(nw);
+      if (idx >= 0) {
+        hits.push(`第 ${i + 1} 幕「…${hay.slice(Math.max(0, idx - 8), idx + nw.length + 8)}…」`);
+      }
+    });
+    if (hits.length) {
+      gaps.push({
+        level: "block",
+        text:
+          `禁用词「${w}」命中 ${hits.length} 处：${hits.slice(0, 3).join("；")}` +
+          `——先看上下文：若是普通量词（如「第一句」）请把 bans 写得更具体（如「全网第一」）；确属宣传用语就改文案`,
+      });
     }
   }
 
@@ -209,6 +236,27 @@ export function designGaps(input: {
     gaps.push({
       level: "warn",
       text: `${emptyShots.slice(0, 5).join("、")} 既没有画面文字也没有口播——建出来是几秒空白，加字或删掉`,
+    });
+  }
+
+  // ⑦.5 字幕与大标题逐字相同：观众会在同一屏看到同一句话两遍。
+  //    这是最典型的"PPT 感"来源之一——用户说不出哪里不对，但会觉得难受，所以要机器替他指出来
+  const dupSubs = shots
+    .map((s, i) => {
+      const t = norm(s.text);
+      if (!t) return "";
+      const heading = ["heading", "title", "quote"]
+        .map((k) => (s.props as Record<string, unknown> | undefined)?.[k])
+        .find((v) => typeof v === "string" && v.trim());
+      return heading && norm(heading as string) === t ? `第 ${i + 1} 幕` : "";
+    })
+    .filter(Boolean);
+  if (dupSubs.length) {
+    gaps.push({
+      level: "warn",
+      text:
+        `${dupSubs.slice(0, 4).join("、")}的字幕和大标题逐字相同——同一屏同一句话出现两遍。` +
+        `字幕删掉（大字已经承担了），或改成衔接上一幕的句子`,
     });
   }
 
