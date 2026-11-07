@@ -144,6 +144,12 @@ function promptSectionOf(text: string): string {
       // 「原片/源码」元信息行（V 系列独有）是噪音：评审分数会让 agent 误判质量等级、
       // demos 路径会诱导它去找根本不存在的源码。读的人要的只有提示词本身。
       .filter((l) => !/^\*\*(原片|源码)\*\*：/.test(l))
+      // L 系列的整行工作流自指（写给原仓库的 AI）：库里没有 DEMO.md，
+      // agent 读到会白找一轮，甚至把 "Read it after your treatment exists" 当成给自己的任务
+      .filter((l) => !/^How our demo was made\b/i.test(l))
+      // 行内残留的库内相对链接（DEMO.md/CREDITS.md 等）转纯文字：文字有价值，
+      // 但链接是死的——http 外链保留（M 系列薄条目的原文入口全靠它们）
+      .map((l) => l.replace(/\[([^\]]+)\]\((?!https?:\/\/)[^)]*\)/g, "$1"))
       .join("\n")
       .trim()
   );

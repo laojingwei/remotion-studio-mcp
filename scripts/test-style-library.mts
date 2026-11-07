@@ -207,6 +207,17 @@ check("V 系列正文完整：text 围栏里的提示词本体没被切掉", () 
   }
 });
 
+check("L 系列的 DEMO.md 自指指令不进正文（库里没这文件，agent 会白找）", () => {
+  const l10 = readPrompt("L10") ?? "";
+  assert.ok(!l10.includes("How our demo was made"), "整行工作流指令还在——agent 会去找不存在的 DEMO.md");
+  assert.ok(!l10.includes("](DEMO.md"), "行内死链接没转纯文字");
+  // 行内引用转纯文字后，配方描述不能跟着丢（L17 的蜡笔引擎一大段里挂着 DEMO.md 链接）
+  const l17 = readPrompt("L17") ?? "";
+  assert.ok(!l17.includes("](DEMO.md"), "L17 的行内死链接没转纯文字");
+  assert.ok(l17.includes("crayon.js"), "链接转文字把技术内容也吃了");
+  assert.ok(l10.includes("Essence"), "删噪音行不能伤到方案本体");
+});
+
 check("L 系列完整方案在提示词节之后，不能只取 128 字", () => {
   const l10 = readPrompt("L10") ?? "";
   assert.ok(l10.length > 8000, `L10 正文只有 ${l10.length} 字——完整方案在「1. Essence…11. Variation space」，全在风格提示词节之后`);
