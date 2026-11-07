@@ -25,7 +25,14 @@ import { briefProgress, readBrief, stepMissingFields } from "../brief.service";
 import { densitySummary, projectDensity, rhythmIssues } from "../../shared/density";
 import { readScript } from "../script.service";
 import { readReview } from "../review.service";
-import { readStoryboard, saveStoryboard, storyboardToText, type Storyboard } from "../storyboard.service";
+import {
+  SHOT_RELATIONS,
+  readStoryboard,
+  saveStoryboard,
+  storyboardDesignNotes,
+  storyboardToText,
+  type Storyboard,
+} from "../storyboard.service";
 import { getMeta } from "../../shared/sceneMetas";
 import { TRANSITION_TYPES } from "../../shared/transitions";
 
@@ -62,6 +69,20 @@ export const STORYBOARD_TOOLS: ToolDef[] = [
               .optional()
               .describe("连续叙事三问①：这一幕让观众看懂什么变化（get_guide(\"craft\") §3）"),
             carry: z.string().optional().describe("连续叙事三问②：从上一幕承接什么（主体/位置/颜色）"),
+            sync: z
+              .string()
+              .optional()
+              .describe(
+                "连续叙事三问③：关键变化与幕切换是否落在 BGM 重拍/口播重音上（get_guide(\"craft\") §3）",
+              ),
+            relation: z
+              .enum(SHOT_RELATIONS)
+              .optional()
+              .describe(
+                "这一幕承载七类关系里的哪一类（get_guide(\"meaning\") §2）：cause 因果 / contrast 否定对比 / " +
+                  "whole 部分整体 / scale 尺度 / tradeoff 取舍 / accumulate 累积 / feeling 感受转变 / plain 不承担关系。" +
+                  "plain 过半 = 逐句贴卡",
+              ),
             note: z.string().optional().describe("给自己的备注：要传达什么"),
           }),
         )
@@ -138,7 +159,13 @@ export const STORYBOARD_TOOLS: ToolDef[] = [
             .slice(0, 8)
             .join(`${String.fromCharCode(10)}- `)}`
         : "";
-      return `${timingNote ? `${timingNote}${String.fromCharCode(10)}` : ""}已保存分镜表${a.append ? `（追加 ${a.shots.length} 幕，共 ${sb.shots.length} 幕）` : ""}${String.fromCharCode(10)}${storyboardToText(sb)}${lintNote}${String.fromCharCode(10)}下一步：确认分镜后 build_storyboard 一次建成（会顺带写字幕）`;
+      const design = storyboardDesignNotes(sb.shots);
+      const designNote = design.lines.length
+        ? `${String.fromCharCode(10)}设计体检（提醒，不阻断）：${String.fromCharCode(10)}${design.lines.join(
+            String.fromCharCode(10),
+          )}`
+        : "";
+      return `${timingNote ? `${timingNote}${String.fromCharCode(10)}` : ""}已保存分镜表${a.append ? `（追加 ${a.shots.length} 幕，共 ${sb.shots.length} 幕）` : ""}${String.fromCharCode(10)}${storyboardToText(sb)}${lintNote}${designNote}${String.fromCharCode(10)}下一步：确认分镜后 build_storyboard 一次建成（会顺带写字幕）`;
     },
   },
   {

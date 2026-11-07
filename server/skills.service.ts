@@ -96,6 +96,12 @@ const ALIASES: Record<string, string> = {
   风格库: "style-translate",
   画风翻译: "style-translate",
   字雨: "style-translate",
+  // 用户看完片的四种抱怨，直接进"意义→画面"，别让它掉进 formats/director 的宽词路由
+  像ppt: "meaning",
+  逐句贴卡: "meaning",
+  太散: "meaning",
+  没讲清: "meaning",
+  故事没展开: "meaning",
   "3d": "scene3d",
   three: "scene3d",
   threejs: "scene3d",
