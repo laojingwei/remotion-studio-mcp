@@ -35,7 +35,7 @@ import {
   storyboardToText,
   type Storyboard,
 } from "../storyboard.service";
-import { getMeta } from "../../shared/sceneMetas";
+import { getMeta, isAgentVisible } from "../../shared/sceneMetas";
 import { TRANSITION_TYPES } from "../../shared/transitions";
 
 import { staggerAnim } from "../../shared/freeform";
@@ -161,13 +161,32 @@ export const STORYBOARD_TOOLS: ToolDef[] = [
             .slice(0, 8)
             .join(`${String.fromCharCode(10)}- `)}`
         : "";
+      /*
+       * 分镜表是建幕的源头：这里放行隐藏版式，build_storyboard 就会照着建出来。
+       * 不动 save_storyboard 的校验（老分镜表里还有这些 type，拦下来等于让老工程不能重建），
+       * 只在回执里点名：agent 自己挑的要换成 freeform 等开放类型，用户点名的忽略这句。
+       */
+      const hiddenTypes = [
+        ...new Set(
+          (a.shots as { type: string }[])
+            .map((s) => s.type)
+            .filter((t) => {
+              const m = getMeta(t);
+              return !!m && !isAgentVisible(m);
+            }),
+        ),
+      ];
+      const hiddenNote = hiddenTypes.length
+        ? `${String.fromCharCode(10)}⚠️ 这几幕用了默认不对 agent 开放的固定版式：${hiddenTypes.join("、")}。` +
+          `用户点名要用就没问题；自己挑的请换成 freeform / 动效 / 氛围类——固定骨架会把画面锁进去（改分镜比建完再改便宜）。`
+        : "";
       const design = storyboardDesignNotes(sb.shots);
       const designNote = design.lines.length
         ? `${String.fromCharCode(10)}设计体检（提醒，不阻断）：${String.fromCharCode(10)}${design.lines.join(
             String.fromCharCode(10),
           )}`
         : "";
-      return `${timingNote ? `${timingNote}${String.fromCharCode(10)}` : ""}已保存分镜表${a.append ? `（追加 ${a.shots.length} 幕，共 ${sb.shots.length} 幕）` : ""}${String.fromCharCode(10)}${storyboardToText(sb)}${lintNote}${designNote}${String.fromCharCode(10)}下一步：确认分镜后 build_storyboard 一次建成（会顺带写字幕）`;
+      return `${timingNote ? `${timingNote}${String.fromCharCode(10)}` : ""}已保存分镜表${a.append ? `（追加 ${a.shots.length} 幕，共 ${sb.shots.length} 幕）` : ""}${String.fromCharCode(10)}${storyboardToText(sb)}${lintNote}${hiddenNote}${designNote}${String.fromCharCode(10)}下一步：确认分镜后 build_storyboard 一次建成（会顺带写字幕）`;
     },
   },
   {

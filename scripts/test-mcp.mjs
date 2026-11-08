@@ -200,6 +200,37 @@ async function main() {
     deepHidden.slice(0, 110),
   );
 
+  /* 提示词配方：与风格库分开的第二份 pick（prompt-pick.json）。
+     验三件事：工具搜得到、回执里有 md 路径、槽位表 +「不许照抄」的硬提醒都在。 */
+  const pickSearch = JSON.parse(
+    textOf(await call("tools/call", { name: "tool_search", arguments: { query: "提示词 配方" } })),
+  );
+  check(
+    "tool_search('提示词 配方') 命中 get_prompt_pick",
+    pickSearch.some((x) => x.name === "get_prompt_pick"),
+    pickSearch.map((x) => x.name).join(","),
+  );
+  const pickFile = path.join(ROOT, "data", "prompt-pick.json");
+  const hadPick = fs.existsSync(pickFile);
+  const pickBackup = hadPick ? fs.readFileSync(pickFile, "utf8") : null;
+  fs.mkdirSync(path.dirname(pickFile), { recursive: true });
+  fs.writeFileSync(
+    pickFile,
+    JSON.stringify({ id: "PM010", name: "FigPad 产品宣传", genre: "产品宣传", at: new Date().toISOString() }, null, 2),
+  );
+  try {
+    const pickOut = textOf(await call("tools/call", { name: "get_prompt_pick", arguments: {} }));
+    check("get_prompt_pick 给出配方 md 路径", /PM010_FigPad-产品宣传\.md/.test(pickOut), pickOut.slice(0, 160));
+    check(
+      "get_prompt_pick 带槽位表 + 不许照抄的硬提醒",
+      /## 槽位/.test(pickOut) && /照抄/.test(pickOut) && /recipeSlots/.test(pickOut),
+      pickOut.slice(0, 200),
+    );
+  } finally {
+    if (pickBackup === null) fs.unlinkSync(pickFile);
+    else fs.writeFileSync(pickFile, pickBackup);
+  }
+
   /* 工程上下文（验证报告 P0-01/02 + P1-08）：create_project 要切换默认工程 */
   const created = textOf(
     await call("tools/call", {

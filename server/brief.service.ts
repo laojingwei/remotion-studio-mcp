@@ -136,6 +136,39 @@ export type BriefAcceptance = {
   feedbackMode?: string;
 };
 
+/**
+ * 用户采纳的整片配方（提示词库 PMxxx）/ 技法（TKxxx）。
+ *
+ * 为什么只存引用不存正文：正文 700 字，进 brief 就再也对不上库里那次修订。
+ * 存路径，agent 每次读到的都是最新版；brief 只负责记「这一版用的是哪条」。
+ */
+export type BriefRecipeRef = {
+  id?: string;
+  name?: string;
+  /** 相对项目根的 md 路径（agent 读正文用） */
+  file?: string;
+  /** recipe=整片骨架（照它拍一条） / tech=往某一幕加的一招（不能照它拍整片） */
+  kind?: "recipe" | "tech";
+};
+
+/**
+ * 配方槽位对账：这一格配方原本写什么、用户实际用什么、冲突按谁走。
+ *
+ * 为什么必须显式存：配方的槽位值是**示例**（产品名 FigPad、60 秒、1920×1080），
+ * 用户要的是骨架不是内容。不留这张表，agent 就只能靠记忆判断「哪句该换」——
+ * 换漏一格，成片里就印着别人的产品名。
+ */
+export type BriefRecipeSlot = {
+  /** 槽位名，对齐配方 md 的 `## 槽位`，如「产品」「画幅」 */
+  slot?: string;
+  /** 配方原值（模板值，不许直接进成片） */
+  recipe?: string;
+  /** 用户实际值；空 = 还没定，要问 */
+  actual?: string;
+  /** 不一致时按谁走、怎么改，如「配方 60s 横屏，用户 30s 竖屏：按用户，保留三幕结构」 */
+  conflict?: string;
+};
+
 export type Brief = {
   /* 0 工程归属 */
   /** 这次是「新增」还是「改已有」（改已有的还要写 changeScope） */
@@ -297,6 +330,11 @@ export type Brief = {
   assumptionChecks?: { field: string; userSaid: string; at: string }[];
   /** 用户确认需求的时间（confirm_brief 写入；没有它不允许开建） */
   confirmedAt?: string;
+  /* 12 配方（提示词库 PMxxx / TKxxx）：只借骨架，内容按 recipeSlots 的 actual 走 */
+  /** 用户采纳的配方引用（get_prompt_pick 给的 id/name/file/kind） */
+  recipe?: BriefRecipeRef;
+  /** 配方槽位对账：配方原值 vs 用户实际值 vs 冲突裁决 */
+  recipeSlots?: BriefRecipeSlot[];
   updatedAt?: string;
 };
 
@@ -1433,6 +1471,8 @@ export function briefToText(b: Brief | null): string {
     "scriptTone",
     "bulleted",
     "form",
+    "recipe",
+    "recipeSlots",
   ]);
   const lines = Object.entries(b)
     .filter(
@@ -1449,6 +1489,28 @@ export function briefToText(b: Brief | null): string {
     .map(([k, v]) => `- ${k}：${Array.isArray(v) ? v.join("、") : v}`);
 
   const blocks: string[] = [];
+
+  /* ── 配方对账（先于内容骨架：它决定内容从哪来） ── */
+  const rp = b.recipe;
+  const rslots = b.recipeSlots ?? [];
+  if (rp?.id || rslots.length) {
+    const kind = rp?.kind === "tech" ? "技法" : "整片配方";
+    const empty = rslots.filter((s) => !s.actual?.trim()).map((s) => s.slot ?? "？");
+    blocks.push(
+      `【配方对账】${kind} ${rp?.id ?? ""} ${rp?.name ?? ""}——骨架照它，内容一格都不照抄` +
+        (rslots.length
+          ? NL +
+            rslots
+              .map(
+                (s) =>
+                  `  · ${s.slot ?? "?"}：配方「${s.recipe ?? "?"}」→ 实际「${s.actual?.trim() || "（还没定，要先问用户）"}」` +
+                  (s.conflict ? `　冲突裁决：${s.conflict}` : ""),
+              )
+              .join(NL)
+          : NL + "  ⚠ 还没做槽位对账：先读配方 md 的「## 槽位」，填一版发用户确认，别直接开建") +
+        (empty.length ? `${NL}  ⚠ 这几格还是空的：${empty.join("、")}——问用户，不许自己补` : ""),
+    );
+  }
 
   /* ── 内容骨架 ── */
   const core = b.core ?? {};

@@ -107,7 +107,7 @@ node scripts/iso-embed.mjs .other_modules/anatomy/out/<名>.svg <工程id> <名>
 - `src`：上面打印的引用地址；
 - `focus`: `[{ part, at, dur, label }]`——按幕内帧号高亮零件，讲哪指哪；
 - `camera`: `{ from, to, x, y }`——推镜，SVG 是矢量，推近不糊；
-- 标题走 `caption`（2D 叠层）。
+- 标题走 iso 场景自己的 `caption` 字段（2D 叠层）；**不要另加 `caption` 场景类型**，那是固定版式。
 
 ## 禁忌（都在实跑里撞过）
 

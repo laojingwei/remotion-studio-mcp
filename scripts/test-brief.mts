@@ -61,6 +61,51 @@ test("没有 assumed 时不出现警告", () => {
   assert.ok(!text.includes("替用户定的"), text);
 });
 
+console.log("[brief] 配方对账（提示词库 PM/TK）");
+
+test("槽位表按 配方→实际 渲染，冲突单独标出", () => {
+  const text = briefToText({
+    goal: "涨粉",
+    recipe: { id: "PM010", name: "FigPad 产品宣传", file: "x.md", kind: "recipe" },
+    recipeSlots: [
+      { slot: "产品", recipe: "FigPad", actual: "回声笔记" },
+      { slot: "画幅", recipe: "1920×1080", actual: "1080×1920", conflict: "按用户竖屏，构图改上下叠放" },
+    ],
+  } as never);
+  assert.ok(text.includes("【配方对账】整片配方 PM010 FigPad 产品宣传"), text);
+  assert.ok(text.includes("骨架照它，内容一格都不照抄"), text);
+  assert.ok(text.includes("配方「FigPad」→ 实际「回声笔记」"), text);
+  assert.ok(text.includes("冲突裁决：按用户竖屏"), text);
+});
+
+test("actual 空着要说「还没定」并列出缺格", () => {
+  const text = briefToText({
+    recipe: { id: "PM010", name: "x" },
+    recipeSlots: [{ slot: "时长", recipe: "60 秒" }],
+  } as never);
+  assert.ok(text.includes("（还没定，要先问用户）"), text);
+  assert.ok(text.includes("这几格还是空的：时长"), text);
+});
+
+test("只有配方没有槽位 → 提醒先做对账", () => {
+  const text = briefToText({ recipe: { id: "PM010", name: "x" } } as never);
+  assert.ok(text.includes("还没做槽位对账"), text);
+});
+
+test("技法（TK）不写成整片配方", () => {
+  const text = briefToText({
+    recipe: { id: "TK002", name: "光标打字", kind: "tech" },
+    recipeSlots: [{ slot: "用在", recipe: "开场", actual: "第 1 幕" }],
+  } as never);
+  assert.ok(text.includes("【配方对账】技法 TK002"), text);
+});
+
+test("没采纳配方时不出现配方段", () => {
+  const text = briefToText({ goal: "涨粉" } as never);
+  assert.ok(!text.includes("配方对账"), text);
+  assert.ok(!text.includes("recipeSlots"), text);
+});
+
 console.log("[storyboard] 三问字段与长片提示");
 test("change / carry 渲染进分镜文本", () => {
   const text = storyboardToText({

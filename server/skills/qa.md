@@ -75,7 +75,7 @@
 - 每幕 `type` 合法、时长合理（常见 90–180 帧）
 - **连续叙事三问每幕有答案**：这幕让观众看懂什么变化（change）／从上一幕承接什么（carry）／关键变化与 BGM 重拍或口播重音是否同帧。答不出「变化」的幕先重写（见 `get_guide("craft")` §3）
 - 前 1 秒有 hook；全片有一个记忆点（signature，写明用 craft §9 菜单里的哪一手）；结尾有 takeaway 或 CTA
-- 不出现连续 3 幕同版式；数据类不超过 2 幕连排
+- 不出现连续 3 幕同一种构图；数据类不超过 2 幕连排
 - 30 秒片有两种速度（有段落递减/吸气/Drop）；全片转场语法统一 2–3 种
 - 超 12 幕或 2 分钟：已按章分组（name/note 标章），见 `get_guide("long-form")`
 - 口播文本（text）是口语短句，不是书面语
@@ -86,9 +86,9 @@
 
 ### 单幕（build 后逐幕查）
 - `preview_frames` 抽首/中/尾三帧：文字不溢出、不重叠、不挡主体
-- **横屏幕先看横向铺没铺开**：内容缩在左边一小块是最常见的「没做过设计」。
-  填不满时**补位不要重写**（`get_guide("craft")` §11.5：加氛围层 / kicker / 结论行三层，
-  用 `apply_to_scenes` 一次铺满），换成 freeform 手写会丢掉版式自带的入场动画。
+- **横屏先看横向铺没铺开**：内容缩在左边一小块是最常见的「没做过设计」。
+  填不满时**补信息层，别推翻重排**（`get_guide("craft")` §11.5：加氛围层 / kicker / 结论行三层，
+  用 `apply_to_scenes` 一次铺满）；把已经排好的画面推倒重写，坐标白写，错峰也会丢。
   要量化跑 `scripts/fill-rate.mjs`，但它对低对比卡片底色会漏报，**数字只是候选，必须再看图**
 - **同一行对齐**：`check_project` 只报「差 5% 以内」的错位（手抖），两行内容差 20% 不报
 - **关键帧落点**：`check_project` 会报「基础 y 与 anim 落点不一致」和「动画在幕中间结束、之后跳回基础值」。
@@ -156,14 +156,14 @@
 
 | 现象 | 先查 | 修法 |
 |---|---|---|
-| 文字溢出/被裁 | preview_frames | 缩短文案、换 `list`/`bullets`、减 items |
+| 文字溢出/被裁 | preview_frames | 缩短文案、用 `maxWidth` 主动折行、分栏或拆幕 |
 | 字幕又长又带标点 | `check_project` 的字幕段 | `fix_subtitles(dryRun=true)` 看预演 → `fix_subtitles` 落盘；稿子太书面就回去改稿 |
 | 字幕来不及读（一闪而过） | `check_project` 的字/秒 | 加幕长（`update_scene` 的 durationInFrames）或减字，别缩字号 |
 | 元素中途消失 | 元素 `durationInFrames` vs 场景时长 | **场景拉长后元素不会自动跟**（落盘的是具体帧数）。`update_element` 把 `durationInFrames` 改到新幕长，或传 `-1` |
 | 音频被截断/静音 | dryRun 告警 | 场景时长 = 音频时长 + 0.7s 呼吸位 |
 | 字幕挡住主体 | preview_frames | 调 `bottom` / 字号 / `bgOpacity`，或换位置 |
 | props 改了没生效 | `get_scene` 回读 | 看 `⚠️ 不认识的 props 字段` 告警，按 schema 改 key |
-| 版式空了半屏 | 抽帧 | items 取 2/4 个；或换版式 |
+| 画面空了半屏 | 抽帧 + `fill-rate.mjs` | 先补信息层（kicker / 结论行 / 氛围）；仍然空就减元素、放大主体或分栏 |
 | 视频没声音 | `muted` | `update_element(muted=false)` |
 | 音画不同步 | 音频 `from`/`startFrom` | 对齐起点；裁头用 `startFrom` |
 | 长片挂暗角越挂越暗 | 特效轨 `durationInFrames` | 特效轨是**区间效果**（从 0 涨到峰再回落）。静态/周期性暗角开循环：`loop=true` + `loopStopAfterSeconds`；或自画一层 radialGradient svg 盖在最上层 |

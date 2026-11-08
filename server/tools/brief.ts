@@ -963,6 +963,34 @@ export const BRIEF_TOOLS: ToolDef[] = [
       bgTone: z.string().optional().describe("档位：背景 浅/深"),
       scriptTone: z.string().optional().describe("口播语气：专业讲解/朋友聊天/情绪独白/广告腔"),
       bulleted: z.boolean().optional().describe("要不要分点讲（1、2、3 列举）"),
+
+      /* ── 配方（提示词库 PMxxx / TKxxx）：只借骨架，内容看 recipeSlots ── */
+      recipe: z
+        .object({
+          id: z.string().optional().describe("配方编号，如 PM010 / TK003"),
+          name: z.string().optional().describe("名称，如「FigPad 产品宣传」"),
+          file: z.string().optional().describe("相对项目根的 md 路径（agent 读正文用）"),
+          kind: z
+            .enum(["recipe", "tech"])
+            .optional()
+            .describe("recipe=整片骨架（照它拍一条）/ tech=往某一幕加的一招（不能照它拍整片）"),
+        })
+        .optional()
+        .describe("用户采纳的配方引用（get_prompt_pick 给什么就存什么）"),
+      recipeSlots: z
+        .array(
+          z.object({
+            slot: z.string().optional().describe("槽位名，对齐配方的「## 槽位」，如 产品/品牌/画幅/时长"),
+            recipe: z.string().optional().describe("配方原值（模板值，不许直接进成片）"),
+            actual: z.string().optional().describe("用户实际值；还没定就留空，别编"),
+            conflict: z.string().optional().describe("配方值≠实际值时按谁走，如「按用户 30s 竖屏，保留三幕结构」"),
+          }),
+        )
+        .optional()
+        .describe(
+          "配方槽位对账。**配方是骨架不是内容**：产品名/网址/文案这些格必须以 actual 为准。" +
+            "缺的格先一次性问用户，别一格一问、也不许自己补",
+        ),
     },
     run: async (a) => {
       const p = await resolveProject(a.projectId);

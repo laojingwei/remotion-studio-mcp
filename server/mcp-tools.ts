@@ -33,7 +33,13 @@ import { readScript, saveScript, confirmScript, scriptToText, estimateSeconds, s
 import { BLOCKING_LEVELS, REVIEW_LEVELS, blockingIssues, readReview, markReviewRequested, markReviewConfirmed, markNeedsWork, markSelfRender, markProbe, markChosenStyle, reviewToText, type ReviewIssue, type ReviewLevel } from "./review.service";
 import { listStyles, presetBackdropIssue, presetOf, readStyle, stylePresetIssues, styleSummary } from "./styles.service";
 import { picksSummary } from "./stylePicks.service";
+import {
+  LIB_REL as PROMPT_LIB_REL,
+  readDetail as readPromptDetail,
+  readPick as readPromptPick,
+} from "./promptLibrary.service";
 import { adaptShowcaseToBrief, buildShowcaseProps } from "./showcase";
+import type { Showcase } from "../shared/builtin-styles";
 import { fetchLinkHints } from "./style-link.service";
 import { readStoryboard, saveStoryboard, storyboardToText, type Storyboard } from "./storyboard.service";
 import { readTiming, saveTiming } from "./narration-timing.service";
@@ -176,6 +182,22 @@ function elementEdgeWarn(el: {
   );
 }
 
+/**
+ * 命中「默认不对 agent 开放」的版式时，在回执里提醒一句。
+ *
+ * 为什么提示而不拦：老工程里这些版式还在跑，用户也可能点名要用（「就用标题页」），
+ * 拦下来会把一条合法指令变成走不通的路。但 agent 若是自己挑的，必须知道自己越界了——
+ * 否则加了标签等于没加：它能建、回执正常、下次继续建。
+ */
+const hiddenTypeHint = (type: string): string => {
+  const meta = getMeta(type);
+  if (!meta || isAgentVisible(meta)) return "";
+  return (
+    `⚠️ 「${type}」是默认不对 agent 开放的内置固定版式（现成骨架）。用户点名要用就没问题；` +
+    `如果是你自己挑的，建议换 freeform / 动效 / 氛围类重做——固定骨架会把画面锁进去。\n`
+  );
+};
+
 const TOOLS: ToolDef[] = [
   {
     name: "start_guide",
@@ -215,7 +237,10 @@ const TOOLS: ToolDef[] = [
         "   ⚠ **动画/背景/转场/特效不问实现类型，只收档位**（克制-标准-活泼 / 利落-柔和-动感 / 关-点缀-允许），类型由设计锁推导。说得出「flip 还是 circle」的用户不存在。",
         "   ⚠ 能用眼睛判断的就别让他用嘴描述：密度、动感、转场性格各出三档图让他选。",
         "   ⚠ save_brief 不传 step 的批量通道只有一种合法用法：用户已一次性把信息给全、且你已逐字段复述请他确认。替你拍板的字段写进 assumed（>3 条会提醒）。",
-        "   ⚠ 画幅必须问死：横屏（课程/B站/视频号）还是竖屏（抖音原生）。画幅是不可逆的架构决策——版式、字号基准、安全区、能放几列全跟着它变。",
+        "   ⚠ 画幅必须问死：横屏（课程/B站/视频号）还是竖屏（抖音原生）。画幅是不可逆的架构决策——排版、字号基准、安全区、能放几列全跟着它变。",
+        "3b. 配方对账（用户说「提示词/配方我选好了」时） → get_prompt_pick() → 读它给的 md → 把「## 槽位」填一版：brief 里有的直接填，缺的**一次问齐**，和 brief 冲突的（时长/画幅/节奏）当场说按谁走 → 用户点头 → save_brief(recipe={...}, recipeSlots=[...])",
+        "   ↳ 配方只借骨架（三幕结构 / 动效铁律 / 禁止项），**内容一格都不照抄**——示例里的产品名、网址、文案进成片就是事故；槽位 actual 空着就问，不许自己补。",
+        "   ↳ 技法（TK）不是整片骨架：挑合适的一幕用，别为它单独拉一整条片。配方与风格是两件事，互不替代（风格走步骤 7）。",
         "4. 确认【闸口③】 → confirm_brief（不确认，build_storyboard 直接拒绝）",
         "   ↳ 闸口判的是**内容**不是必填：段落表每段有时长+内容、镜头能直接排拍摄（动画片换元素清单）、参考指到时间点、素材有责任人+截止、交付有版本列表。缺了会逐条告诉你缺什么。",
         "5. 稿件【闸口④】 → intake(10) 定稿件类型 → get_guide(\"script\") 定写法 → save_script 写稿 → **把整段稿发给用户过目** → confirm_script",
@@ -232,7 +257,7 @@ const TOOLS: ToolDef[] = [
         "   ↳ 这五项决定\"好不好看、专不专业\"。写分镜时可以先不齐（会软提醒），但**请用户看片前必须齐**——标准没定，他只能说「感觉不对」。",
         "7. 风格样张【闸口⑤】 → **主动请用户去编辑器「风格库」面板挑**（顶栏按钮 → 勾选 → 点「告诉 agent」）；收到他\"选好了\"的回话再往下走，别替他猜进度 → get_style_pick() 拿到编号 → probe_style(slugs=[候选1,候选2,候选3])：同一幕出 2–3 张不同风格的图 → **发给用户挑** → confirm_style_probe(slug)",
         "   ↳ 这是\"别一股脑开干\"最硬的一道防线。用户没看过图就往下做，等于让他在成片里做第一次审美判断——那时候改一张图要动 50 幕。",
-        "   ↳ get_style_pick() 回来的都是**内置风格（slug）**，带 palette/font 预设，`apply_style(slug)` 一次落到位，**不要翻译**。要换画风不要自己编配色，从 list_styles 里挑另一个 slug 再 apply_style。翻不出等价版式时，可走自由画布 get_guide(\"freeform\") 自己排，上限比套现成版式高、也更容易出效果。",
+        "   ↳ get_style_pick() 回来的都是**内置风格（slug）**，带 palette/font 预设，`apply_style(slug)` 一次落到位，**不要翻译**。要换画风不要自己编配色，从 list_styles 里挑另一个 slug 再 apply_style。风格的画面骨架对不上时，走自由画布 get_guide(\"freeform\") 自己排，上限比套固定版式高、也更容易出效果。",
         "   ↳ 用户没挑、或说\"你定\"：list_styles 里按八组挑 2–3 个候选，把「slug + 中文名 + 一句长什么样」发给他选——别替他决定审美。",
         "   ↳ 没 probe 过，build_storyboard 会直接拒绝。",
         "8. 风格落地 → 定好 slug 后按需微调：get_style 读规则 → set_theme / apply_style；用 mood 反查一遍（要「高级」就别上弹跳动效）",
@@ -243,7 +268,7 @@ const TOOLS: ToolDef[] = [
         "10. 风格帧【闸口⑦】 → build_storyboard(shot=1) 只建第 1 幕 → preview_frames 抽 1–3 帧 + **render_preview_clip 出一段 6 秒带声片段**给用户过目",
         "   ↳ 静帧只能看配色；转场、节奏、字幕可读性、BGM 大小必须看动/听声——用 render_preview_clip，几十秒出片，别等整片。",
         "   ⚠ **判断动画好不好看必须看动**：连出 6 张静帧等于没验——静帧里看不出动画问题，用户一句「动画太少」就是整轮返工。",
-        "   ↳ 调性不对就回第 9 步改分镜（改文案/版式很便宜，改完重建 1 幕），别硬着头皮往下铺。",
+        "   ↳ 调性不对就回第 9 步改分镜（改文案/画面很便宜，改完重建 1 幕），别硬着头皮往下铺。",
         "11. 铺开 → **build_film 一次建成整片**（幕/字幕/转场/入场动画一起给，只涨 1 个 rev）；要按已存的分镜表建就用 build_storyboard(replace=true)。全片统一的东西用 apply_to_scenes 批量套（字幕样式/贴纸/画中画），别逐幕调",
         "   ↳ 铺完立刻 render_preview_clip（不传参＝自动挑第一个转场交界）：转场叠字、BGM 压人声、字幕来不及读，这一段全能看出来。",
         "12. 精修 → update_scene / set_transform / add_element（自由画布 get_guide(\"freeform\")；**3D 场景（行星/分子/装置/空间感）用 add_scene(type=\"scene3d\") + get_guide(\"scene3d\")**；质感与签名时刻 get_guide(\"craft\")）；按 subtitleSpec 调字幕",
@@ -331,23 +356,24 @@ const TOOLS: ToolDef[] = [
   {
     name: "get_guide",
     description:
-      "读项目里的技能指南（按需加载，省上下文）。**name 只能取下表这 18 个之一**（传别的会报「没有技能」并列出可用名）：" +
+      "读项目里的技能指南（按需加载，省上下文）。**name 取下列篇名之一**（传别的会报「没有技能」并列出可用名；完整清单与字符数：tool_call(name:\"list_guides\")）：" +
       "manual（能力地图/工具全表/意图速查/铁律）、director（整片流程：问诊→分镜→搭建→验收）、" +
       "craft（画面质感：惊艳公式/节奏/签名时刻/禁止清单）、formats（用途→幕结构）、" +
       "script（稿件写法）、content（文案打磨：标题写结论/删形容词/去 AI 味）、subtitle（字幕：一屏一句、无标点）、" +
       "sound（声音设计）、narration（旁白配音与对齐）、long-form（超 12 幕长片）、" +
-      "scene-recipes（内置固定版式速查：默认不对 agent 开放，用户点名或人工调整时才读）、freeform（自由画布全部写法与坑）、" +
+      "**meaning（意义→画面：七类关系→可视频操作，写分镜前必读）**、motion-rules（动作机制/数值/转场/接缝）、" +
+      "text-events（文字读窗/断行/手法谱系）、style-translate（参考图与对标片的画风翻译）、" +
+      "scene-recipes（默认可用的动效/氛围 27 种怎么选 + 画面空时补哪三层）、scene-recipes-archive（内置固定版式名录，**只在用户点名某个版式时读**）、freeform（自由画布全部写法与坑）、" +
       "**scene3d（3D 场景：6 个预设怎么选 + graph 场景图全字段 + 公转/卫星 + 太阳系示例 + 13 个坑）**、" +
       "external-tools（iso 等轴测图解：anatomy 出图→落盘→套主题）、" +
       "qa（分阶段自检）、delivery（画幅/字幕样式/渲染/交付）、memory（记忆与模板）、tools-quickref（薄入口）。\n" +
       "section 按标题关键字只取一节（如 get_guide(\"scene3d\",\"坑\")），对不上会列出该篇可用小节。\n" +
-      "要看全量清单（名字+标题+字符数）：tool_call(name:\"list_guides\")。\n" +
       "**判断该读哪篇**：要做 3D/太空/行星/立体装置 → scene3d；要零件级技术插图 → external-tools；" +
-      "要非常规排版 → freeform；不知道从哪下手 → manual 或 start_guide。",
+      "要非常规排版 → freeform；要判断每幕让观众看懂什么变化 → meaning；不知道从哪下手 → manual 或 start_guide。",
     shape: {
       name: z
         .string()
-        .describe("技能名，取上表 18 个之一，如 manual / director / scene3d / freeform / external-tools"),
+        .describe("技能名，取上表篇名之一，如 manual / director / scene3d / meaning / freeform"),
       section: z
         .string()
         .optional()
@@ -428,24 +454,9 @@ const TOOLS: ToolDef[] = [
         .map((m) => String((m as { text?: string }).text ?? "").trim())
         .filter(Boolean)
         .slice(0, 5);
-      const notes = (brief.segments ?? [])
-        .map((x) => String((x as { content?: string }).content ?? "").trim())
-        .filter(Boolean);
       const listTitles = rows.length
         ? rows
         : ["第一条信息", "第二条信息", "第三条信息", "第四条信息", "第五条信息"];
-      const densityProps = {
-        heading:
-          a.title ??
-          brief.core?.believe ??
-          brief.takeaway ??
-          brief.goal ??
-          "信息密度样张",
-        items: listTitles.slice(0, 5).map((t, i) => ({
-          title: t.slice(0, 14),
-          note: (notes[i] ?? "").slice(0, 12),
-        })),
-      };
 
       // 记住进样张前的 rev：抽完帧立刻还原 —— 风格对比是「看图」，绝不该在工程里留下副作用
       const revBefore = p.rev;
@@ -467,7 +478,7 @@ const TOOLS: ToolDef[] = [
         return created.createdSceneIds?.[0];
       };
 
-      let shots: { slug: string; urls: { kind: string; url: string }[] }[] = [];
+      let shots: { slug: string; urls: { kind: string; url: string }[]; keptTitle?: boolean }[] = [];
       let restoreNote = "";
       // 画幅：模板按"短边百分比"排，竖屏/横屏都能用，但需要知道短边是哪一边
       const fmt = (p as { formats?: { width: number; height: number }[] }).formats?.[0];
@@ -491,10 +502,15 @@ const TOOLS: ToolDef[] = [
 
         /** 这一轮要抽的幕：有 showcase 就是一张招牌页，没有就退回"密度+封面"两张 */
         const targets: { id: string; kind: string }[] = [];
+        // 数据/图形类模板（readout / catalogue / pointfield …）不换用户标题：
+        // 骨架是按"读数 / 图录"排的，硬塞一句业务标题会破坏结构。回执里要说清楚，
+        // 否则用户看到「结构扫描 · 站点 04」会问这跟我的片子有什么关系。
+        let keptTitle = false;
         if (a.sceneId) {
           targets.push({ id: a.sceneId, kind: "density" });
         } else if (sc) {
           const show = adaptShowcaseToBrief(sc, briefTitle);
+          keptTitle = show.title === sc.title && !!briefTitle && sc.title !== briefTitle;
           const created = await api<{ createdSceneIds: string[] }>(`/api/projects/${p.id}/ops`, {
             method: "POST",
             body: JSON.stringify({
@@ -513,17 +529,24 @@ const TOOLS: ToolDef[] = [
           if (!id) throw new Error(`样张场景创建失败（${sc.template}）`);
           targets.push({ id, kind: "showcase" });
         } else {
-          const densityId = await findOrCreate("样张·密度", "list", densityProps);
-          const titleId = await findOrCreate("样张·封面", "title", {
-            eyebrow: "STYLE PROBE",
-            title: a.title ?? brief.core?.action ?? brief.takeaway ?? brief.goal ?? "标题样张",
-            subtitle: `${brief.durationSec ?? 30}s · ${brief.platform ?? "竖屏"}`,
-          });
-          if (densityId) targets.push({ id: densityId, kind: "density" });
-          if (titleId) targets.push({ id: titleId, kind: "title" });
+          // 没有 showcase 的风格（插件带来的、或还没配模板的新风格）：退回一张 freeform 招牌页。
+          // 以前这里用 `list` + `title` 两个固定版式——那是**给 agent 的示范**，等于教它用
+          // 默认不开放的内置版式；现在统一走巨字模板，只有一种画面语言。
+          const fallback: Showcase = {
+            template: "giantType",
+            title: a.title ?? brief.core?.believe ?? brief.takeaway ?? brief.goal ?? "风格样张",
+            sub: listTitles.slice(0, 2).join(" · "),
+            note: "这一条风格还没配专属样张模板：看的是配色、字体与质感，不是构图",
+          };
+          const id = await findOrCreate(
+            "样张·风格",
+            "freeform",
+            buildShowcaseProps(fallback, preset!.palette, canvas) as unknown as Record<string, unknown>,
+          );
+          if (id) targets.push({ id, kind: "showcase" });
         }
         if (!targets.length) {
-          throw new Error("样张场景创建失败，检查场景类型 freeform / list / title 是否可用（list_scene_types）");
+          throw new Error("样张场景创建失败，检查 freeform 场景类型是否可用（list_scene_types）");
         }
 
         try {
@@ -551,7 +574,7 @@ const TOOLS: ToolDef[] = [
           );
           for (const st of stills.stills) urls.push({ kind: t.kind, url: `${BASE}${encodeURI(st.url)}` });
         }
-        shots.push({ slug, urls });
+        shots.push({ slug, urls, keptTitle });
       }
 
       } finally {
@@ -582,7 +605,11 @@ const TOOLS: ToolDef[] = [
           for (const u of x.urls) byKind.set(u.kind, [...(byKind.get(u.kind) ?? []), u.url]);
           return (
             `${i + 1}. ${x.slug}${nl}` +
-            [...byKind.entries()].map(([k, list]) => `   ${kindLabel(k)}${nl}${list.map((u) => `     ${u}`).join(nl)}`).join(nl)
+            [...byKind.entries()].map(([k, list]) => `   ${kindLabel(k)}${nl}${list.map((u) => `     ${u}`).join(nl)}`).join(nl) +
+            (x.keptTitle
+              ? `${nl}   （这张的标题保留了风格自带的示例文案：它是读数/图录类骨架，` +
+                `换业务标题会破坏结构。发给用户时说一句「看的是排版和配色，不是字」）`
+              : "")
           );
         })
         .join(nl);
@@ -710,6 +737,78 @@ const TOOLS: ToolDef[] = [
       return text + `${nl}${nl}出我们引擎的样张给用户看：probe_style(slugs=[...]) → 用户点头再往下做`;
     },
   },
+  /**
+   * 用户采纳的整片配方 / 技法（提示词库 PMxxx / TKxxx）。
+   *
+   * 与 get_style_pick 分开的理由：两边读的不是同一份数据（style-picks.json vs
+   * prompt-pick.json），语义也不同——风格是"画风"，配方是"片子的骨架"。
+   * 合在一个工具里，agent 会以为"挑了配方就等于定了风格"。
+   *
+   * 这个工具**不返回正文**，只返回路径 + 槽位表：正文 700 字塞进上下文，
+   * 既容易被后续消息挤掉，又会让人以为"读过了就等于照做了"。槽位表是唯一
+   * 需要当场看到的东西——它决定了 agent 接下来该问用户什么。
+   */
+  {
+    name: "get_prompt_pick",
+    description:
+      "读用户在编辑器「提示词库」面板采纳的整片配方（PMxxx）/ 技法（TKxxx）。" +
+      '用户说"配方选好了 / 提示词我挑了"就先调它，别猜也别自己另挑一条。' +
+      "回来的是**骨架 + 槽位表**：先读路径指向的 md，把槽位填一版发用户确认（缺的一次问齐、冲突的说明按谁走），" +
+      "点头后 save_brief(recipe=…, recipeSlots=[…]) 再进分镜。" +
+      "⚠ 配方里的产品名/网址/文案是示例，一个字都不能直接进成片。",
+    shape: {},
+    run: async () => {
+      const nl = String.fromCharCode(10);
+      const p = readPromptPick();
+      if (!p) {
+        return (
+          "用户还没在「提示词库」面板采纳配方。" +
+          `${nl}要的话请他打开顶栏「风格库」→ 顶部切到「提示词」标签页 → 选一条 → 点「告诉 agent」；` +
+          `${nl}别从 list_guide 或记忆里替他从库里挑一条——配方是整片骨架，选错等于重做。`
+        );
+      }
+      const d = readPromptDetail(p.id);
+      const item = d?.item;
+      const isTech = p.id.startsWith("TK");
+      const rel = item?.file ? `${PROMPT_LIB_REL}/${item.file}` : "（库里这条的 md 找不到了，先让用户重选）";
+      const lines = [
+        `用户在「提示词库」采纳了${isTech ? "技法" : "整片配方"}：${p.id} ${p.name}（${p.genre}）`,
+        `正文：${rel}`,
+      ];
+      if (item?.fidelity === "bound") {
+        lines.push("⚠ 这条绑在媒介上（手绘/像素/剪纸这类），挑风格时别跨媒介，否则片子会散。");
+      }
+      lines.push(
+        "",
+        isTech
+          ? "技法是往某一幕里加的一招：按它的参数与禁止项做，**不要**为它单独拉一整条片。"
+          : "这一条是整片骨架：三幕结构 / 动效铁律 / 禁止项照它；**内容是示例，不是你的稿**。",
+      );
+      const slots = d?.slots ?? [];
+      if (slots.length) {
+        lines.push("", "## 槽位（左=配方原值，破折号后=填写口径）");
+        for (const s of slots) {
+          lines.push(`· ${s.label}：${s.value}${s.hint ? ` —— ${s.hint}` : ""}`);
+        }
+      } else {
+        lines.push("", "（这条没写「## 槽位」段：按正文里出现的具体名词自己列一份对账表）");
+      }
+      lines.push(
+        "",
+        "下一步（顺序别倒）：",
+        "1. 读正文：先弄清它「要证明什么」、贯穿物/记忆点是什么，再动画面",
+        "2. 把上面这张表填一版：brief 里已有的值直接填；缺的**一次性问齐**（别一格一问，也不许编）",
+        isTech
+          ? "3. 说明用在第几幕、替换掉什么（技法不改变整片结构）"
+          : "3. 和 brief 冲突的逐条裁决：「配方 60s 横屏 120BPM，你是 30s 竖屏 → 按你的，保留三幕分段与逐拍节奏，压到 30 秒」",
+        "4. 用户点头 → save_brief(recipe={id,name,file,kind}, recipeSlots=[{slot,recipe,actual,conflict}])",
+        "5. 再进分镜（get_guide(\"formats\") → get_guide(\"meaning\")）",
+        "⚠ 示例产品名 / 网址 / 文案一律不许照抄——留在成片里 = 事故。actual 空着的格，问，不许补。",
+      );
+      if (p.note) lines.push("", `用户备注：${p.note}`);
+      return lines.join(nl);
+    },
+  },
   {
     name: "list_styles",
     description:
@@ -725,8 +824,9 @@ const TOOLS: ToolDef[] = [
         `共 ${list.length} 种风格（${ready} 种可一键套用）：` +
         nl +
         list
-          // 全都有预设时不再逐行打「可一键套用」——77 个一样的标记只是噪音，只标例外
-          .map((x) => `- ${x.slug}：${x.name}${x.hasPreset ? "" : "（仅规则，套不上）"}`)
+          // slug 只印一次（以前是 `slug：中文名（slug）`，77 行白花 1.5k 字符）：
+          // slug 是 apply_style 要的参数，放最前面；中文名放括号里给人认
+          .map((x) => `- ${x.slug}（${x.name}）${x.hasPreset ? "" : " 仅规则，套不上"}`)
           .join(nl) +
         (issues.length ? `${nl}${nl}⚠ 插件预设问题：${nl}${issues.map((i) => `- ${i}`).join(nl)}` : "")
       );
@@ -745,7 +845,7 @@ const TOOLS: ToolDef[] = [
   {
     name: "apply_style",
     description:
-      "一键套用风格：改主题（配色/字体/圆角）+ 场景入场转场 + **氛围层**（预设带 backdrop 的风格会给没有氛围层的幕垫一层，如全息风格的网格流动）——没有氛围层，hologram-hud 这类风格就只是一张深蓝底。返回推荐版式与禁止项。**只能套带预设的风格**（list_styles 里没标「仅规则」的），仅规则风格会报错。只覆盖「系统的值」，版式与文案仍按风格规则重做。\n" +
+      "一键套用风格：改主题（配色/字体/圆角）+ 场景入场转场 + **氛围层**（预设带 backdrop 的风格会给没有氛围层的幕垫一层，如全息风格的网格流动）——没有氛围层，hologram-hud 这类风格就只是一张深蓝底。返回画面骨架与禁止项。**只能套带预设的风格**（list_styles 里没标「仅规则」的），仅规则风格会报错。只覆盖「系统的值」，画面与文案仍按风格规则重做。\n" +
       "转场只改**还是版本默认（fade 12 帧 / 未设）**的场景：已经用 set_transitions 显式设过的不动，要全覆盖传 overwriteTransitions=true；氛围层同理，已有 backdrop 的幕不动。",
     shape: {
       slug: z.string().describe("风格 slug"),
@@ -857,7 +957,7 @@ const TOOLS: ToolDef[] = [
     shape: {
       kind: z
         .enum(["pitfall", "preference", "recipe"])
-        .describe("pitfall=坑与解法；preference=用户审美/禁忌；recipe=有效版式/参数配方"),
+        .describe("pitfall=坑与解法；preference=用户审美/禁忌；recipe=有效画面/参数配方"),
       text: z.string().describe("内容：写清触发条件 + 结论/解法，便于以后检索"),
       tags: z.array(z.string()).optional().describe("2-4 个关键词，便于 recall"),
       scope: z.enum(["global", "project"]).optional().describe("默认 global（跨工程）；只对本片有效的用 project"),
@@ -1217,7 +1317,7 @@ const TOOLS: ToolDef[] = [
           ],
         }),
       });
-      return `已创建场景 id=${res.createdSceneIds[0]}\n${fmtSummary(res.summary)}\n\n${brief(res.project)}`;
+      return `已创建场景 id=${res.createdSceneIds[0]}\n${hiddenTypeHint(a.type)}${fmtSummary(res.summary)}\n\n${brief(res.project)}`;
     },
   },
   {
@@ -1287,16 +1387,16 @@ const TOOLS: ToolDef[] = [
   {
     name: "set_scene_type",
     description:
-      "换场景版式（不改场景 id、不删场景，旁白元素也不会丢）。props 按同名 key 迁移：新版式认识的字段保留，不认识的丢弃，新版式缺少的必填字段用默认值补上——丢弃和补上的字段都会在返回里列明。换版式后建议 preview_frames 抽一帧看排版。",
+      "换场景类型（不改场景 id、不删场景，旁白元素也不会丢）。props 按同名 key 迁移：新类型认识的字段保留，不认识的丢弃，新类型缺少的必填字段用默认值补上——丢弃和补上的字段都会在返回里列明。换完建议 preview_frames 抽一帧看排版。",
     shape: {
       sceneId: z.string(),
-      type: z.string().describe("目标版式，见 list_scene_types"),
+      type: z.string().describe("目标场景类型，见 list_scene_types"),
       props: z.record(z.any()).optional().describe("迁移后额外覆盖的字段"),
       durationInFrames: z
         .number()
         .int()
         .optional()
-        .describe("换版式同时改时长（帧），省一次 update_scene"),
+        .describe("换类型同时改时长（帧），省一次 update_scene"),
       projectId: z.string().optional().describe("要操作的工程 id，不传 = 当前默认工程（list_projects 查）"),
     },
     run: async (a) => {
@@ -1318,7 +1418,7 @@ const TOOLS: ToolDef[] = [
           ],
         }),
       });
-      return `${res.summary.join("\n")}\nrev=${res.project.rev}`;
+      return `${res.summary.join("\n")}\n${hiddenTypeHint(a.type)}rev=${res.project.rev}`;
     },
   },
   {
@@ -1658,7 +1758,7 @@ const TOOLS: ToolDef[] = [
   {
     name: "duplicate_scene",
     description:
-      "复制一个场景（含 props），副本插在原场景之后。传 props 可只改副本的文案字段（A/B 版本：同一版式两套文案），传 name 改副本名。",
+      "复制一个场景（含 props），副本插在原场景之后。传 props 可只改副本的文案字段（A/B 版本：同一幕两套文案），传 name 改副本名。",
     shape: {
       sceneId: z.string(),
       props: z

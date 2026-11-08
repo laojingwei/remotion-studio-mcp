@@ -177,7 +177,12 @@ export function listStyles(): StyleInfo[] {
       const first = text.split("\n").find((l) => l.startsWith("# ")) ?? s.slug;
       return {
         slug: s.slug,
-        name: first.replace(/^#\s*/, ""),
+        // 标题行普遍写成 `# 中文名（slug）`。slug 已经单独返回了，名字里再带一遍
+        // 会让 list_styles 每行印两次同一条 slug（77 行白花约 1.5k 字符）。
+        name: first
+          .replace(/^#\s*/, "")
+          .replace(/（[a-z0-9-]+）\s*$/, "")
+          .trim(),
         hasPreset: !!presets()[s.slug],
         source: s.source,
       };
@@ -218,11 +223,56 @@ export function presetOf(slug: string): StylePreset | null {
   return presets()[slug] ?? null;
 }
 
+/**
+ * `sceneBias` 里存的是**固定版式的 type**，而固定版式默认不对 agent 开放
+ * （`agentVisible:false`）。直接把它们印进回执，等于每套一次风格就塞给 agent
+ * 一份「推荐版式」清单——比任何一篇文档都更有指向性，标签也就白打了。
+ *
+ * 所以回执里只印**画面骨架**：隐式版式翻成结构词，agent 用 `freeform` 自己排；
+ * 只有本来就对 agent 开放的类型（动效/氛围/3d…）才原样印 type。
+ */
+const SCENE_BIAS_WORD: Record<string, string> = {
+  title: "巨字封面",
+  hero: "主体特写",
+  image: "全屏实拍",
+  bigtext: "大字报",
+  quote: "单句金句",
+  gallery: "网格陈列",
+  stats: "数据大字",
+  chart: "图表",
+  bars: "条形对比",
+  table: "数据表",
+  steps: "流程步骤",
+  timeline: "时间轴",
+  compare: "左右对照",
+  versus: "两强对峙",
+  split: "分屏",
+  cards: "卡片组",
+  chat: "对话气泡",
+  list: "编号清单",
+  bullets: "要点列表",
+  life: "生活场景封面",
+  tech: "科技场景封面",
+  game: "游戏场景封面",
+  neon: "霓虹字",
+};
+
+function sceneBiasWords(bias?: string[]): string[] {
+  const out: string[] = [];
+  for (const t of bias ?? []) {
+    const word = SCENE_BIAS_WORD[t] ?? (getMeta(t)?.agentVisible ? t : "");
+    if (word && !out.includes(word)) out.push(word);
+    if (out.length >= 5) break;
+  }
+  return out;
+}
+
 export function styleSummary(slug: string): string {
   const preset = presetOf(slug);
   if (!preset) {
     return `「${slug}」还没有结构化预设：先用 get_style 读规则，再用 set_theme / set_transition / 字幕样式手动套用。`;
   }
+  const bias = sceneBiasWords(preset.sceneBias);
   const lines = [
     `风格：${preset.name}（${slug}）`,
     `配色：${Object.entries(preset.palette).map(([k, v]) => `${k}=${v}`).join(" ")}`,
@@ -233,7 +283,9 @@ export function styleSummary(slug: string): string {
     ...(preset.backdrop
       ? [`氛围层：${preset.backdrop.type}${getMeta(preset.backdrop.type) ? `（${getMeta(preset.backdrop.type)!.name}）` : ""}`]
       : []),
-    ...(preset.sceneBias?.length ? [`推荐版式：${preset.sceneBias.join("、")}`] : []),
+    ...(bias.length
+      ? [`画面骨架：${bias.join(" / ")}（用 freeform 自排；固定版式需用户点名）`]
+      : []),
     ...(preset.forbidden?.length ? [`禁止：${preset.forbidden.join("、")}`] : []),
   ];
   return lines.join("\n");

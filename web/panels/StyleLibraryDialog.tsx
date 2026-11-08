@@ -873,7 +873,7 @@ export const StyleLibraryDialog: React.FC<Props> = ({ open, onClose }) => {
               <div className="sl-detail-foot">
                 <input
                   className="sl-note"
-                  placeholder="补一句你的实际情况（可选，会一起发给 agent）"
+                  placeholder="写你的具体内容：产品名 / 链接 / 时长 / 想强调什么（一起发给 agent）"
                   value={promptNote}
                   onChange={(e) => setPromptNote(e.target.value)}
                   onKeyDown={(e) => e.stopPropagation()}

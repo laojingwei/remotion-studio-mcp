@@ -1,10 +1,10 @@
 # 工具速查（入口页）
 
-完整说明书在 **`get_guide("manual")`**：《Agent 使用全书》——136 个工具全表（4 常驻 + 132 按需）、能力地图、
+完整说明书在 **`get_guide("manual")`**：《Agent 使用全书》——135 个工具全表（4 常驻 + 131 按需）、能力地图、
 「我想…」意图速查、落地铁律（为什么没生效）。本页只留最快的域索引：
 
 **两层调用**：常驻核心 4 个（start_guide / get_guide / tool_search / tool_call）；
-其余 132 个工具 `tool_search("意图")` 找 → `tool_call(name, args)` 执行（`all=true` 看全量目录，`names=[...]` 取完整参数表）。
+其余 131 个工具 `tool_search("意图")` 找 → `tool_call(name, args)` 执行（`all=true` 看全量目录，`names=[...]` 取完整参数表）。
 这 131 个里有 **4 个退役别名**（旧名字，如 `rename_scene`）：搜索里不出现，但直接 `tool_call` 仍能命中原工具——老脚本不必改。
 
 - 工程：list / switch / create / get / **archive（收进抽屉，不删文件）** / delete / 模板（含删除）/ 历史 / 导入导出
@@ -28,6 +28,9 @@
 - **风格库（77 个内置风格）**：用户先在编辑器「风格库」面板勾选 → `get_style_pick` 读他选了什么；
   用户没挑就用 `list_styles` 找候选。**回来的都是 slug，直接 `apply_style` 就能套**，不用翻译。
   用户给的是参考图/对标片（没有 slug）时，才走 `get_guide("style-translate")` 翻成 theme/版式
+- **提示词库（179 条整片骨架）**：用户采纳后 `get_prompt_pick` 拿 id + md 路径 + 槽位表 →
+  读 md → 槽位填一版发用户确认（缺的一次问齐、冲突的说明按谁走）→ `save_brief(recipe, recipeSlots)`。
+  **配方只借骨架**：示例产品名/网址/文案照抄就是事故；技法（TK）只用在某一幕，不拉整片
 - 批量：apply_ops（整批原子）
 - 协作记忆：reply_user / remember / recall
 

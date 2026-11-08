@@ -1,4 +1,4 @@
-# Agent 使用全书（136 个工具 = 4 常驻 + 132 按需 + 能力地图 + 铁律）
+# Agent 使用全书（135 个工具 = 4 常驻 + 131 按需 + 能力地图 + 铁律）
 
 给 agent 的完整说明书。**你不需要读源码、不需要试探参数**：这台机器能做什么、怎么组合、
 为什么没生效，全部在这页和另外 21 篇指南里（全 22 篇的索引见本文最后一节）。
@@ -66,16 +66,16 @@
 | 元素 | 场景内图片/文本/形状/视频/音频元素，rich 外观全套（圆角/边框/阴影/滤镜/混合/裁切/字体/行高/字距/对齐/斜体/下划线） | `list_element_library` `add_element` `update_element` |
 | 动效 | 元素级关键帧动画（`anim[].from/to` 绝对值）、全片动效强度三档（0 关 / 1 标准 / 2 更强） | `update_element(anim)` `set_theme(motion)` |
 | 特效 | **11 种全屏区间特效**（闪白/扫光/震动/冲击/旋转/故障/模糊/暗角/去色/呼吸/频闪）+ custom，**支持循环**（单次时长 + 到几秒停） | `list_effect_types` `add_effect` `update_effect(loop)` |
-| 转场 | 幕间转场（fade/slide 等 12 种，时长可调；**所有版式通用，自由画布也是场景**）；带字幕的幕转场 ≤ 6 帧 | `set_transitions` |
+| 转场 | 幕间转场（fade/slide 等 12 种，时长可调；**所有场景类型通用，自由画布也是场景**）；带字幕的幕转场 ≤ 6 帧 | `set_transitions` |
 | 多轨 | 任意条轨道、画中画小窗（缩放/位置/圆角）、同轨自动防重叠 | `move_scene` `set_scene_box` |
 | 音频 | TTS 配音（单段/多段**自动对齐幕长并写字幕**）、BGM 全局轨、场景内音频裁时间窗、音量调节 | `tts_narration` `add_audio_track` `set_audio` |
 | 字幕 | 硬字幕烧录（**一屏 8–16 字、不带标点**，写入自动拆段）+ SRT/VTT 导出，两者同一套时间 | `set_subtitle` `fix_subtitles` `set_subtitle_style` `export_subtitles` |
 | 叙事 | 每幕标一个**关系类型**（七类：因果/否定对比/部分整体/尺度/取舍/累积/感受转变 + plain），把"这句话像什么版式"换成"这句话让观众看懂什么变化"。`save_storyboard` 回执带设计体检：没标关系、plain 过半、note 写"丝滑/大气"都会被点出来——设计错误在分镜阶段定型，成片再改要重建场景 | `get_guide("meaning")` `save_storyboard`（relation / change / carry / sync） |
-| 风格 | **43 种风格规则库，全部带结构化预设**（`apply_style` 一键套：主题色+字体+圆角+转场+推荐版式+禁止项；**21 个氛围型风格还会给每幕垫 backdrop**——没有氛围层，hologram-hud 就只是张深蓝底），也都能 `probe_style` 出真样张；风格文件可改造/混搭/自定义 | `list_styles` `get_style` `apply_style` |
+| 风格 | **77 种风格规则库，全部带结构化预设**（`apply_style` 一键套：主题色+字体+圆角+转场+推荐版式+禁止项；**21 个氛围型风格还会给每幕垫 backdrop**——没有氛围层，hologram-hud 就只是张深蓝底），也都能 `probe_style` 出真样张；风格文件可改造/混搭/自定义 | `list_styles` `get_style` `apply_style` |
 | 设计稿 | 分镜写完、建场景**之前**出的一份**给人看**的稿子：每幕屏幕上什么字、口播说什么、几秒、承担什么关系。用户读它改字（几秒），而不是等 50 幕建完再改（重建场景）。回执分「必须修」（必须信息缺失/禁用词，不修建出来就是错的）与「建议改」（关系不足/字幕超长/还没出样张/总时长偏离） | `export_design` · 编辑器顶栏「设计稿」可整篇读 |
-| 文字 | 一屏写多少字、停多久、断在哪。读窗按每字 0.25s 算（18 字就要 4.5s），断行按意群不按长度（切错会把"不是…才…"切成反义）；13 种文字手法只有一部分有对应版式，没有的走降级并说明 | `get_guide("text-events")` · `maskreveal`/`stomp`/`typewriter`/`highlight`/`counter`/`scramble` |
+| 文字 | 一屏写多少字、停多久、断在哪。读窗按每字 0.25s 算（18 字就要 4.5s），断行按意群不按长度（切错会把"不是…才…"切成反义）；13 种文字手法只有一部分有对应的 type，没有的走降级并说明 | `get_guide("text-events")` · `maskreveal`/`stomp`/`typewriter`/`highlight`/`counter`/`scramble` |
 | 动作 | 动作只承担引导/反馈/关系/转场，选不出就删。错峰总长 = 单项时长+(n−1)×间隔；转场按两幕关系选不按效果名选；接缝看速度匹配不看位置 | `get_guide("motion-rules")` · `set_transitions` · `anim[].ease` |
-| 风格库 | 编辑器「风格库」面板两个分区：**内置风格 77 个**（带 palette/font 预设，`apply_style(slug)` 直接套，**不用翻译**）· **提示词 179 条**（整片配方 153 + 单技法 26，单选采纳，agent 读 md 自己落地）。`get_style_pick()` 只回内置风格的 slug；用户给的是**参考图/对标片**（没有 slug）时，才读 `get_guide("style-translate")` 翻成 theme/版式 | `get_style_pick` `list_styles` `apply_style` |
+| 风格库 / 提示词库 | 编辑器「风格库」面板两个分区：**内置风格 77 个**（带 palette/font 预设，`apply_style(slug)` 直接套，**不用翻译**）· **提示词 179 条**（整片配方 153 + 单技法 26，单选采纳）。`get_style_pick()` 只回内置风格的 slug；`get_prompt_pick()` 回配方 id + md 路径 + 槽位表——**配方是骨架，内容必须按槽位对账后的 actual 走**（示例产品名/网址/文案不许进成片）。用户给的是**参考图/对标片**（没有 slug）时，才读 `get_guide("style-translate")` 翻成 theme/画面/氛围 | `get_style_pick` `get_prompt_pick` `list_styles` `apply_style` |
 | 画幅 | 多画幅并存（9:16 / 16:9 / 1:1 / 自定义 16–7680）。**`set_formats` 默认覆盖**：没写进 formats 的画幅会被删掉（用户说「只要竖屏」就只传 portrait，否则编辑器顶栏会留着横屏按钮）；只改尺寸传 `merge:true` | `set_formats` |
 | 预览 | 单帧/多帧抽帧（按场景偏移）、真实浏览器渲染前 dryRun 预检 | `preview_frames`（单帧 `frames:[f]`） `render_video(dryRun)` |
 | 渲染 | 正式出片（可等完成）、进度查询、取消、历史产物清理 | `render_video` `get_render_status` `cancel_render` `cleanup_renders` |
@@ -110,7 +110,7 @@
 
 **3D 场景图**：`get_graph`（节点大纲：id/形状/颜色/父级，改之前先看）· `update_graph_node`（按节点局部写回，**改单个物体不要整份覆盖 graph**）· `add_graph_node` · `remove_graph_node` · `set_graph_scene`（相机/世界/灯光/粒子/辉光；`graphPreset` 可整套换成插件给的起手图）· `list_world_skies`（世界全景图配方，**顺带检查本机有没有那张图**，再用 `set_graph_scene { worldPreset }` 套用）· `list_graph_presets`（插件提供的图形配方，一套换掉当前 graph；**不含内置 6 个母题**）· `list_plugin_passes`（插件提供的 **3D 后期效果**：VHS/故障/水波这类受控 GLSL；写进 `set_graph_scene { post: { passes } }` 才生效，最多 6 个）
 
-**场景**：`list_scene_types` · `add_scene` · `update_scene` · `set_scene_type`（换版式，同名 key 迁移）· `set_scene_timing` · `duplicate_scene` · `reorder_scenes`（**幕序的真相是分镜表**；有被 `move_scene` 钉死的幕时必须带 `reflow:true`，否则时间轴不动） · `remove_scene` · `move_scene`（绝对帧/换轨；会给这一幕**钉死起点**）· `set_scene_box`（画中画）· `set_transition` · `set_transitions`（批量）
+**场景**：`list_scene_types` · `add_scene` · `update_scene` · `set_scene_type`（换场景类型，同名 key 迁移）· `set_scene_timing` · `duplicate_scene` · `reorder_scenes`（**幕序的真相是分镜表**；有被 `move_scene` 钉死的幕时必须带 `reflow:true`，否则时间轴不动） · `remove_scene` · `move_scene`（绝对帧/换轨；会给这一幕**钉死起点**）· `set_scene_box`（画中画）· `set_transition` · `set_transitions`（批量）
 
 **批量**：`apply_ops(ops[])`——**整批原子**，op 形状支持单工具扁平写法，报错带「第 N/M 个操作」
 
@@ -134,6 +134,8 @@ fx 类的序列帧文件夹会整体成一个结果，直接给带 `{frame}` 的
 **风格与主题**：`list_styles` · `get_style` · `apply_style` · `set_theme`（配色/字体/motion）· `set_formats`
 
 **风格库**：`get_style_pick`（读用户在编辑器面板里勾选的内置风格，全是可直接 `apply_style` 的 slug）· `list_styles`（自己找候选）
+
+**提示词库**：`get_prompt_pick`（读用户采纳的整片配方 / 技法：id + md 路径 + 槽位表）。回来先读 md，再把槽位填一版发用户确认（缺的一次问齐、冲突的说明按谁走），点头后 `save_brief(recipe=…, recipeSlots=[…])`。**配方是骨架不是内容**：示例产品名/网址/文案不许进成片；技法（TK）只用在某一幕，不拉整片
 
 **验收与渲染**：`render_cover`（某帧导出封面 PNG）· `request_review`（请用户到编辑器看片，返回地址+重点看什么）· `confirm_review(approved, feedback[], selfRender)`（没通过 → `render_video` 拒绝）· `preview_frame` · `preview_frames` · `render_video`（`wait` / `dryRun` / `force`）· `get_render_status` · `cancel_render` · `cleanup_renders` · `refresh_bundle`（改了 public 素材后渲染前调用）
 
@@ -166,7 +168,7 @@ fx 类的序列帧文件夹会整体成一个结果，直接给带 `{frame}` 的
 | 竖屏片被平台 UI 压住 | 上 20% / 内容 60% / 下 20% 三区域，内容垂直居中，字幕上移（`get_guide("craft")` §11） |
 | 精修越改越花 | 精修是减法：先对齐/层级/减色，再加新特效（`get_guide("qa")` 精修与三个肉身测试） |
 | 只改某幕文案（片已建好） | `revise_script(changes=[{segment:3, text:"新的一句"}])`——只重配这段、幕长/字幕/分镜/时间骨架同步，回执列出被挤到的元素。**别用 save_script 重写**（整片配音作废）。只改错别字传 `textOnly=true` |
-| 换一种版式 | `set_scene_type` → `get_scene` 回读确认字段迁移 |
+| 换场景类型 | `set_scene_type` → `get_scene` 回读确认字段迁移（用户点名某个版式时才走这条） |
 | 加背景音乐 | `set_audio(src)` 基础设置 → `set_audio(volume=0.25)` 压到人声 20–40%（`get_guide("sound")`）。**只传要改的字段就够**（合并语义），其余配置不动；清掉避让/压缩曲线要显式传 `ducking=null` / `gainCurve=null` |
 | 声音太小，想比原音更响 | `set_audio(volume=2.5)` / `update_element(audioVolume=2.5)`：**1 = 原音，上限 5（+14dB）**。回执会算峰值，会削波就警告 |
 | 每段声音大小不一 | `balance_audio()`：按角色拉到统一响度（人声 -16 / BGM -23 / 音效 -18 LUFS）；先 `dryRun=true` 看方案 |（用户也可以在右侧背景音乐面板点「配平到 -23」，同一个算法）
@@ -175,9 +177,10 @@ fx 类的序列帧文件夹会整体成一个结果，直接给带 `{frame}` 的
 | 做画中画 | `move_scene(start, track=1)` → `set_scene_box(scale, x, y, radius)` |
 | 卡点 | 有 BGM 文件：`analyze_audio(src)` 拿 BPM + 拍点帧号（**置信度 <2.5 别自动用**，问用户 BPM 后 `set_beat_grid`）；再把转场/特效的 from 对着拍点放 |
 | 配音前发现 TTS 没开 | `tts_check()` 探连通 → `tts_check(deep=true)` 验配置。**开工时做**，别等第 6 步 |
-| 换全套视觉 | `list_styles` → `get_style`（读规则）→ `apply_style`（43 种都能一键套：配色/字体/圆角/转场）。预设只覆盖"系统的值"，版式与文案仍要按风格规则重做；要改得更像品牌，再 `set_theme` 覆盖三个值 |
+| 换全套视觉 | `list_styles` → `get_style`（读规则）→ `apply_style`（77 种都能一键套：配色/字体/圆角/转场）。预设只覆盖"系统的值"，画面与文案仍要按风格规则重做；要改得更像品牌，再 `set_theme` 覆盖三个值 |
 | 用户说"风格我选好了" | `get_style_pick()`：回来的**全是内置风格 slug → 直接 `apply_style`**，不用翻译。`probe_style` 出**我们引擎的**样张给用户确认。用户没挑就用 `list_styles` 给 2–3 个候选 |
-| 数字/图表页 | `stats`/`chart`/`ring` 版式自带滚动；数据只能来自用户或可靠来源 |
+| 用户说"配方/提示词我选好了" | `get_prompt_pick()`：拿 id + md 路径 + 槽位表。先读 md，把槽位填一版**发用户确认**（缺的一次问齐，冲突的说明按谁走），点头后 `save_brief(recipe=…, recipeSlots=[…])`。示例内容一律不照抄——照抄就是别人的产品名进你的片子 |
+| 数字/图表页 | 默认用 `counter`（数字滚动）或 freeform 自己画（`get_guide("freeform")`）；`stats`/`chart`/`linechart`/`ring` 是固定版式（默认不对 agent 开放），用户点名要用时才按 `scene-recipes-archive` 查。数据只能来自用户或可靠来源 |
 | 元素动画 | `update_element(anim=[{frame,from,to}])`；弹簧手感 = 过冲关键帧（craft §4） |
 | 完全自定义画面 | `freeform` 场景（`get_guide("freeform")`），上限 40 元素，`layout_grid`/`align_elements` 辅助排版 |
 | 要 3D：太空/行星/分子/装置/空间感 | `add_scene(type:"scene3d")`。抽象氛围用 `preset`（6 个母题）；**具体物体必须写 `graph` 场景图**——`get_guide("scene3d")`（给 graph 之后 preset/spin/count/hue 全部失效，别以为没生效） |
@@ -208,17 +211,17 @@ fx 类的序列帧文件夹会整体成一个结果，直接给带 `{frame}` 的
 | 转场写了没生效 / 工程打不开 | 转场 `type` 只认 none/fade/slide/wipe/zoom/blur/flip/circle/blinds/flash/glitch/diagonal（12 种）；写别的会被 op 层当场拒绝。旧工程里的历史脏值读到会自动改成 `blur` 并写回 |
 | 元素画不出来 | `z` 必须 ≥ 0，负 z 画到背景下面 |
 | 成片没声音 | 视频元素 `muted` 默认 true；音频元素默认 false。不传就按这个来 |
-| 缩幕长弹回去 | 场景时长下限由版式决定（30–60 帧起），夹回是设计行为 |
+| 缩幕长弹回去 | 场景时长下限由场景类型决定（30–60 帧起），夹回是设计行为 |
 | 音频窗口比文件长 | 不循环、播完静音，不报错；裁头用 `startFrom` |
 | 转场看不出叠化 | 只有**下一幕的 transitionIn** + 两幕在主轨**首尾相接**才是真叠化（上一幕定格续画 N 帧）。中间有缝（钉死过起点）、画中画、只设 transitionOut → 各自淡到背景色，看起来是"黑一下再亮" |
 | mp3 时长差 30–50ms | 编码器 delay，正常，不必修 |
 | 转场时两行字幕重叠 | 带字幕的幕转场 ≤ 6 帧（实测约束） |
 | apply_ops 一条失败全没了 | 整批原子是特性；把需要新 id 的操作分到下一批 |
 | op 里写了拼错的字段 | 直接拒绝并报「第 N 个操作（op 名）有未知字段：X」+ 该操作的合法字段列表——不会静默丢弃。**嵌套对象同样检查**：`audio:{volume2:2}` / `element:{opacty:0.5}` 也会拒绝并给「是不是想写 volume / opacity」 |
-| 改了文案回读没变 | 文案是**版式的 props**，不是 scene 顶层。`update_scene(patch:{props:{title:"…"}, 或 patch:{title:"…"})` 都行；写 `patch:{titel:"…"}` 会直接报错（以前报成功、rev 照涨、文案没变） |
+| 改了文案回读没变 | 文案是**场景 props 里的字段**（`props.title` 这类），不是 scene 顶层。`update_scene(patch:{props:{title:"…"}, 或 patch:{title:"…"})` 都行；写 `patch:{titel:"…"}` 会直接报错（以前报成功、rev 照涨、文案没变） |
 | 回执说成功但什么都没变 | summary 里会有「⚠️操作（X）没有产生任何数据变更」：字段名错、层级错、或值本来就等于目标值（幂等重试）。见到这条就回读核对，别当成成功 |
 | 改暗角越挂越暗 | 特效是区间效果（涨到峰再回落）；长片用 `loop=true` + `loopStopAfterSeconds` |
-| 换版式后数据怪 | 同名 key 语义可能不同（title 在不同版式含义不同），`get_scene` 回读核对 |
+| 换类型后数据怪 | 同名 key 语义可能不同（`title` 在不同类型里含义不同），`get_scene` 回读核对 |
 | 音量拖不上去 | 上限是 **5**（不是 1）：1 = 原音、>1 放大。若卡在某个值，是峰值保护/ops 夹取，summary 里有实际值 |
 | 预览音量没变、成片才变 | 音量 >1 时预览必须有 `useWebAudioApi`（已内置）；早期版本会 `Math.min(volume,1)`。遇到就报 bug，别怀疑耳朵 |
 | 配平后仍不达目标响度 | 被**峰值上限**卡住（回执写"峰值限制"）：源文件本身太小声且峰值已满，只能换源 |
@@ -256,16 +259,16 @@ fx 类的序列帧文件夹会整体成一个结果，直接给带 `{frame}` 的
 | `sound` | 声音设计：BGM 选曲、戏剧曲线、混音、静音自检 |
 | `narration` | 口播写法、TTS 合成对齐、字幕 |
 | `long-form` | 超 12 幕/2 分钟：分章规划与验收 |
-| `scene-recipes` | 内置固定版式逐个速查（items 数量、文案长度）。**默认不对 agent 开放**，用户点名要用某个版式、或人工调整老工程时才读 |
+| `scene-recipes` | **默认可用的动效/氛围 27 种怎么选**（看语气不看内容）+ 画面空时补哪三层 + 元素外观全参数。固定版式速查在归档篇，用户点名时才读 |
 | `freeform` | 自由画布全部写法与坑 |
 | `scene3d` | **3D 场景**：blank 空白默认、6 个预设怎么选、`graph` 场景图全字段（几何体/材质/灯光/粒子/相机）、公转与卫星、太阳系完整示例、改已建好的幕（`update_graph_node`）、15 个坑 |
 | `external-tools` | **图解 iso**：anatomy 出图 → 落盘 → 套主题，含 sanitize 与实跑踩到的坑 |
 | `qa` | 分阶段自检清单、常见问题速查表 |
 | `delivery` | 画幅、字幕样式、渲染、交付物清单 |
-| `meaning` | **每幕让观众看懂什么变化**：七类关系→可视频→证据→该用哪个版式，四个抱怨词各查什么 |
-| `text-events` | **文字事件**：读窗公式、意群断行、四段时序、13 种文字手法对应哪个版式（含我们没有的怎么办） |
+| `meaning` | **每幕让观众看懂什么变化**：七类关系→可视频操作→怎么落地，四个抱怨词各查什么 |
+| `text-events` | **文字事件**：读窗公式、意群断行、四段时序、13 种文字手法对应哪个 type（含我们没有的怎么办） |
 | `motion-rules` | **动作**：时长与缓动边界、错峰总长算法、重量与接触、按两幕关系选转场、接缝速度匹配 |
-| `style-translate` | 用户给的参考图/对标片/一句"我要这种感觉"怎么翻成本片的 theme/版式/氛围（含三条降级路径） |
+| `style-translate` | 用户给的参考图/对标片/一句"我要这种感觉"怎么翻成本片的 theme/画面/氛围（含三条降级路径） |
 | `tools-quickref` | 常用工具一页速查（配合 `tool_search`） |
 | `memory` | remember/recall 记什么、模板沉淀 |
 | `tools-quickref` | 本书的薄入口（指向这里） |

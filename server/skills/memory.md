@@ -6,7 +6,7 @@
 |---|---|---|
 | `pitfall`（坑） | 什么问题、怎么解、什么条件下触发 | 「素材时长没量 → 4 秒音频显示到场景结尾；先 get_asset_info」 |
 | `preference`（偏好） | 用户的审美、禁忌、常用风格 | 「竖屏口播，主色 #C6F24E，标题不用感叹号」 |
-| `recipe`（配方） | 有效的版式组合、文案结构、参数组合 | 「数据页用 stats(3 个) + 口播短句，转场 fade 12 帧」 |
+| `recipe`（配方） | 有效的画面组合、文案结构、参数组合 | 「数据页用 counter + 三行短句，转场 fade 12 帧」 |
 
 ## 什么时候用
 
@@ -23,7 +23,7 @@
 ## 模板沉淀
 
 - 整片结构好 → `save_template(name, description, tags)`
-- 单幕版式/元素组合好 → 记进 `recipe`，下次用 `apply_ops` / `add_element` 复刻
+- 单幕画面/元素组合好 → 记进 `recipe`，下次用 `apply_ops` / `add_element` 复刻
 - 存模板时 description 写清「适合什么内容」，tags 用 2–4 个关键词（如 `口播,数据,快节奏`）
 
 ## 检索技巧
