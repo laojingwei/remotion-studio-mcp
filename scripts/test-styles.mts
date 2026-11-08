@@ -23,6 +23,9 @@ import { applyOps, createSeedProject } from "../shared/ops";
 import { SCENE_METAS } from "../shared/sceneMetas";
 import { TRANSITION_TYPES } from "../shared/transitions";
 import { STYLE_DIR, listStyles, presetBackdropIssue, presetOf } from "../server/styles.service";
+import { adaptShowcaseToBrief, buildShowcaseProps, SHOWCASE_TEMPLATES } from "../server/showcase";
+import { STILL_VERSION } from "../shared/still-version";
+import { computeStillVersion } from "./still-version.mts";
 
 let passed = 0;
 const failures: string[] = [];
@@ -223,6 +226,106 @@ test("apply_style 的 ops 对每个预设都能过 schema（整批原子，一�
     }
     assert.equal(out.project.theme.palette.background, preset.palette.background, `${slug} 主题没落库`);
   }
+});
+
+/* ────────────────────────── 样张配方 ────────────────────────── */
+
+test("每个预设都有 showcase（样张配方），且能被模板层展开成合法场景", () => {
+  const missing: string[] = [];
+  const bad: string[] = [];
+  for (const slug of presetSlugs) {
+    const preset = presetOf(slug)!;
+    const sc = (preset as { showcase?: { template: string; title: string } }).showcase;
+    if (!sc) {
+      // 没有配方的风格会退回"五行要点"那页，和别的风格长得一样——这正是要修的问题，
+      // 所以新加风格必须顺手配 showcase，这里挡住
+      missing.push(slug);
+      continue;
+    }
+    if (!SHOWCASE_TEMPLATES.some((t) => t.id === sc.template)) bad.push(`${slug}（模板 ${sc.template} 不存在）`);
+    else if (!sc.title?.trim()) bad.push(`${slug}（title 为空）`);
+  }
+  assert.equal(missing.length, 0, `这些风格还没配 showcase：${missing.join("、")}`);
+  assert.equal(bad.length, 0, `showcase 有问题：${bad.join("、")}`);
+});
+
+test("showcase 展开后的元素都落在画面内（x/y 是 0-100 百分比，不是短边单位）", () => {
+  // 这条挡住的是实打实踩过的坑：把 x 当短边单位算（x=120），红三角和木刻黑块直接飞出画面，
+  // 而渲染不会报错，只会"少了一个元素"——最难查的那种。
+  for (const slug of presetSlugs) {
+    const preset = presetOf(slug)!;
+    const sc = (preset as { showcase?: never }).showcase;
+    if (!sc) continue;
+    const props = buildShowcaseProps(sc, preset.palette, { w: 1920, h: 1080 }) as {
+      elements: Record<string, unknown>[];
+    };
+    for (const el of props.elements) {
+      const x = Number(el.x ?? 50);
+      const y = Number(el.y ?? 50);
+      assert.ok(x >= -5 && x <= 105, `${slug}：元素 x=${x} 超出画面（0-100 才是百分比）`);
+      assert.ok(y >= -10 && y <= 110, `${slug}：元素 y=${y} 超出画面`);
+      const size = Number(el.size ?? 0);
+      assert.ok(Number.isFinite(size) && size < 200, `${slug}：元素 size=${size} 不合理`);
+    }
+    assert.ok(props.elements.length > 0, `${slug}：showcase 展开后没有元素`);
+  }
+});
+
+/* ────────────────────── probe_style 的标题适配 ────────────────────── */
+
+test("把用户长标题换进样张时，字号要降、强调词要清、图形型模板不换", () => {
+  const longTitle = "把一周的活压成三分钟"; // 10 个字，模板字号按 4–6 字设计
+  // ① 大字模板：必须降字号并清掉风格自带 emphasis，否则换行后两行叠在一起（实测过）
+  const giant = presetOf("swiss-editorial")!;
+  const adapted = adaptShowcaseToBrief(
+    (giant as unknown as { showcase: import("../shared/builtin-styles").Showcase }).showcase,
+    longTitle,
+  );
+  assert.equal(adapted.title, longTitle);
+  assert.equal(adapted.emphasis, undefined, "换成用户标题后不该还挂着风格自带的红字");
+  assert.ok((adapted.titleScale ?? 1) < 1, "长标题没有降字号");
+  const props = buildShowcaseProps(adapted, giant.palette) as { elements: Record<string, unknown>[] };
+  const mainTitle = props.elements.find((el) => el.type === "text" && el.text === longTitle);
+  assert.ok(mainTitle, "找不到主标题元素");
+  assert.ok(Number(mainTitle!.size) < 15, "主标题字号实际没被缩小");
+
+  // ② 图形/数据型模板：画面里的东西才是内容，标题换了就语义脱节，原样出图
+  for (const slug of ["data-as-objects", "pointcloud-scan", "hologram-hud", "halftone-dossier"]) {
+    const preset = presetOf(slug)!;
+    const sc = (preset as unknown as { showcase: import("../shared/builtin-styles").Showcase }).showcase;
+    assert.equal(adaptShowcaseToBrief(sc, longTitle).title, sc.title, `${slug} 不该换标题`);
+  }
+
+  // ③ 短标题、空标题都不该触发缩放；库里的 77 张缩略图不受影响
+  const short = adaptShowcaseToBrief(
+    (presetOf("swiss-editorial") as unknown as { showcase: import("../shared/builtin-styles").Showcase }).showcase,
+    "先把网格",
+  );
+  assert.equal(short.titleScale, undefined, "短标题不该缩放");
+  assert.equal(
+    adaptShowcaseToBrief(
+      (presetOf("swiss-editorial") as unknown as { showcase: import("../shared/builtin-styles").Showcase }).showcase,
+      "",
+    ).title,
+    "先把网格",
+    "空标题应原样返回",
+  );
+});
+
+/* ────────────────── 静帧版本戳（防浏览器缓存旧图） ────────────────── */
+
+test("缩略图版本戳与磁盘上的图一致（重出图后必须刷新）", () => {
+  // 踩过的坑：图全部重出、磁盘和服务端都是新图，用户面板却「好多还是长这样」——
+  // 图片 URL 不变 + 响应给过 max-age=604800，浏览器 7 天内连条件请求都不发。
+  // 戳汇总了内置风格样张与提示词缩略图，算法在 scripts/still-version.mts。
+  const expected = computeStillVersion();
+  if (!expected) return; // 新克隆还没出过图，跳过
+  assert.equal(
+    STILL_VERSION,
+    expected,
+    `版本戳过期（${STILL_VERSION} → 应为 ${expected}）：跑一次 npm run style:builtin-stills 或 ` +
+      `npm run prompt:technique-stills（出图脚本会自动刷新），否则用户看到的仍是浏览器缓存里的旧图`,
+  );
 });
 
 console.log(`\n${failures.length ? "FAILED" : "全部通过"}：${passed} 个用例`);

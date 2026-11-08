@@ -73,7 +73,7 @@ function htmlToText(html: string): string {
 async function fetchText(url: string): Promise<string> {
   const res = await fetch(url, {
     signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
-    headers: { "user-agent": "Mozilla/5.0 (style-library link fetch)" },
+    headers: { "user-agent": "Mozilla/5.0 (remotion-studio link fetch)" },
     redirect: "follow",
   });
   if (!res.ok) throw new Error(`HTTP ${res.status}`);

@@ -4,6 +4,7 @@ import path from "node:path";
 import { pluginFiles } from "./plugin";
 import { BACKDROP_TYPES } from "../shared/sceneKinds";
 import { getMeta } from "../shared/sceneMetas";
+import type { BuiltinStyleDetail, BuiltinStyleItem } from "../shared/builtin-styles";
 
 /**
  * 风格库：`server/styles/<slug>.md` 是风格规则（来自 garden-skills/motion-showreel 的风格库），
@@ -29,6 +30,8 @@ export type StylePreset = {
   sceneBias?: string[];
   subtitle?: Record<string, unknown>;
   forbidden?: string[];
+  /** 样张配方：这个风格该长什么样。见 server/showcase.ts 的模板层 */
+  showcase?: import("../shared/builtin-styles").Showcase;
 };
 
 let presetsCache: { sig: string; data: Record<string, StylePreset> } | null = null;
@@ -255,4 +258,46 @@ export function presetBackdropIssue(preset: StylePreset): string | null {
     }
   }
   return null;
+}
+
+/* ── 面板用：列表 / 静帧 / 抽屉详情 ─────────────────────────────────
+ *
+ * 这三个函数原来住在 `styleLibrary.service.ts` 里，和 341 条参考风格的索引混在一起。
+ * 参考风格删掉之后，它们只剩"读内置风格"这一件事，所以搬回本文件——**一个服务一个概念**：
+ * 本文件管"有哪些风格、规则写的是什么"，`stylePicks.service.ts` 管"用户选了哪几个"。
+ */
+
+const BUILTIN_STILL_DIR = path.join(STYLE_DIR, "stills");
+
+export function listBuiltinStyles(): BuiltinStyleItem[] {
+  return listStyles().map((s) => {
+    const rel = `stills/${s.slug}.webp`;
+    const has = fs.existsSync(path.join(BUILTIN_STILL_DIR, `${s.slug}.webp`));
+    return { slug: s.slug, name: s.name, hasPreset: s.hasPreset, still: has ? rel : null };
+  });
+}
+
+export function builtinStillAbsOf(slug: string): string | null {
+  if (!/^[a-z0-9-]+$/.test(slug)) return null;
+  const abs = path.join(BUILTIN_STILL_DIR, `${slug}.webp`);
+  return fs.existsSync(abs) ? abs : null;
+}
+
+/**
+ * 内置风格的详情（面板右抽屉用）。
+ *
+ * 为什么不在前端直接展示缩略图完事：内置风格的价值全在 **规则正文 + 结构化预设** 里，
+ * 一张 720 宽的静帧只体现配色和版式，看不出「本质 / 最俗的版本 / 坑」。
+ * 用户要判断"这个风格适不适合我的片子"，得让他看见规则本身。
+ */
+export function readBuiltinStyle(slug: string): BuiltinStyleDetail | null {
+  const info = listStyles().find((s) => s.slug === slug);
+  if (!info) return null;
+  return {
+    slug: info.slug,
+    name: info.name,
+    hasPreset: info.hasPreset,
+    preset: presetOf(slug),
+    rules: readStyle(slug),
+  };
 }

@@ -1,7 +1,15 @@
 import type { Op } from "@shared/ops";
 import type { Project } from "@shared/schema";
 import type { CustomAsset } from "@shared/assetLibrary";
-import type { BuiltinStyleDetail, BuiltinStyleItem, StyleItem, StylePicks, StyleUseDef } from "@shared/style-library";
+import type { BuiltinStyleDetail, BuiltinStyleItem, StylePicks } from "@shared/builtin-styles";
+import { STILL_VERSION } from "@shared/still-version";
+import type {
+  PromptDetail,
+  PromptGenre,
+  PromptGenreDef,
+  PromptItem,
+  PromptPick,
+} from "@shared/prompt-library";
 
 export type OpResponse = {
   project: Project;
@@ -155,6 +163,8 @@ export async function fetchSceneTypes() {
     summary: string;
     duration: { default: number; min: number; max: number };
     fields: any[];
+    /** 默认是否让 agent 在 list_scene_types 里查到；编辑器选择器据此显示角标 */
+    agentVisible?: boolean;
   }[];
 }
 
@@ -1414,55 +1424,24 @@ export async function removeOrphanDir(dir: string): Promise<{ dir: string; trash
   return data;
 }
 
-/* ── 风格库（341 条外部风格提示词）────────────────────────────────── */
+/* ── 内置风格（server/styles，77 个，能 apply_style）──────────────────── */
 
-export type StyleLibraryResponse = {
-  items: StyleItem[];
-  total: number;
-  withStill: number;
-  /** 库里一条都没有：前端提示"先跑 npm run style:import" */
-  empty: boolean;
-  uses: StyleUseDef[];
-  moods: string[];
-  builtin: BuiltinStyleItem[];
+export type BuiltinStylesResponse = {
+  items: BuiltinStyleItem[];
   picks: StylePicks | null;
 };
 
-export async function fetchStyleLibrary(params: {
-  q?: string;
-  use?: string;
-  mood?: string;
-  withStill?: boolean;
-}): Promise<StyleLibraryResponse> {
-  const sp = new URLSearchParams();
-  if (params.q) sp.set("q", params.q);
-  if (params.use && params.use !== "all") sp.set("use", params.use);
-  if (params.mood && params.mood !== "all") sp.set("mood", params.mood);
-  if (params.withStill) sp.set("withStill", "1");
-  const res = await jfetch(`/api/style-library?${sp.toString()}`);
+/** 列表。以前这里还要传 q/use/mood 去筛 341 条参考风格，现在只剩一份内置清单 */
+export async function fetchBuiltinStyles(): Promise<BuiltinStylesResponse> {
+  const res = await jfetch("/api/builtin-styles");
   const data = await res.json();
   if (!res.ok) throw new Error(data.error ?? "读取风格库失败");
   return data;
 }
 
-/** 用户加/删了文件后点「刷新」：强制重建索引 */
-export async function rebuildStyleLibrary(): Promise<{ total: number; withStill: number }> {
-  const res = await fetch("/api/style-library/rebuild", { method: "POST" });
-  const data = await res.json();
-  if (!res.ok) throw new Error(data.error ?? "重建索引失败");
-  return data;
-}
-
-export async function fetchStylePrompt(id: string): Promise<string> {
-  const res = await jfetch(`/api/style-library/prompt/${encodeURIComponent(id)}`);
-  const data = await res.json();
-  if (!res.ok) throw new Error(data.error ?? "读不到提示词");
-  return data.prompt as string;
-}
-
 /** 内置风格的详情：规则正文 + 结构化预设（palette/font/radius），右抽屉展示用 */
 export async function fetchBuiltinStyle(slug: string): Promise<BuiltinStyleDetail> {
-  const res = await jfetch(`/api/style-library/builtin/${encodeURIComponent(slug)}`);
+  const res = await jfetch(`/api/builtin-styles/${encodeURIComponent(slug)}`);
   const data = await res.json();
   if (!res.ok) throw new Error(data.error ?? "读不到这个内置风格");
   return data;
@@ -1472,17 +1451,15 @@ export async function fetchBuiltinStyle(slug: string): Promise<BuiltinStyleDetai
  * 保存勾选。`notify` 为真时服务端同时给 agent 留一条言——
  * 这是"用户勾完回来说一声"的实际实现，所以面板上那个按钮不是纯 UI 效果。
  *
- * `ids` 是参考风格编号（要翻译），`builtinSlugs` 是内置风格 slug（能直接 apply_style）。
- * 两个字段分开送：混成一个数组后服务端就得猜哪个是哪个，猜错会让 agent 拿画风描述去套配色。
+ * 只剩一组 `builtinSlugs`：参考风格那组（ids，要翻译才能落地）随库一起删了。
  */
 export async function saveStylePicks(input: {
-  ids: string[];
-  builtinSlugs?: string[];
+  builtinSlugs: string[];
   note?: string;
   projectId?: string;
   notify?: boolean;
 }): Promise<{ picks: StylePicks; dropped: string[]; notified: boolean }> {
-  const res = await fetch("/api/style-library/picks", {
+  const res = await fetch("/api/style-picks", {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify(input),
@@ -1492,22 +1469,98 @@ export async function saveStylePicks(input: {
   return data;
 }
 
-/** 人工改气质（面板里点标签） */
-export async function saveStyleOverride(id: string, patch: { moods?: string[]; use?: string }): Promise<void> {
-  const res = await fetch("/api/style-library/override", {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({ id, ...patch }),
-  });
-  if (!res.ok) {
-    const data = await res.json().catch(() => ({}));
-    throw new Error(data.error ?? "保存标注失败");
-  }
+/**
+ * 静帧 URL：**必须带版本戳**。
+ *
+ * 不带的话 URL 永远是 `/still/<slug>`，而服务端给过 `max-age=604800`；
+ * 重出 77 张样张后，浏览器握着旧响应 7 天内根本不发请求，用户看到的还是
+ * 旧的「五行要点」通用页。ETag 会变，但强缓存没过期就不会发条件请求去校验它。
+ * 版本戳由生成脚本按所有 webp 的 size+mtime 算出，图一变 URL 就变。没有静帧时前端画占位卡。
+ */
+export const builtinStillUrl = (slug: string, v?: string | null): string =>
+  `/api/builtin-styles/still/${encodeURIComponent(slug)}?v=${encodeURIComponent(v ?? STILL_VERSION)}`;
+
+/* ── 提示词库（153 篇整片配方）────────────────────────────────────── */
+
+/**
+ * 与风格库是两套接口，别混用。
+ * 风格库答"画面长什么样"（画风参考，要翻译成本片主题）；
+ * 提示词库答"这条片子怎么拍"（目标 / 结构 / 动效铁律 / 禁止项）。
+ */
+export type PromptLibraryResponse = {
+  items: PromptItem[];
+  /** 全库条数（不是本次筛选结果）：筛选时也要在标签上显示总数 */
+  total: number;
+  withStill: number;
+  empty: boolean;
+  genres: PromptGenreDef[];
+  /** 体裁 → 条数，顶部筛选条直接用，前端不再算一遍 */
+  counts: Record<PromptGenre, number>;
+};
+
+export async function fetchPromptLibrary(params: {
+  q?: string;
+  genre?: string;
+  withStill?: boolean;
+}): Promise<PromptLibraryResponse> {
+  const sp = new URLSearchParams();
+  if (params.q) sp.set("q", params.q);
+  if (params.genre && params.genre !== "all") sp.set("genre", params.genre);
+  if (params.withStill) sp.set("withStill", "1");
+  const res = await jfetch(`/api/prompt-library?${sp.toString()}`);
+  const data = await res.json();
+  if (!res.ok) throw new Error(data.error ?? "读取提示词库失败");
+  return data;
 }
 
-/** 静帧 URL：没有静帧时返回 null，前端画占位卡 */
-export const styleStillUrl = (id: string): string => `/api/style-library/still/${encodeURIComponent(id)}`;
-export const builtinStillUrl = (slug: string): string => `/api/style-library/builtin-still/${encodeURIComponent(slug)}`;
+/** 详情才带 700 字正文：列表一次背 153 篇正文接近 100KB，首屏用不上 */
+export async function fetchPromptDetail(id: string): Promise<PromptDetail> {
+  const res = await jfetch(`/api/prompt-library/item/${encodeURIComponent(id)}`);
+  const data = await res.json();
+  if (!res.ok) throw new Error(data.error ?? "读不到这一条");
+  return data;
+}
+
+export async function rebuildPromptLibrary(): Promise<{ total: number; withStill: number }> {
+  const res = await fetch("/api/prompt-library/rebuild", { method: "POST" });
+  const data = await res.json();
+  if (!res.ok) throw new Error(data.error ?? "重建提示词库索引失败");
+  return data;
+}
+
+export async function fetchPromptPick(): Promise<PromptPick | null> {
+  const res = await jfetch("/api/prompt-library/pick");
+  const data = await res.json();
+  if (!res.ok) throw new Error(data.error ?? "读取已采纳配方失败");
+  return data.pick ?? null;
+}
+
+/**
+ * 采纳一条配方（单选，覆盖）。`notify` 为真时服务端同时给 agent 留一条言，
+ * 留言里给的是 md 相对路径——agent 自己去读，永远读到最新版，也不占对话上下文。
+ * 传空 id 表示撤销采纳。
+ */
+export async function pickPrompt(input: {
+  id: string;
+  note?: string;
+  notify?: boolean;
+}): Promise<{ pick: PromptPick | null; notified: boolean }> {
+  const res = await fetch("/api/prompt-library/pick", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(input),
+  });
+  const data = await res.json();
+  if (!res.ok) throw new Error(data.error ?? "采纳失败");
+  return data;
+}
+
+/**
+ * 提示词缩略图 URL。带版本戳的理由同 `builtinStillUrl`：URL 不变 + 长缓存会让重出的图
+ * 一直不出现；尤其 TK 段原本返回过 404，补图后更不能让浏览器还握着那个旧响应。
+ */
+export const promptStillUrl = (id: string): string =>
+  `/api/prompt-library/still/${encodeURIComponent(id)}?v=${encodeURIComponent(STILL_VERSION)}`;
 
 /* ── 设计稿（export_design 生成，给人看的那一版）──────────────────── */
 

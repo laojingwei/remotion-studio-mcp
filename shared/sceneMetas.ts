@@ -15,6 +15,7 @@ import { allLookIds, lookLabelOf } from "./scene3dLooks";
  * 两端现在共用这个常量，手柄拖到哪，落库就是哪。
  */
 import { dslIssues, dslSchema, geometrySchema, materialSchema, type Scene3DDsl } from "./scene3dDsl";
+import { isAgentVisibleBuiltinType } from "./sceneKinds";
 
 export const MIN_SCENE_FRAMES = 15;
 
@@ -23,6 +24,18 @@ export type SceneMeta = {
   name: string;
   /** 选择器里的分组：开场 / 内容 / 数据 / 收尾 / 自定义 */
   category: string;
+  /**
+   * 标签：这条场景要不要出现在 agent 的 `list_scene_types` 清单里。
+   *
+   * 缺省值不是"一律可见"：内置场景按 `isAgentVisibleBuiltinType()` 算
+   * （动效 / 氛围 / 3D / 图解 / 自由画布 / 空白可见，其余固定版式隐藏），
+   * 插件场景默认可见。想给某条单独开口子，在自己的 meta 上写 `agentVisible: true`
+   * 即可；插件也可以在场景 JSON 里写 `agentVisible: false` 主动藏起来。
+   *
+   * 只影响"列清单"，不影响渲染、ops 写入和编辑器选择器 —— 老工程里的隐藏版式
+   * 照样能播，用户点名要某个版式时 agent 也照样能查它的字段表。
+   */
+  agentVisible?: boolean;
   summary: string;
   schema: z.ZodObject<z.ZodRawShape>;
   defaultProps: Record<string, unknown>;
@@ -1947,6 +1960,16 @@ export const SCENE_METAS: SceneMeta[] = [
   layeredMeta,
 ];
 
+/* 给每一个内置场景落一个显式的「给不给 agent 看」标签。
+   不在 78 个 meta 里逐个手写：默认规则集中在 sceneKinds.ts，单条要例外时
+   才在自己的 meta 上写 agentVisible。这样"每一个场景都有标签"和"规则只有一处"
+   两件事都成立。插件走 jsonToSceneMeta，那边自带标签。 */
+for (const meta of SCENE_METAS) {
+  if (meta.agentVisible === undefined) {
+    meta.agentVisible = isAgentVisibleBuiltinType(meta.type);
+  }
+}
+
 /**
  * 注册一个插件场景。**幂等**：同 type 只认第一个注册者。
  *
@@ -1966,6 +1989,8 @@ export function registerSceneMeta(meta: SceneMeta): { ok: boolean; reason?: stri
       reason: `type「${meta.type}」已被占用（内置场景或先注册的插件）。给插件的场景换个 type，建议带插件前缀`,
     };
   }
+  // 动态注册的一律补上标签：插件默认给 agent 看，除非它自己在 JSON 里写了 false
+  if (meta.agentVisible === undefined) meta.agentVisible = true;
   SCENE_METAS.push(meta);
   return { ok: true };
 }
@@ -1986,8 +2011,18 @@ export function unregisterSceneMeta(type: string): boolean {
 export const getMeta = (type: string): SceneMeta | undefined =>
   SCENE_METAS.find((m) => m.type === type);
 
-export const metaList = () =>
-  SCENE_METAS.map((m) => ({
+/** 标签读取：显式写了就认显式值，没写的（理论上只有外部手搓的 meta）默认可见 */
+export const isAgentVisible = (meta: SceneMeta): boolean => meta.agentVisible !== false;
+
+/**
+ * 场景清单。默认给全量（编辑器选择器、属性面板）；
+ * `agentOnly: true` 是给 agent 的视图 —— 只返回标签允许的类型。
+ *
+ * 为什么分视图而不是直接过滤注册表：SCENE_METAS 同时是渲染端和 ops 写入的
+ * 权威表，隐藏类型必须留在里面，否则老工程打开就是白屏。
+ */
+export const metaList = (opts: { agentOnly?: boolean } = {}) =>
+  SCENE_METAS.filter((m) => !opts.agentOnly || isAgentVisible(m)).map((m) => ({
     type: m.type,
     name: m.name,
     category: m.category,
@@ -1995,6 +2030,7 @@ export const metaList = () =>
     duration: m.duration,
     elements: m.elements ?? [],
     fields: describeFields(m.schema),
+    agentVisible: isAgentVisible(m),
   }));
 
 /** 把 zod object 拆成字段描述，供 agent 与属性面板共用 */

@@ -9,7 +9,7 @@
   2. **改造**：以一个风格为底，替换其中一两条（比如把配色换成品牌色、把运动换成步进），并在 brief 里写明改了什么。
   3. **自定义**：主题需要的风格不在库里时，按 `_template.md` 现写一份规则放进 brief。对标作品、媒介特性、品牌资产都可以作为依据。
 - **只读你选中的那 1–2 个文件**，不要把整个风格库都读进上下文。
-- **一键套用**：43 个风格**全都**带结构化预设（`server/styles/presets.json`）：
+- **一键套用**：77 个风格**全都**带结构化预设（`server/styles/presets.json`）：
   `apply_style(slug)` 一次改到位（主题色 + 标题/正文字体 + 圆角 + 全片入场转场 + 推荐版式 + 禁止项），
   `probe_style` 也能为任意风格出真样张。预设只锁定"系统的值"——版式选择、文案、构图仍按 md 里的规则重做。
   新风格要能一键套，复制一条现有预设改值即可（字段见 `presets.json`；`transition.type` 只能是
@@ -60,23 +60,44 @@
 |  | `art-deco.md` | 装饰艺术：阶梯、扇面、平行镶条，装饰组织构图与开合 | Canvas / SVG / Three.js | 品牌宣传、片头、Logo | 庄重、精致 |
 |  | `one-line.md` | 一笔线描：连续路径勾出轮廓，也串起事物之间的关系 | Canvas / SVG | 品牌故事、讲解、Logo、循环 | 简洁、轻巧 |
 |  | `concept-morph.md` | 数学／概念形变：保住对象对应关系，让推理在连续变化中可见 | Canvas / SVG / Manim | 数学讲解、科学概念、算法原理 | 清楚、专注 |
+|  | `caption-news.md` | 大字幕承担全部叙述，静音也读得懂，切点咬在拍上 | Canvas / DOM | 新闻、数据发布、社媒竖屏 | 清楚、可信 |
+|  | `constructivist-montage.md` | 档案印成红黑双色，沿斜轴切碎并置，用剪辑完成论证 | Canvas / SVG | 观点片、历史题材、宣发 | 强烈、论辩 |
+|  | `news-package-system.md` | 品牌板、标签、纸条、墨卡、印章反复复用的新闻包装系统 | DOM / SVG | 新闻栏目、数据播报、栏目包装 | 权威、利落 |
+|  | `screenprint-poster.md` | 一色一刀的实色叠印，没有网点与渐变，像海报在镜头前被印出来 | Canvas / SVG | 旅行、城市、活动主视觉 | 明快、手作 |
+|  | `halftone-dossier.md` | 整片一张奶油纸，明暗全靠网点大小，暗场也是印出来的 | Canvas / SVG | 调查报道、档案题材、悬疑 | 复古、冷峻 |
+|  | `pictogram-catalogue.md` | 一个象形符号加巨字加编号，一卡一个条目地过 | Canvas / SVG | 图鉴、清单、产品线 | 秩序、轻快 |
+|  | `game-show-flat.md` | 全片一个快 tempo，每次弹出都踩拍且同时是一记音效 | Canvas / DOM | 综艺包装、活动快剪、促销 | 热闹、亢奋 |
+|  | `microgame-flash.md` | 一句指令加 2.5–4 秒加一个动作一个结果，每关换一种媒介 | Canvas / 混合媒介 | 品牌快闪、功能串烧、社媒 | 疯、有节奏 |
 | 界面与产品 | `minimal-ui.md` | 浅色、干净、弹簧手感的界面动效 | DOM / SVG / Canvas | UI 演示、宣传片 | 精致、友好 |
 |  | `dark-keynote.md` | 发布会：深色舞台、聚光、大数字、产品英雄镜头 | DOM / Canvas / Three.js | 宣传片、数据 | 隆重、高级 |
 |  | `isometric-infographic.md` | 等距视角的小世界，信息层层搭起来 | Canvas / SVG | 讲解、宣传片 | 清晰、俏皮 |
 |  | `data-motion.md` | 数字和图表本身就是主角 | Canvas / SVG | 数据爆点、宣传片 | 可信、利落 |
 |  | `blueprint.md` | 工程蓝图：投影、尺寸线、剖面与装配关系，逐层解释结构 | Canvas / SVG / Three.js | 原理讲解、产品结构、方案对比 | 精确、理性 |
 |  | `hologram-hud.md` | 全息空间界面：有深度的线框、扫描切面、锚定对象的标注 | Three.js + SVG / DOM | 技术概念、系统讲解、片头 | 冷静、未来感 |
+|  | `realtime-countdown.md` | 时钟每整秒跳一次带着画面走，格子越近零点越多 | Canvas / DOM | 直播倒计时、发布会、赛事 | 紧张、现场 |
+|  | `satellite-briefing.md` | 真影像做地面、只叠一层细线标记，一屏一个读数 | Canvas / WebGL | 地理题材、选址、物流 | 冷静、可信 |
+|  | `redrawn-screencast.md` | 看着像真实录屏，但窗口菜单全是重画的，相机能钻进按钮 | DOM / SVG | 产品演示、SaaS 宣传 | 熟悉、精确 |
+|  | `visual-investigation.md` | 多路独立来源在同一秒对上，切点就是同步点 | Canvas / DOM | 调查报道、事故复盘、科普 | 严肃、追问 |
 | 复古与屏幕 | `pixel-game.md` | 16-bit 像素：小画布放大、步进、调色板 | Canvas + WebGL | 作品集、循环、Logo | 怀旧、可爱 |
 |  | `pixel-diorama.md` | 像素立体场景：平面像素角色走入有光照、遮挡与纵深的布景 | Three.js + Canvas | 故事宣传、游戏概念、片头、循环 | 怀旧、沉浸 |
 |  | `crt-vhs.md` | 显像管和录像带：扫描线、色差、跟踪噪声 | Canvas + WebGL | 片头、怀旧主题 | 怀旧、诡异 |
 |  | `terminal-ascii.md` | 终端：等宽字符、光标、ASCII 图形 | Canvas | 开发者产品、片头 | 极客、冷静 |
 |  | `glitch-digital.md` | 数字故障：块状错位、像素排序、乱码重排，故障落在拍上 | Canvas + WebGL | 片头、金句卡点、电子音乐 | 叛逆、紧张 |
 |  | `synthwave-neon.md` | 合成波：80 年代想象的未来，夜色、霓虹、镀铬，信号按主题挑 | Canvas + WebGL / Three.js | 片头、音乐向 | 热烈、复古未来 |
+|  | `newsreel-1920s.md` | 真实档案跑在放映窗里，银盐单色，字幕卡接叙述 | Canvas / DOM | 历史回顾、年代宣传 | 怀旧、庄重 |
+|  | `silent-film-1920s.md` | 墨线灰洗的 4:3 画幅在幕布间放映，字幕卡替对白 | Canvas / SVG | 喜剧桥段、怀旧片头 | 诙谐、怀旧 |
+|  | `liminal-footage.md` | 1990 年代 VHS 第一人称录像，走进熟悉但不对的重复空间 | Canvas / WebGL | 恐怖氛围、游戏概念、悬疑 | 不安、沉浸 |
 | 3D 与材质 | `glass-material.md` | 玻璃、金属和光，镜头在空间里慢慢运动 | Three.js | 产品宣传、Logo | 高级、精密 |
 |  | `soft-3d-toy.md` | 软萌 3D：圆润、哑光、黏土和玩具感 | Three.js | 宣传片、吉祥物、讲解 | 亲和、愉快 |
 |  | `liquid-shader.md` | 液态与流体：融球、金属液、噪声流动 | WebGL 着色器 | 片头、转场、Logo | 迷幻、流动 |
 |  | `stained-glass.md` | 彩色玻璃镶嵌：金属接缝分隔透光色片，彩光随背光落入空间 | Canvas / SVG / Three.js | 文化工艺、品牌情绪、Logo | 通透、静谧 |
 |  | `tilt-shift-miniature.md` | 移轴微缩：俯斜视角、选择性焦点和局部活动，缩小一个世界 | Three.js / 分层 Canvas | 服务流程、空间概览、循环 | 精巧、专注 |
+|  | `exploded-teardown.md` | 真实物体按层拆开、标真实尺寸、再合拢 | Three.js / SVG | 产品结构、硬件发布、原理讲解 | 精密、可信 |
+|  | `architectural-model.md` | 真实体量挤成素白模型，数据只以投上去的光出现 | Three.js | 城市规划、地产、政策讲解 | 冷静、宏大 |
+|  | `pointcloud-scan.md` | 每个点都是真实回波，点变面就是论证 | Three.js / Canvas | 测绘、遗产记录、技术概念 | 冷静、未来感 |
+|  | `data-as-objects.md` | 一个物件等于一个写明数量，堆起来的高度就是数据 | Three.js / Canvas | 能源、公益、规模对比 | 直白、有重量 |
+|  | `brick-toys.md` | 真实桌面上的积木世界，微距定格，塑料光泽与房间的落差 | 分层渲染 + Canvas | 教育、儿童产品、创意短片 | 童趣、巧 |
+|  | `lowpoly-isometric.md` | 真的 3D 低多边形加正交等距，硬边大面，一盏光 | Three.js | 产品线、流程、游戏概念 | 清爽、秩序 |
 | 生成与抽象 | `generative-geometry.md` | 规则生成的阵列、波、对称图形 | Canvas / WebGL | 循环、作品集、片头 | 催眠、秩序 |
 |  | `particle-field.md` | 成千上万的点：流动、聚合、组字、炸开 | Canvas / WebGL / Three.js | 签名时刻、Logo | 宏大、科技 |
 |  | `soft-organic.md` | 柔光有机：颗粒渐变、慢慢变形的形状、衬线斜体 | WebGL / Canvas | 品牌情绪片、生活方式宣传 | 温暖、安静 |
@@ -87,6 +108,8 @@
 |  | `cel-anime-80s.md` | 80 年代赛璐璐动画：手绘背景、硬边色层、有限姿态与摄影台镜头 | Canvas / PixiJS / Three.js | 角色宣传、故事片头、预告 | 鲜明、戏剧感 |
 |  | `rubber-hose.md` | 橡皮管动画：连续曲肢、挤压伸展、蓄力与反应驱动表演 | Canvas / SVG | 吉祥物、轻喜剧讲解、Logo | 诙谐、活泼 |
 |  | `whiteboard-explainer.md` | 白板手绘解说：分笔绘制与箭头逐步说明关系，保留可回看的全局图 | Canvas / SVG | 原理讲解、流程说明、课程片段 | 亲近、清晰 |
+|  | `adult-scifi-toon.md` | 煮沸的等宽粗线配平涂硬边阴影，两个反应相反的人 | Canvas / SVG | 品牌人格片、科普喜剧 | 痞、好笑 |
+|  | `upa-50s-flat.md` | 平涂印刷色配断口墨线，色层错位并在二拍重摆 | Canvas / SVG | 讲解、品牌故事、片头 | 摩登、俏皮 |
 | 手作 | `crayon-storybook.md` | 蜡笔、彩铅、水彩的绘本 | p5.js + p5.brush | 故事向宣传、讲解 | 童趣、温暖 |
 |  | `ink-wash.md` | 水墨：晕染、飞白、留白 | Canvas / WebGL | 东方题材、片头 | 意境、沉静 |
 |  | `paper-cut.md` | 纸艺分层：剪纸、投影、纸纹、立体书 | Canvas / Three.js | 宣传片、节日、讲解 | 温暖、精巧 |
@@ -94,8 +117,19 @@
 |  | `ukiyo-e.md` | 浮世绘木版：主版墨线、分版套色、局部渐层与斜向截景 | Canvas / SVG / WebGL | 文化工艺、旅行片头、品牌故事 | 平和、有力 |
 |  | `shadow-puppet.md` | 透光皮影：染色镂空、关节操纵与幕布背光，叠片加深 | Canvas / SVG / PixiJS | 文化宣传、故事讲解、Logo | 温暖、戏剧感 |
 |  | `illuminated-manuscript.md` | 泥金手抄本：羊皮纸、墨字与金饰组成书页，装饰里发生局部故事 | Canvas / SVG / Three.js | 文学片头、文化工艺、短寓言 | 珍重、静谧 |
+|  | `engineering-board.md` | 手绘工程板，相机在纸面上推拉，每拍有东西落下或画上 | Canvas / SVG | 方案对比、硬件讲解、发布会 | 严谨、手工 |
+|  | `watercolor-wash.md` | 一笔一笔长在纸上，纸本身就是橡皮 | Canvas / WebGL | 品牌情绪、文化题材、绘本 | 温柔、含蓄 |
+|  | `pen-wash-sketch.md` | 先墨线后淡彩，两层错位不融合，像现场速写 | Canvas / SVG | 旅行、走访、纪实 | 生动、即兴 |
+|  | `red-papercut.md` | 一张红纸平摊，孔就是画，铆钉剪偶走 12fps | Canvas / SVG | 节庆、东方题材、片头 | 喜庆、利落 |
+|  | `woodcut-print.md` | 一块版只有黑，白是刀刻掉的，四周留纸边 | Canvas / SVG | 社论、历史、文学题材 | 粗粝、有力 |
+|  | `popup-book.md` | 真实桌面上一本硬壳书翻开，纸世界弹起 | Three.js / 分层 Canvas | 儿童内容、产品故事、讲解 | 惊喜、温暖 |
 | 电影感 | `cinematic-title.md` | 电影片头：宽银幕、胶片颗粒、慢推、衬线大字 | Canvas / DOM + WebGL | 片头、预告、Logo | 史诗、沉稳 |
 |  | `mixed-media-era.md` | 每个年代一种媒介，一根线串起整部片 | 混合 | 历史回顾、作品集 | 史诗、动人 |
+|  | `sports-telestrator.md` | 先放完动作再冻帧，画线、分屏、射门图 | Canvas / DOM | 体育、动作分析、教学 | 紧张、专业 |
+|  | `timelapse-symphony.md` | 配乐先写、画面照谱排，一刀落在乐句上 | Canvas / WebGL | 城市、自然、品牌形象片 | 辽阔、抒情 |
+|  | `microscope-story.md` | 标本是真实显微照片，只有标注、比例尺与推近在解释它 | Canvas / SVG | 科普、医药、材料 | 精确、好奇 |
+|  | `archive-lightbox.md` | 真实档案摊在冷白灯箱上，破损与编号都是真的 | Canvas / SVG | 纪录片、博物馆、品牌史 | 珍重、冷静 |
+|  | `spy-title-60s.md` | 四色实墨、手剪硬边，侧面剪影在字幕搭的布景里追一件东西 | Canvas / SVG | 片头、活动开场、类型片 | 俏皮、时髦 |
 
 ## 新增风格
 

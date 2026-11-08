@@ -11,7 +11,7 @@
   （当前工程只在 create / import / switch / 删除当前工程时变；显式 projectId 只影响本次调用）
   测试工程太多用 `archive_project`（可逆），别用 `delete_project`（不可逆）；`list_projects` 默认不列已归档的
 - 需求与分镜：intake → save_brief → confirm_brief → save_storyboard → build_storyboard
-- 场景与元素：add/update_scene、76 个 2D 版式（scene-recipes）、freeform、元素/特效/转场
+- 场景与元素：add/update_scene、`list_scene_types` 返回的默认开放类型（freeform / scene3d / iso / empty / 动效 / 氛围 / 插件）、元素/特效/转场。内置固定版式（scene-recipes 里那批）默认不在这张清单里，别主动用
 - **3D 场景**：`add_scene(type="scene3d")`——抽象氛围用 preset（6 个母题），具体物体写 `graph` 场景图；
   写法与坑见 `get_guide("scene3d")`，字段全表 `list_scene_types(type:"scene3d")`
 - **转场**：`list_transitions`（内置 12 种 + 插件，含参数表）→ `set_transitions { type, durationInFrames, params }`；插件转场出场自动反向
@@ -25,9 +25,9 @@
 - 音频字幕：tts_narration、**revise_script（改一句台词 → 只重配那段）**、add_audio_track、set_subtitle、export_subtitles
 - 预览渲染：preview_frames（单帧 frames:[f]）、render_video(dryRun/wait)、check_project
 - 风格主题：list_styles / apply_style / set_theme / set_formats
-- **风格库（341 条参考风格）**：用户先在编辑器「风格库」面板勾选 → `get_style_pick` 读他选了什么；
-  用户没挑就 `list_style_library(q/use/mood)` 找候选 → `get_style_library_prompt(id)` 读原文。
-  **这些是画风描述、不能 apply_style**，要翻译成 theme/版式后用 `probe_style` 出我们引擎的样张
+- **风格库（77 个内置风格）**：用户先在编辑器「风格库」面板勾选 → `get_style_pick` 读他选了什么；
+  用户没挑就用 `list_styles` 找候选。**回来的都是 slug，直接 `apply_style` 就能套**，不用翻译。
+  用户给的是参考图/对标片（没有 slug）时，才走 `get_guide("style-translate")` 翻成 theme/版式
 - 批量：apply_ops（整批原子）
 - 协作记忆：reply_user / remember / recall
 

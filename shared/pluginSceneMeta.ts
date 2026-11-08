@@ -63,6 +63,11 @@ export type PluginSceneJson = {
   duration?: { default?: number; min?: number; max?: number };
   /** 可拖动元素（对应组件里 `<Editable id="…">`） */
   elements?: { id: string; label: string; prop?: string }[];
+  /**
+   * 标签：要不要让 agent 在 `list_scene_types` 里查到这个场景。
+   * 插件场景**默认可见**（和内置固定版式相反）；写 false 可主动藏起来。
+   */
+  agentVisible?: boolean;
   fields: PluginField[];
 };
 
@@ -230,6 +235,8 @@ export function jsonToSceneMeta(raw: unknown, sourceId: string): PluginMetaParse
       type,
       name,
       category: typeof raw.category === "string" && raw.category.trim() ? raw.category.trim() : "插件",
+      // 插件默认让 agent 查到；显式 false 才藏
+      agentVisible: typeof raw.agentVisible === "boolean" ? raw.agentVisible : true,
       summary: typeof raw.summary === "string" ? raw.summary : `插件场景（${sourceId}）`,
       schema: z.object(shape),
       defaultProps,

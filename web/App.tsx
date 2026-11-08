@@ -1169,13 +1169,13 @@ export default function App() {
         </button>
 
         {/*
-          风格库和插件同级放顶栏，理由同上：341 条风格提示词只有从这里进得去，
+          风格库和插件同级放顶栏，理由同上：内置风格 + 提示词只有从这里进得去，
           用户不可能知道"磁盘上有个文件夹"。
         */}
         <button
           className="ghost plugin-entry"
           onClick={() => setStyleLibOpen(true)}
-          title="风格库：浏览 341 条风格，勾选后交给 agent"
+          title="风格库：内置风格（能直接 apply_style）+ 提示词（整片配方与单技法），挑完交给 agent"
         >
           <span>风格库</span>
         </button>

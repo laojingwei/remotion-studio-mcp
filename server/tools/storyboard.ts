@@ -26,7 +26,7 @@ import { densitySummary, projectDensity, rhythmIssues } from "../../shared/densi
 import { readScript } from "../script.service";
 import { markDesignExported, readReview } from "../review.service";
 import { buildDesignCard, writeDesignCard } from "../design.service";
-import { readPicks } from "../styleLibrary.service";
+import { readPicks } from "../stylePicks.service";
 import {
   SHOT_RELATIONS,
   readStoryboard,

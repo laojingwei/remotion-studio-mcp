@@ -13,6 +13,7 @@
 - 第一次接活：通读 §1 行为契约 + §2 能力地图，其余用到哪节读哪节
 - 干活中想不起工具：直接跳 §5「我想…」意图速查
 - 只读某一节：`get_guide("manual", "意图速查")`（按标题关键字匹配）
+- **场景选型一律以 `list_scene_types` 为准**：本书和别的指南里出现的 `title` / `bullets` / `stats` / `chart` 等固定版式，是给人和老工程看的示例，默认都带了「不给 agent 看」的标签、不会出现在清单里。默认可用的是 `freeform` / `scene3d` / `iso` / `empty` / 动效类 / 氛围类 / 插件场景；别主动拿清单外的版式搭片子，用户点名要用某个版式时再查它的字段。
 
 ---
 
@@ -59,7 +60,7 @@
 | 能力域 | 能做到 | 入口 |
 |---|---|---|
 | 工程 | 多工程并存（**可列/可切换**，当前工程标 ★ 并落盘，重启接上次）、模板沉淀/套用、历史快照（50 份，可回滚任意版本）、zip 导入导出 | `list_projects` `switch_project` `create_project` `save_template` `delete_template` `get_history` `restore_rev` `export/import_project` |
-| 场景 | **76 个 2D 场景类型**：75 个内置版式（封面/文字/列表/数据/对比/流程/对话/收尾）+ **freeform 自由画布**（自排 svg/div，上限 40 个元素）；另有 3D 与图解两行见下 | `list_scene_types` `add_scene` `update_freeform_element` |
+| 场景 | **78 个场景类型**（76 个 2D + `scene3d` + `iso`），但 `list_scene_types` 默认只回对 agent 开放的那批：**freeform 自由画布**（自排 svg/div，上限 40 个元素）、`empty` 空白、`scene3d` 3D、`iso` 图解、动效类、氛围类、插件场景。其余内置固定版式（现成骨架）都带了 `agentVisible: false` 标签、默认不列出——**别主动拿它们搭片子**，画面会被锁进既有骨架；用户点名要用某个版式时再 `list_scene_types(type:"…")` 查字段 | `list_scene_types` `add_scene` `update_freeform_element` |
 | **3D 场景** | `scene3d`：**6 个预设母题**（环绕核心/粒子星云/网格地平线/零件拆解/波形柱阵/球面网络）+ **blank 空白画布（默认）** + **`graph` 场景图 DSL**——几何体/材质/灯光/粒子/相机运镜，最多 48 节点，能做行星公转、装置拆解、分子结构这类"具体的东西"。编辑器右栏对 graph **逐节点可编辑**（大纲树 + 变换/形状/材质/相机/灯光），人和 agent 改的是同一批 op | 建：`add_scene(type:"scene3d")`；改单个节点：`get_graph` → `update_graph_node`（**别整份覆盖 graph**）；写法**必读** `get_guide("scene3d")`，字段全表 `list_scene_types(type:"scene3d")` |
 | **图解插图** | `iso`：等轴测技术插图（anatomy 产出），零件级细节、可按帧高亮、推近不糊 | `add_scene(type:"iso")`；画法与坑见 `get_guide("external-tools")` |
 | 元素 | 场景内图片/文本/形状/视频/音频元素，rich 外观全套（圆角/边框/阴影/滤镜/混合/裁切/字体/行高/字距/对齐/斜体/下划线） | `list_element_library` `add_element` `update_element` |
@@ -74,7 +75,7 @@
 | 设计稿 | 分镜写完、建场景**之前**出的一份**给人看**的稿子：每幕屏幕上什么字、口播说什么、几秒、承担什么关系。用户读它改字（几秒），而不是等 50 幕建完再改（重建场景）。回执分「必须修」（必须信息缺失/禁用词，不修建出来就是错的）与「建议改」（关系不足/字幕超长/还没出样张/总时长偏离） | `export_design` · 编辑器顶栏「设计稿」可整篇读 |
 | 文字 | 一屏写多少字、停多久、断在哪。读窗按每字 0.25s 算（18 字就要 4.5s），断行按意群不按长度（切错会把"不是…才…"切成反义）；13 种文字手法只有一部分有对应版式，没有的走降级并说明 | `get_guide("text-events")` · `maskreveal`/`stomp`/`typewriter`/`highlight`/`counter`/`scramble` |
 | 动作 | 动作只承担引导/反馈/关系/转场，选不出就删。错峰总长 = 单项时长+(n−1)×间隔；转场按两幕关系选不按效果名选；接缝看速度匹配不看位置 | `get_guide("motion-rules")` · `set_transitions` · `anim[].ease` |
-| 风格库 | 编辑器「风格库」面板两个分区**都能勾选并一起发给 agent**：上区 **341 条参考风格**（画风描述，**不能 apply_style**，要翻译成 theme/版式）；下区 **43 个内置风格**（带 palette/font 预设，`apply_style(slug)` 直接套）。`get_style_pick()` 会分两组返回，别搞反。参考那一组怎么翻读 `get_guide("style-translate")` | `list_style_library` `get_style_pick` `get_style_library_prompt` `apply_style` |
+| 风格库 | 编辑器「风格库」面板两个分区：**内置风格 77 个**（带 palette/font 预设，`apply_style(slug)` 直接套，**不用翻译**）· **提示词 179 条**（整片配方 153 + 单技法 26，单选采纳，agent 读 md 自己落地）。`get_style_pick()` 只回内置风格的 slug；用户给的是**参考图/对标片**（没有 slug）时，才读 `get_guide("style-translate")` 翻成 theme/版式 | `get_style_pick` `list_styles` `apply_style` |
 | 画幅 | 多画幅并存（9:16 / 16:9 / 1:1 / 自定义 16–7680）。**`set_formats` 默认覆盖**：没写进 formats 的画幅会被删掉（用户说「只要竖屏」就只传 portrait，否则编辑器顶栏会留着横屏按钮）；只改尺寸传 `merge:true` | `set_formats` |
 | 预览 | 单帧/多帧抽帧（按场景偏移）、真实浏览器渲染前 dryRun 预检 | `preview_frames`（单帧 `frames:[f]`） `render_video(dryRun)` |
 | 渲染 | 正式出片（可等完成）、进度查询、取消、历史产物清理 | `render_video` `get_render_status` `cancel_render` `cleanup_renders` |
@@ -132,7 +133,7 @@ fx 类的序列帧文件夹会整体成一个结果，直接给带 `{frame}` 的
 
 **风格与主题**：`list_styles` · `get_style` · `apply_style` · `set_theme`（配色/字体/motion）· `set_formats`
 
-**风格库（341 条参考风格，不是可套用的内置风格）**：`list_style_library`（按 用途/气质/关键词 检索）· `get_style_pick`（读用户在编辑器面板里勾选的）· `get_style_library_prompt`（读某一条的完整提示词）
+**风格库**：`get_style_pick`（读用户在编辑器面板里勾选的内置风格，全是可直接 `apply_style` 的 slug）· `list_styles`（自己找候选）
 
 **验收与渲染**：`render_cover`（某帧导出封面 PNG）· `request_review`（请用户到编辑器看片，返回地址+重点看什么）· `confirm_review(approved, feedback[], selfRender)`（没通过 → `render_video` 拒绝）· `preview_frame` · `preview_frames` · `render_video`（`wait` / `dryRun` / `force`）· `get_render_status` · `cancel_render` · `cleanup_renders` · `refresh_bundle`（改了 public 素材后渲染前调用）
 
@@ -175,7 +176,7 @@ fx 类的序列帧文件夹会整体成一个结果，直接给带 `{frame}` 的
 | 卡点 | 有 BGM 文件：`analyze_audio(src)` 拿 BPM + 拍点帧号（**置信度 <2.5 别自动用**，问用户 BPM 后 `set_beat_grid`）；再把转场/特效的 from 对着拍点放 |
 | 配音前发现 TTS 没开 | `tts_check()` 探连通 → `tts_check(deep=true)` 验配置。**开工时做**，别等第 6 步 |
 | 换全套视觉 | `list_styles` → `get_style`（读规则）→ `apply_style`（43 种都能一键套：配色/字体/圆角/转场）。预设只覆盖"系统的值"，版式与文案仍要按风格规则重做；要改得更像品牌，再 `set_theme` 覆盖三个值 |
-| 用户说"风格我选好了" | `get_style_pick()`（分两组）：**内置 slug → 直接 `apply_style`**；**参考编号 → `get_style_library_prompt(id)` 读原文 → 翻译成 theme/版式**。两组都 `probe_style` 出**我们引擎的**样张给用户确认。用户没挑就 `list_style_library(q/use/mood)` 给 2–3 个候选 |
+| 用户说"风格我选好了" | `get_style_pick()`：回来的**全是内置风格 slug → 直接 `apply_style`**，不用翻译。`probe_style` 出**我们引擎的**样张给用户确认。用户没挑就用 `list_styles` 给 2–3 个候选 |
 | 数字/图表页 | `stats`/`chart`/`ring` 版式自带滚动；数据只能来自用户或可靠来源 |
 | 元素动画 | `update_element(anim=[{frame,from,to}])`；弹簧手感 = 过冲关键帧（craft §4） |
 | 完全自定义画面 | `freeform` 场景（`get_guide("freeform")`），上限 40 元素，`layout_grid`/`align_elements` 辅助排版 |
@@ -255,7 +256,7 @@ fx 类的序列帧文件夹会整体成一个结果，直接给带 `{frame}` 的
 | `sound` | 声音设计：BGM 选曲、戏剧曲线、混音、静音自检 |
 | `narration` | 口播写法、TTS 合成对齐、字幕 |
 | `long-form` | 超 12 幕/2 分钟：分章规划与验收 |
-| `scene-recipes` | 75 个版式逐个速查（items 数量、文案长度） |
+| `scene-recipes` | 内置固定版式逐个速查（items 数量、文案长度）。**默认不对 agent 开放**，用户点名要用某个版式、或人工调整老工程时才读 |
 | `freeform` | 自由画布全部写法与坑 |
 | `scene3d` | **3D 场景**：blank 空白默认、6 个预设怎么选、`graph` 场景图全字段（几何体/材质/灯光/粒子/相机）、公转与卫星、太阳系完整示例、改已建好的幕（`update_graph_node`）、15 个坑 |
 | `external-tools` | **图解 iso**：anatomy 出图 → 落盘 → 套主题，含 sanitize 与实跑踩到的坑 |
@@ -264,7 +265,7 @@ fx 类的序列帧文件夹会整体成一个结果，直接给带 `{frame}` 的
 | `meaning` | **每幕让观众看懂什么变化**：七类关系→可视频→证据→该用哪个版式，四个抱怨词各查什么 |
 | `text-events` | **文字事件**：读窗公式、意群断行、四段时序、13 种文字手法对应哪个版式（含我们没有的怎么办） |
 | `motion-rules` | **动作**：时长与缓动边界、错峰总长算法、重量与接触、按两幕关系选转场、接缝速度匹配 |
-| `style-translate` | 用户挑了参考画风怎么翻成本片的 theme/版式/氛围（含三条降级路径） |
+| `style-translate` | 用户给的参考图/对标片/一句"我要这种感觉"怎么翻成本片的 theme/版式/氛围（含三条降级路径） |
 | `tools-quickref` | 常用工具一页速查（配合 `tool_search`） |
 | `memory` | remember/recall 记什么、模板沉淀 |
 | `tools-quickref` | 本书的薄入口（指向这里） |

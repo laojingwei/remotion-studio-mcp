@@ -54,6 +54,31 @@ export const isMotionScene = (type?: string): boolean =>
   !!type && MOTION_SCENE_TYPES.has(type);
 
 /**
+ * agent 默认能查到的**内置**场景类型。
+ *
+ * 为什么要有这张表：78 个内置版式是给人挑的骨架（标题页/柱状图/价格表…），
+ * agent 一看清单就顺手挑一个，画面立刻被锁进既有骨架，自由发挥反而没了。
+ * 默认只把"能力型"和"运动型"场景交给 agent：
+ *
+ *   - MOTION_SCENE_TYPES = 动效类 15 + 氛围类 12 + 3D（scene3d）；
+ *   - iso：等轴测图解，和 3D 一样是能力型场景（用户明确要求不隐藏）；
+ *   - freeform：自由画布；empty：空白场景。
+ *
+ * 其余固定版式默认隐藏，但**没有从注册表里删**——老工程还要渲染、
+ * 编辑器还要能选、用户点名时 agent 也还能查字段。可见性只是清单上的标签。
+ * 插件场景不在这张表里：它们由 `jsonToSceneMeta` 单独打 `agentVisible: true`。
+ */
+export const AGENT_VISIBLE_BUILTIN_TYPES = new Set<string>([
+  ...MOTION_SCENE_TYPES,
+  "iso",
+  "freeform",
+  "empty",
+]);
+
+export const isAgentVisibleBuiltinType = (type?: string): boolean =>
+  !!type && AGENT_VISIBLE_BUILTIN_TYPES.has(type);
+
+/**
  * 可以当「氛围层」叠在版式底下的动效类型（Scene.backdrop.type 只能填这些）。
  *
  * 只有纯氛围的类型在名单里。带正文的那几个（打字机 / 数字滚动 / 渐变字 / 乱码 /

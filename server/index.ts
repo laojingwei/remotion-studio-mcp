@@ -100,20 +100,21 @@ import { z } from "zod";
 import { zodToJsonSchema } from "zod-to-json-schema";
 import { TOOLS, CORE_TOOL_NAMES, exposeAllTools, validateToolArgs } from "./mcp-tools";
 import { library } from "./library.service";
+import { builtinStillAbsOf, listBuiltinStyles, readBuiltinStyle } from "./styles.service";
+import { readPicks, writePicks } from "./stylePicks.service";
 import {
-  buildIndex,
-  builtinStillAbsOf,
-  isLibraryEmpty,
-  listBuiltinStyles,
-  listLibrary,
-  readBuiltinStyle,
-  readPicks,
-  readPrompt,
-  stillAbsOf,
-  writeOverride,
-  writePicks,
-} from "./styleLibrary.service";
-import { STYLE_MOODS, STYLE_USES, type StyleMood, type StyleUse } from "../shared/style-library";
+  buildIndex as buildPromptIndex,
+  clearPick as clearPromptPick,
+  genreCounts as promptGenreCounts,
+  isLibraryEmpty as isPromptLibraryEmpty,
+  LIB_REL as PROMPT_LIB_REL,
+  listPrompts,
+  readDetail as readPromptDetail,
+  readPick as readPromptPick,
+  stillAbsOf as promptStillAbsOf,
+  writePick as writePromptPick,
+} from "./promptLibrary.service";
+import { PROMPT_GENRES, type PromptGenre } from "../shared/prompt-library";
 import { readBrief, saveBrief } from "./brief.service";
 import { markNarrationHeard, readTiming, saveTiming } from "./narration-timing.service";
 import { appendDecision, readDecisions, type DecisionKind } from "./decision-log.service";
@@ -390,13 +391,26 @@ app.get("/api/health", (c) => {
 
 /** agent 的第一步：发现有哪些场景类型、每个字段是什么 */
 /**
- * 场景类型清单（编辑器选择器 + 属性面板用）。
+ * 场景类型清单。
+ *
+ * 两个视图，不能合并：
+ * - 默认（编辑器选择器 + 属性面板）：**全量**，每个类型都带 `agentVisible` 标签，
+ *   让人看得见哪些被标成"不给 agent 看"；
+ * - `?audience=agent`（仅供 `list_scene_types`）：只回标签允许的类型，
+ *   另外给 `hiddenCount`，让工具能告诉 agent"还有一批固定版式没列出来"。
  *
  * 插件场景已由上面的全局中间件同步过，这里直接用即可。
  */
-app.get("/api/scene-types", (c) =>
-  c.json({ types: metaList(), pluginSceneCount: pluginSceneTypes().length }),
-);
+app.get("/api/scene-types", (c) => {
+  const agentOnly = c.req.query("audience") === "agent";
+  const all = metaList();
+  const types = agentOnly ? all.filter((t) => t.agentVisible) : all;
+  return c.json({
+    types,
+    pluginSceneCount: pluginSceneTypes().length,
+    ...(agentOnly ? { hiddenCount: all.length - types.length } : {}),
+  });
+});
 
 /* ────────────────────────────── 工程 ────────────────────────────── */
 
@@ -1232,61 +1246,40 @@ app.get("/resources/:category/*", (c) => {
 });
 
 /**
- * 风格库（341 条外部风格提示词）——编辑器「风格库」面板的数据面。
+ * 内置风格 —— 编辑器「风格库」面板的数据面。
  *
- * 和 `list_styles` / `apply_style` 那 43 个内置风格**是两套东西**：
- * 这里是「画风文字描述 + 一张静帧」，只能当视觉参考；内置风格才有 palette/font 预设。
- * 面板因此分两个分区显示，接口也分两个字段返回，别合并。
+ * 只有一套东西了：`server/styles/*.md` 里那些**带 palette/font 预设、能 apply_style** 的风格。
+ * 以前这里还有一路「参考风格」（341 条画风文字描述，只能当视觉参考、要翻译），
+ * 那批已经拆解（能升级的并进本目录与提示词库，其余删除），接口也一并收掉了。
  *
- * 静帧走 `/api/style-library/still/:id` 而不是 `/assets/`：库在 `server/skills/` 下，
- * 不在 public 里，也不该被复制进 public（341 张图会跟着 bundle 打包）。
+ * 静帧走 `/api/builtin-styles/still/:slug` 而不是 `/assets/`：图在 `server/styles/stills/` 下，
+ * 不在 public 里，也不该被复制进 public（77 张图会跟着 bundle 打包）。
  */
-app.get("/api/style-library", (c) => {
-  const q = c.req.query();
-  const use = q.use as StyleUse | "all" | undefined;
-  const mood = q.mood as StyleMood | "all" | undefined;
-  const { items, total, withStill } = listLibrary({
-    q: q.q,
-    use,
-    mood,
-    withStill: q.withStill === "1" || q.withStill === "true",
-  });
+app.get("/api/builtin-styles", (c) => {
   return c.json({
-    items,
-    total,
-    withStill,
-    empty: isLibraryEmpty(),
-    uses: STYLE_USES,
-    moods: STYLE_MOODS,
-    builtin: listBuiltinStyles(),
+    items: listBuiltinStyles(),
     picks: readPicks(),
   });
 });
 
-app.post("/api/style-library/rebuild", (c) => {
-  const blocked = localOnly(c, "重建风格库索引");
-  if (blocked) return blocked;
-  const idx = buildIndex(true);
-  return c.json({ ok: true, total: idx.total, withStill: idx.withStill, builtAt: idx.builtAt });
-});
-
-/** 单条提示词全文：面板抽屉里显示，也是「复制给 agent」的来源 */
-app.get("/api/style-library/prompt/:id", (c) => {
-  const id = c.req.param("id");
-  const prompt = readPrompt(id);
-  if (prompt === null) return c.json({ error: `库里没有「${id}」这一条` }, 404);
-  return c.json({ id, prompt });
-});
-
-/** 顺带把 webp 流出去。缓存 7 天：库更新靠 rebuild，不靠浏览器过期 */
-function serveWebp(c: Context, abs: string): Response {
+/**
+ * 顺带把 webp 流出去。
+ *
+ * 缓存策略分两种（踩过坑：原来一律 `max-age=604800`，重出全部样张后用户 7 天内
+ * 看到的还是旧图，ETag 变了也没用——强缓存没过期浏览器根本不发条件请求）：
+ * · URL 带 `?v=`：版本戳和文件内容绑定，可以放心长缓存 + immutable；
+ * · 不带 `v`（老前端 / 手敲地址）：改 `no-cache`，每次都拿 ETag 校验，绝不留 stale。
+ */
+function serveWebp(c: Context, abs: string, versioned = false): Response {
   try {
     const stat = fs.statSync(abs);
     const etag = `W/"${stat.size.toString(16)}-${Math.round(stat.mtimeMs).toString(16)}"`;
     if (c.req.header("if-none-match") === etag) return c.body(null, 304);
     return c.body(new Uint8Array(fs.readFileSync(abs)), 200, {
       "content-type": "image/webp",
-      "cache-control": "public, max-age=604800",
+      "cache-control": versioned
+        ? "public, max-age=31536000, immutable"
+        : "no-cache, must-revalidate",
       etag,
     });
   } catch {
@@ -1294,90 +1287,160 @@ function serveWebp(c: Context, abs: string): Response {
   }
 }
 
-app.get("/api/style-library/still/:id", (c) => {
-  const abs = stillAbsOf(c.req.param("id"));
-  if (!abs) return c.json({ error: "这一条没有静帧" }, 404);
-  return serveWebp(c, abs);
-});
-
-/** 内置 43 风格的静帧：约定放在 server/styles/stills/<slug>.webp，没有就 404 由前端画占位 */
-app.get("/api/style-library/builtin-still/:slug", (c) => {
+/** 内置风格的静帧：约定放在 server/styles/stills/<slug>.webp，没有就 404 由前端画占位 */
+app.get("/api/builtin-styles/still/:slug", (c) => {
   const abs = builtinStillAbsOf(c.req.param("slug"));
   if (!abs) return c.json({ error: "这个内置风格还没有样张" }, 404);
-  return serveWebp(c, abs);
+  return serveWebp(c, abs, Boolean(c.req.query("v")));
 });
 
 /** 内置风格的规则正文 + 结构化预设：面板右抽屉里给用户看「这风格到底是什么」 */
-app.get("/api/style-library/builtin/:slug", (c) => {
+app.get("/api/builtin-styles/:slug", (c) => {
   const detail = readBuiltinStyle(c.req.param("slug"));
   if (!detail) return c.json({ error: "没有这个内置风格" }, 404);
   return c.json(detail);
 });
 
-app.get("/api/style-library/picks", (c) => c.json({ picks: readPicks() }));
+app.get("/api/style-picks", (c) => c.json({ picks: readPicks() }));
 
 /**
  * 勾选写盘 + 顺手给 agent 留一条言。
  *
  * 为什么要留言而不是只落盘：agent 只在"被调用"时才知道发生了什么。用户点完「告诉 agent」
  * 就切回对话窗口，如果只写了 picks.json，agent 不会主动去读——它会等用户打字。
- * 两个通道一起走，用户就不用再把选好的编号手打一遍。
+ * 两个通道一起走，用户就不用再把选好的 slug 手打一遍。
  */
-app.post("/api/style-library/picks", async (c) => {
+app.post("/api/style-picks", async (c) => {
   const blocked = localOnly(c, "保存风格勾选");
   if (blocked) return blocked;
   const body = (await c.req.json().catch(() => ({}))) as {
-    ids?: unknown;
     builtinSlugs?: unknown;
     note?: unknown;
     projectId?: unknown;
     notify?: unknown;
   };
-  const ids = Array.isArray(body.ids) ? body.ids.map((x) => String(x)) : [];
   const builtinSlugs = Array.isArray(body.builtinSlugs) ? body.builtinSlugs.map((x) => String(x)) : [];
   const note = typeof body.note === "string" ? body.note : undefined;
   const projectId = typeof body.projectId === "string" ? body.projectId : undefined;
-  const { picks, dropped } = writePicks({ ids, builtinSlugs, note, projectId });
+  const { picks, dropped } = writePicks({ builtinSlugs, note, projectId });
 
   let notified = false;
   const pickedSlugs = picks.builtinSlugs ?? [];
-  if (body.notify && (picks.ids.length || pickedSlugs.length)) {
-    // 留言分两段：内置和参考对 agent 是两种动作，混成一句话它就会拿画风描述去 apply_style
-    const lib = listLibrary().items;
-    const refNames = picks.ids.map((id) => {
-      const it = lib.find((x) => x.id === id);
-      return it ? `${it.id} ${it.name}` : id;
-    });
+  if (body.notify && pickedSlugs.length) {
     const all = listBuiltinStyles();
-    const builtinNames = pickedSlugs.map((slug) => {
+    const names = pickedSlugs.map((slug) => {
       const b = all.find((x) => x.slug === slug);
       return b ? `${slug}（${b.name}）` : slug;
     });
-    const parts: string[] = [];
-    if (builtinNames.length) parts.push(`内置我选了 ${builtinNames.join("、")}，这些直接套`);
-    if (refNames.length) parts.push(`参考我选了 ${refNames.join("、")}，这些给我出参考图`);
     addMessage(
       "user",
-      `风格我选好了：${parts.join("；")}。${note ? `（备注：${note}）` : ""}我看过图再往下做。`,
+      `风格我选好了：${names.join("、")}，这些直接套（apply_style）。${note ? `（备注：${note}）` : ""}我看过图再往下做。`,
     );
     notified = true;
   }
   return c.json({ picks, dropped, notified });
 });
 
-/** 人工改气质/用途：面板里点一下就存，只存 diff（没有 diff 就删掉那条） */
-app.post("/api/style-library/override", async (c) => {
-  const blocked = localOnly(c, "修改风格标注");
+/**
+ * 提示词库（153 篇整片配方）。
+ *
+ * 和 `/api/builtin-styles` 是两套东西，别合并：那边答"画面长什么样"（画风，`apply_style` 直接套），
+ * 这边答"这条片子怎么拍"（目标 / 结构 / 动效铁律 / 禁止项 / 出片前怎么验）。
+ *
+ * 列表**不返回正文**：一条正文平均 700 字，153 条一次发出去接近 100KB，
+ * 面板首屏根本用不上。卡片要的字段（名称/摘要/适合/关键词/时长/作者/缩略图）就够筛，
+ * 正文和槽位按 id 单独取。
+ */
+app.get("/api/prompt-library", (c) => {
+  const q = c.req.query();
+  const genre = q.genre as PromptGenre | "all" | undefined;
+  const { items, total, withStill } = listPrompts({
+    q: q.q,
+    genre,
+    withStill: q.withStill === "1" || q.withStill === "true",
+  });
+  return c.json({
+    items,
+    total,
+    withStill,
+    empty: isPromptLibraryEmpty(),
+    genres: PROMPT_GENRES,
+    counts: promptGenreCounts(),
+  });
+});
+
+app.post("/api/prompt-library/rebuild", (c) => {
+  const blocked = localOnly(c, "重建提示词库索引");
   if (blocked) return blocked;
-  const body = (await c.req.json().catch(() => ({}))) as { id?: unknown; moods?: unknown; use?: unknown };
-  const id = String(body.id ?? "");
-  if (!id) return c.json({ error: "缺少 id" }, 400);
-  const moods = Array.isArray(body.moods)
-    ? (body.moods.filter((m) => (STYLE_MOODS as readonly string[]).includes(String(m))) as StyleMood[])
-    : undefined;
-  const use = STYLE_USES.some((u) => u.id === body.use) ? (body.use as StyleUse) : undefined;
-  writeOverride(id, { moods, use });
-  return c.json({ ok: true });
+  const idx = buildPromptIndex(true);
+  return c.json({ ok: true, total: idx.total, withStill: idx.withStill, builtAt: idx.builtAt });
+});
+
+/** 单条详情：正文 + 槽位。面板抽屉显示用，也是「复制给 agent」的来源 */
+app.get("/api/prompt-library/item/:id", (c) => {
+  const detail = readPromptDetail(c.req.param("id"));
+  if (!detail) return c.json({ error: "库里没有这一条" }, 404);
+  return c.json(detail);
+});
+
+app.get("/api/prompt-library/still/:id", (c) => {
+  const abs = promptStillAbsOf(c.req.param("id"));
+  if (!abs) return c.json({ error: "这一条没有缩略图" }, 404);
+  return serveWebp(c, abs, Boolean(c.req.query("v")));
+});
+
+/**
+ * 采纳一条配方（单选）。
+ *
+ * 为什么不给多选：提示词库一条就是一部片子的完整骨架（贯穿物、三幕结构、动效铁律、禁止项），
+ * 同时采纳三套等于让 agent 自己编折中方案。风格库多选是因为"多参考几张画风"成立，
+ * 这里不成立。所以交互与数据结构都是单条，覆盖写。
+ *
+ * 留言里给的是**相对路径**而不是正文：一条正文 700 字，塞进对话既占上下文又容易被后续
+ * 消息挤掉；给路径让 agent 自己读，读到的永远是最新版（改了 md 也不用重发一遍）。
+ */
+app.get("/api/prompt-library/pick", (c) => c.json({ pick: readPromptPick() }));
+
+app.post("/api/prompt-library/pick", async (c) => {
+  const blocked = localOnly(c, "采纳配方");
+  if (blocked) return blocked;
+  const body = (await c.req.json().catch(() => ({}))) as {
+    id?: unknown;
+    note?: unknown;
+    notify?: unknown;
+  };
+  const id = String(body.id ?? "").trim();
+  if (!id) {
+    clearPromptPick();
+    return c.json({ pick: null, notified: false });
+  }
+  const pick = writePromptPick({ id, note: typeof body.note === "string" ? body.note : undefined });
+  if (!pick) return c.json({ error: `库里没有 ${id} 这一条` }, 404);
+
+  let notified = false;
+  if (body.notify) {
+    const item = readPromptDetail(pick.id)?.item;
+    const rel = `${PROMPT_LIB_REL}/${item?.file ?? ""}`;
+    /**
+     * 配方与技法是两种东西，留言必须分开写：
+     * 配方是整片骨架（照它拍一整条），技法是往某一幕里加的一招（不能照它拍一整片）。
+     * 用同一句话会让 agent 拿"字雨"去搭三幕结构，那必然空。
+     */
+    const isTech = pick.id.startsWith("TK");
+    // 绑在媒介上的配方：换风格会毁片，必须在留言里就提醒，不能等 agent 套完再发现
+    const warn =
+      !isTech && item?.fidelity === "bound" ? "这条绑在媒介上（手绘/像素/剪纸这类），挑风格时别跨媒介。" : "";
+    addMessage(
+      "user",
+      isTech
+        ? `我想加一个技法：${pick.id} ${pick.name}。先读 ${rel}，把它用到片子合适的某一幕里` +
+            `（按它的参数与禁止项来，不要为它单独拉一整条片）${pick.note ? `。备注：${pick.note}` : ""}。`
+        : `整片配方我选好了：${pick.id} ${pick.name}。先读 ${rel}，按它的结构和禁止项来` +
+            `（槽位里的产品名、链接、时长按我的实际情况替换）${warn}${pick.note ? `备注：${pick.note}。` : ""}`,
+    );
+    notified = true;
+  }
+  return c.json({ pick, notified });
 });
 
 /**

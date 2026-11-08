@@ -5,7 +5,7 @@ import type { Brief } from "./brief.service";
 import { briefCoverage } from "./brief.service";
 import { PROJECTS_ROOT } from "./paths";
 import type { Review } from "./review.service";
-import type { StylePicks } from "../shared/style-library";
+import type { StylePicks } from "../shared/builtin-styles";
 import {
   SHOT_RELATION_LABEL,
   storyboardDesignNotes,
@@ -434,11 +434,9 @@ export function buildDesignCard(input: {
   L.push("## 五、视觉");
   L.push("");
   const builtinPicks = picks?.builtinSlugs ?? [];
-  const refPicks = picks?.ids ?? [];
   L.push(`- **风格**：${brief?.style ?? "未定"}${builtinPicks.length ? `（内置：${builtinPicks.join("、")}）` : ""}`);
-  if (refPicks.length) {
-    L.push(`- **参考画风**：${refPicks.join("、")}${picks?.note ? ` —— ${picks.note}` : ""}`);
-  }
+  // 设计稿里不再单列「参考画风」：参考风格库已拆掉，画风现在就等于 builtinSlugs 里的 slug
+  if (builtinPicks.length && picks?.note) L.push(`- **风格备注**：${picks.note}`);
   L.push(`- **情绪**：${(brief?.mood ?? []).join("、") || "未定"} ｜ **动感**：${brief?.motion ?? "未定"}`);
   if (brief?.palette) L.push(`- **配色**：${brief.palette}`);
   if (brief?.type) L.push(`- **字体 / 排版**：${brief.type}`);

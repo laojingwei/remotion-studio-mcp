@@ -39,6 +39,8 @@ type PickerItem = {
   name: string;
   summary: string;
   category?: string;
+  /** 默认不给 agent 看的类型，在选择器上带一个角标（人照常能选） */
+  agentVisible?: boolean;
   props?: Record<string, unknown>;
 };
 
@@ -62,7 +64,13 @@ export const SceneList: React.FC = () => {
     x: number;
     y: number;
   } | null>(null);
-  const [types, setTypes] = useState<{ type: string; name: string; summary: string; category?: string }[]>([]);
+  const [types, setTypes] = useState<{
+    type: string;
+    name: string;
+    summary: string;
+    category?: string;
+    agentVisible?: boolean;
+  }[]>([]);
   /**
    * 两个搜索词，因为这里有两种"找东西"：
    * - `qScene`：找**已经加进片子**的一幕（按幕名 / 版式名 / 类型 / 字幕匹配）
@@ -77,7 +85,16 @@ export const SceneList: React.FC = () => {
   useEffect(() => {
     fetchSceneTypes()
       .then(setTypes)
-      .catch(() => setTypes(metaList().map((m) => ({ type: m.type, name: m.name, summary: m.summary }))));
+      .catch(() =>
+        setTypes(
+          metaList().map((m) => ({
+            type: m.type,
+            name: m.name,
+            summary: m.summary,
+            agentVisible: m.agentVisible,
+          })),
+        ),
+      );
   }, []);
 
   // 下拉收起时，悬停预览也必须一起隐藏
@@ -113,6 +130,7 @@ export const SceneList: React.FC = () => {
         name: t.name,
         summary: t.summary,
         category: t.category,
+        agentVisible: t.agentVisible,
       })),
     [types],
   );
@@ -231,7 +249,7 @@ export const SceneList: React.FC = () => {
             {visibleTypes.map((t) => (
               <button
                 key={t.key}
-                className="picker-card"
+                className={`picker-card ${t.agentVisible === false ? "is-agent-hidden" : ""}`}
                 onClick={() => add(t)}
                 onMouseEnter={(e) => {
                   const r = e.currentTarget.getBoundingClientRect();
@@ -243,6 +261,15 @@ export const SceneList: React.FC = () => {
                 <span className="picker-icon">{SCENE_ICON[t.type] ?? "▦"}</span>
                 <span className="picker-name">{t.name}</span>
                 <span className="picker-desc">{t.summary}</span>
+                {/* 标签只是"agent 查清单时看不到"，人在这里照常能选 */}
+                {t.agentVisible === false ? (
+                  <span
+                    className="picker-agent-tag"
+                    title="默认不对 agent 开放：list_scene_types 里查不到，编辑器里照常能选、老工程照常能播"
+                  >
+                    agent 隐藏
+                  </span>
+                ) : null}
               </button>
             ))}
             {!visibleTypes.length ? <div className="picker-empty">这个分类还没有场景</div> : null}

@@ -183,7 +183,7 @@ get_guide(name="manual", section="…")   → 按需读指南（不常驻）
 几个省 token 的开关：
 
 - `get_project(detail="summary")`：默认摘要；`full` 才回完整 props
-- `list_scene_types(summary=true)`：只回类型 + 一句话 + 字段名
+- `list_scene_types(summary=true)`：只回类型 + 一句话 + 字段名（清单默认只含对 agent 开放的类型，固定版式不列出，见「场景类型」一节）
 - `apply_ops(quiet=true)`：只回一行「已执行 N 个操作」
 - `render_video(wait=true)`：阻塞到渲染完成，省掉轮询
 - `render_video(dryRun=true)`：只预检（场景为空 / 素材缺失），不提交渲染
@@ -205,7 +205,7 @@ get_guide(name="manual", section="…")   → 按需读指南（不常驻）
 | `script` | 稿件：口播稿结构与字数 |
 | `content` | 文案打磨：标题写结论、数字配参照、去 AI 味 |
 | `subtitle` | 字幕：一屏一句、不带标点、时间对齐 |
-| `scene-recipes` | 75 个版式配方（适用场景 / items 建议 / 坑） |
+| `scene-recipes` | 内置固定版式配方（适用场景 / items 建议 / 坑）；默认不对 agent 开放，用户点名时读 |
 | `craft` | 画面质感：签名时刻、层次、留白、动效节奏 |
 | `meaning` | **每幕让观众看懂什么变化**：七类关系 → 可视频 → 必须成立的证据 → 用哪个版式 |
 | `text-events` | **文字事件**：读窗公式、意群断行、四段时序、文字手法 → 我们版式的映射 |
@@ -625,7 +625,9 @@ npm run style:builtin-stills  # 给 43 个内置风格出静帧 → server/style
 
 ### 场景类型
 
-新增场景时顶部用**标签筛选**，下方是卡片网格；**鼠标悬停卡片会弹出线框预览**。当前 78 个场景类型：下表 76 个 2D 场景（含自由画布），外加 **3D 场景** 与 **图解插图**（见下一节）：
+新增场景时顶部用**标签筛选**，下方是卡片网格；**鼠标悬停卡片会弹出线框预览**。当前 78 个场景类型：下表 76 个 2D 场景（含自由画布），外加 **3D 场景** 与 **图解插图**（见下一节）。
+
+**场景可见性标签**：每个场景都带 `agentVisible`，决定它是否出现在 agent 的 `list_scene_types` 清单里。默认只放行 3D（`scene3d`）、图解（`iso`）、空白（`empty`）、自由画布（`freeform`）、动效类（15）、氛围类（12）和插件注册的场景；其余内置固定版式默认隐藏，避免 agent 一看清单就挑现成骨架、把画面锁死。隐藏**只影响列清单**：编辑器里照常能选、老工程照常能播、用户点名时 agent 也照常能查字段（`list_scene_types(type:"…")`）。单条要例外就在 `shared/sceneMetas.ts` 对应 meta 上写 `agentVisible`；插件在场景 JSON 里写同名布尔字段。白名单集中在 `shared/sceneKinds.ts` 的 `AGENT_VISIBLE_BUILTIN_TYPES`。
 
 | 分类 | 场景 |
 |---|---|

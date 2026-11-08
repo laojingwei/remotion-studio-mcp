@@ -171,6 +171,35 @@ async function main() {
   );
   check("tool_search 无结果时给引导", /all=true|manual/.test(missSearch), missSearch.slice(0, 80));
 
+  /* 场景可见性标签：agent 查清单只回白名单，固定版式不列出。
+     这条走真实 stdio 工具调用，能同时验到工具层与 /api/scene-types?audience=agent。 */
+  const sceneSummary = textOf(
+    await call("tools/call", { name: "list_scene_types", arguments: { summary: true } }),
+  );
+  const sceneIds = sceneSummary
+    .split("\n")
+    .map((l) => (l.match(/^- ([a-z0-9-]+)/) ?? [])[1])
+    .filter(Boolean);
+  check(
+    "list_scene_types 默认含 3D / 图解 / 空白 / 自由画布",
+    ["freeform", "scene3d", "iso", "empty"].every((t) => sceneIds.includes(t)),
+    `共 ${sceneIds.length} 个：${sceneIds.slice(0, 8).join(",")}`,
+  );
+  check(
+    "list_scene_types 默认不含内置固定版式",
+    !["title", "bullets", "chart", "stats"].some((t) => sceneIds.includes(t)),
+    `实际 ${sceneIds.length} 个类型`,
+  );
+  check("清单明确告知还有隐藏版式", /默认不列出/.test(sceneSummary), sceneSummary.slice(-140));
+  const deepHidden = textOf(
+    await call("tools/call", { name: "list_scene_types", arguments: { type: "title" } }),
+  );
+  check(
+    "用户点名查固定版式仍给字段，但提醒这是例外",
+    deepHidden.includes("默认不给 agent 看") && deepHidden.includes("标题页"),
+    deepHidden.slice(0, 110),
+  );
+
   /* 工程上下文（验证报告 P0-01/02 + P1-08）：create_project 要切换默认工程 */
   const created = textOf(
     await call("tools/call", {

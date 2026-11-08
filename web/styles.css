@@ -5659,6 +5659,7 @@ button.mini.add {
 }
 
 .picker-card {
+  position: relative;
   display: flex;
   flex-direction: column;
   align-items: flex-start;
@@ -5705,6 +5706,27 @@ button.mini.add {
   -webkit-line-clamp: 2;
   -webkit-box-orient: vertical;
   overflow: hidden;
+}
+
+/* 场景可见性标签：只标"agent 查清单时看不到"，不挡选择、不禁用。
+   不给 agent 看的是内置固定版式，人在这里照常能加。 */
+.picker-agent-tag {
+  position: absolute;
+  top: 7px;
+  right: 7px;
+  padding: 1px 5px;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  background: rgba(255, 255, 255, 0.04);
+  color: var(--muted);
+  font-size: 9px;
+  line-height: 1.5;
+  white-space: nowrap;
+  opacity: 0.7;
+}
+.picker-card.is-agent-hidden:hover .picker-agent-tag {
+  opacity: 1;
+  border-color: var(--line-strong);
 }
 
 /* 悬停预览浮层（场景线框 / 元素放大） */
@@ -9154,8 +9176,7 @@ select.tts-input {
   position: relative;
   aspect-ratio: 16 / 10;
   background: #0b0b10;
-}
-.sl-thumb img {
+}.sl-thumb img {
   width: 100%;
   height: 100%;
   object-fit: cover;
@@ -9206,7 +9227,7 @@ select.tts-input {
 .sl-no-still {
   position: absolute;
   right: 6px;
-  bottom: 6px;
+  top: 6px;
   padding: 1px 6px;
   border-radius: 999px;
   font-size: 10px;
@@ -9214,21 +9235,6 @@ select.tts-input {
   background: rgba(0, 0, 0, 0.55);
   border: 1px solid var(--line);
 }
-.sl-check {
-  position: absolute;
-  top: 6px;
-  right: 6px;
-  width: 20px;
-  height: 20px;
-  border-radius: 50%;
-  background: var(--accent);
-  color: #0b0b10;
-  font-size: 12px;
-  font-weight: 700;
-  display: grid;
-  place-items: center;
-}
-
 .sl-meta {
   display: flex;
   align-items: center;
@@ -9248,26 +9254,6 @@ select.tts-input {
   overflow: hidden;
   text-overflow: ellipsis;
 }
-.sl-info {
-  display: flex;
-  justify-content: center;
-  align-items: center;
-  flex: none;
-  width: 20px;
-  height: 20px;
-  border-radius: 50%;
-  border: 1px solid var(--line);
-  background: #4b4fff12;
-  color: var(--muted);
-  font-size: 11px;
-  cursor: pointer;
-  line-height: 1;
-}
-.sl-info:hover {
-  color: var(--text);
-  border-color: var(--line-strong);
-}
-
 .sl-more {
   padding: 14px 0 4px;
   text-align: center;
@@ -9276,10 +9262,12 @@ select.tts-input {
 }
 
 /* 放大按钮：压在缩略图右下角，hover 才显形——常显会让整屏卡片都很吵 */
+/* 放大按钮挪到右上：右下角要留给勾选（卡片右下角是"勾选"的固定位置，
+   四个分区一致）。无样张角标也在右上，但那时没有放大按钮，不冲突。 */
 .sl-zoom {
   position: absolute;
   right: 6px;
-  bottom: 6px;
+  top: 6px;
   width: 22px;
   height: 22px;
   display: grid;
@@ -9304,7 +9292,9 @@ select.tts-input {
 
 /* 详情抽屉 */
 .sl-detail {
-  width: 342px;
+  /* 342px 时提示词正文一行只放得下十来个字（744 字要滚很久），而且底部
+     "输入框 + 按钮"挤成一条，placeholder 直接被切掉。给到 400px。 */
+  width: 400px;
   flex: none;
   border-left: 1px solid var(--line);
   overflow: auto;
@@ -9355,6 +9345,24 @@ select.tts-input {
   color: var(--muted);
   margin-top: 2px;
 }
+/* 槽位标题右侧的「跳到提示词」：正文在下方，得给一条不占版面的路 */
+.sl-detail-label.is-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.sl-jump {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--accent);
+  font-size: 11px;
+  cursor: pointer;
+}
+.sl-jump:hover {
+  text-decoration: underline;
+}
 .sl-prompt {
   margin: 0;
   padding: 10px;
@@ -9369,6 +9377,32 @@ select.tts-input {
   overflow: auto;
   color: var(--text);
   font-family: inherit;
+}
+
+/* 内置风格抽屉：规则正文曾被压成 41px 的一条缝。
+   .sl-detail 原本是「自己滚的 flex column」，子项默认 flex-shrink:1，
+   6000+ 字的规则框被压到只剩一行，看起来就是"显示框被压扁"。
+   按提示词抽屉那套来：外层只放固定标题，内容统一交给 .sl-detail-scroll 滚；
+   那条规则里已有 .sl-detail-scroll > * { flex: none }，正文不会再被压缩，
+   也只有一条滚动条，不会两层互相抢滚轮。 */
+.sl-detail.is-scroll {
+  padding: 0;
+  gap: 0;
+  overflow: hidden;
+}
+.sl-detail.is-scroll .sl-detail-head {
+  padding: 12px 12px 8px;
+  flex: none;
+}
+/* 图压矮一点，把首屏多留几行给规则；点开仍能看全尺寸 */
+.sl-detail.is-scroll .sl-detail-img {
+  max-height: 176px;
+  object-fit: cover;
+}
+/* 正文不在框里再滚一层，整段展开交给外层滚动区 */
+.sl-detail.is-scroll .sl-prompt {
+  max-height: none;
+  overflow: visible;
 }
 
 .sl-foot {
@@ -9497,6 +9531,11 @@ select.tts-input {
   border-color: var(--accent-dim);
   color: var(--accent);
 }
+/* 画风耦合＝绑在媒介上：不是错误，但换风格会毁片，值得一个警示色 */
+.sl-tag.is-warn {
+  border-color: #b4682c88;
+  color: #e0a05a;
+}
 .sl-swatches {
   display: flex;
   flex-wrap: wrap;
@@ -9513,6 +9552,232 @@ select.tts-input {
   color: var(--muted);
   line-height: 1.6;
   word-break: break-word;
+}
+.sl-mono a {
+  color: var(--accent);
+  text-decoration: none;
+}
+.sl-mono a:hover {
+  text-decoration: underline;
+}
+
+/* ── 提示词分区（153 篇整片配方）────────────────────────────────────
+   卡片比风格库宽一档：它要多放"时长"角标和一行摘要，158px 会把中文名挤成两行再截断。
+   缩略图改 16:9（源片都是横屏），风格库那边保留 16:10 —— 那边的静帧多是方构图。 */
+.sl-grid.is-prompt {
+  grid-template-columns: repeat(auto-fill, minmax(208px, 1fr));
+}
+.sl-pcard .sl-thumb {
+  aspect-ratio: 16 / 9;
+}
+.sl-dur {
+  padding: 1px 6px;
+  border-radius: 999px;
+  font-size: 10px;
+  color: #f5f5f5;
+  background: #1c1b1bd1;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* 图上角标容器：体裁 + 时长并排放左下。
+   原来时长独占右上，现在右上要留给放大按钮（右下要留给勾选），只能并排。
+   右下角是四个分区统一的"勾选位"，所以这张图里任何角标都不能占右下。 */
+.sl-on-img {
+  position: absolute;
+  left: 6px;
+  bottom: 6px;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  max-width: calc(100% - 42px);
+  overflow: hidden;
+}
+.sl-on-img .sl-badge,
+.sl-on-img .sl-dur {
+  position: static;
+}
+/* 体裁徽章不许被压：被压就会一个字一行（"产 / 品 / 宣 / 传"），比截断更难读 */
+.sl-on-img .sl-badge {
+  flex: none;
+  white-space: nowrap;
+}
+
+/* 右下角勾选：四个分区统一——点图片看详情，点这里才勾 */
+.sl-pick {
+  position: absolute;
+  right: 6px;
+  bottom: 6px;
+  width: 22px;
+  height: 22px;
+  display: grid;
+  place-items: center;
+  border-radius: 50%;
+  border: 1px solid rgba(255, 255, 255, 0.55);
+  background: rgba(0, 0, 0, 0.5);
+  color: transparent;
+  font-size: 12px;
+  font-weight: 700;
+  line-height: 1;
+  cursor: pointer;
+  transition: background 0.12s ease, border-color 0.12s ease, color 0.12s ease;
+}
+/* 未勾选时空心圆，hover 才出现对勾——不然一排灰点在图上像噪点 */
+.sl-pick::after {
+  content: "";
+}
+.sl-pick:hover {
+  border-color: var(--accent);
+  background: rgba(0, 0, 0, 0.82);
+}
+.sl-pick:hover::after {
+  content: "✓";
+  color: #fff;
+}
+.sl-pick.is-on {
+  background: var(--accent);
+  border-color: var(--accent);
+}
+.sl-pick.is-on::after {
+  content: "✓";
+  color: #0b0b10;
+}
+.sl-pcard .sl-name {
+  /* 配方名多是"产品名 + 结构"，比风格库的名字长，给两行 */
+  white-space: normal;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  line-height: 1.35;
+}
+
+/* 体裁 chip 上的条数：用于"哪一类最多"的判断，不做成可点元素 */
+.sl-chip em {
+  font-style: normal;
+  margin-left: 5px;
+  font-size: 11px;
+  opacity: 0.65;
+}
+.sl-chip.is-static {
+  cursor: default;
+  background: var(--panel-2);
+}
+.sl-chip.is-static:hover {
+  color: var(--muted);
+  border-color: var(--line);
+}
+.sl-detail-chips {
+  gap: 5px;
+}
+
+/* 槽位：一条配方里"可以替换成你的东西"的那几个点 */
+.sl-slots {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.sl-slot {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 6px 8px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: var(--panel-2);
+  font-size: 12px;
+  line-height: 1.5;
+}
+.sl-slot b {
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--muted);
+}
+.sl-slot i {
+  font-style: normal;
+  font-size: 11px;
+  color: var(--muted);
+  opacity: 0.8;
+}
+
+/* 抽屉里的采纳动作常驻底部：正文 700 字，滚到一半想采纳不用先滚到底 */
+.sl-detail.is-prompt {
+  padding: 0;
+  gap: 0;
+  overflow: hidden;
+}
+.sl-detail.is-prompt .sl-detail-head {
+  padding: 12px 12px 8px;
+  flex: none;
+}
+.sl-detail-scroll {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: 0 12px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+/* 滚动区里的子项一律不收缩：flex 默认允许 shrink，正文/图片会被压成一条缝 */
+.sl-detail-scroll > * {
+  flex: none;
+}
+.sl-detail-foot {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 10px 12px;
+  border-top: 1px solid var(--line);
+  background: var(--panel);
+  flex-wrap: wrap;
+}
+/* 备注独占一行：和按钮挤一行时 placeholder 只剩"补一句你的实际情况（可选，会一…" */
+.sl-detail-foot .sl-note {
+  flex: 1 0 100%;
+  width: 100%;
+  height: 30px;
+}
+/* 按钮靠右：第一行是备注，第二行只有一个主按钮时贴左会显得孤零零 */
+.sl-detail-foot > button,
+.sl-detail-foot > .sl-ghost-line {
+  margin-left: auto;
+}
+.sl-detail-foot > button + button {
+  margin-left: 0;
+}
+.sl-detail-foot .sl-msg {
+  flex-basis: 100%;
+  max-width: none;
+}
+/* 配方抽屉里的图压矮一点（240px 的 16:9 会吃掉半屏滚动区，
+   而这一屏更该留给正文）。点开图仍能看全尺寸。 */
+.sl-detail.is-prompt .sl-detail-img {
+  max-height: 176px;
+  object-fit: cover;
+}
+
+/* 配方正文不在框里滚：外层 sl-detail-scroll 已经在滚，再套一层内滚动条
+   会让人不知道自己在滚哪一层。
+   `flex: none` 不能省：正文是 flex 子项，默认 flex-shrink 会把它压到几十像素高，
+   内容 700 多字全被折叠成一条缝——实测可视高度只剩 20px，看起来就是"看不全"。 */
+.sl-detail.is-prompt .sl-prompt {
+  max-height: none;
+  flex: none;
+  overflow: visible;
+}
+/* 同稿说明：一行弱化的小字，不是"没有内容"的空态，所以不用 sl-detail-nostill 那个大框 */
+.sl-detail-dup {
+  font-size: 11px;
+  color: var(--muted);
+  line-height: 1.6;
+  padding: 6px 8px;
+  border-left: 2px solid var(--line-strong);
+  background: var(--panel-2);
+  border-radius: 0 5px 5px 0;
 }
 
 /* ─────────────────── 设计稿面板（export_design 出的 markdown） ───────────────────

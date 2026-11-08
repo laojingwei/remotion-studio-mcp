@@ -42,6 +42,13 @@
         "beams": 1,
         "intensity": 0.4
       }
+    },
+    "showcase": {
+      "template": "giantType",
+      "title": "把新东西",
+      "emphasis": "放在黑底上",
+      "sub": "发布会最贵的那一页",
+      "note": "KEYNOTE / 2026"
     }
   },
   "swiss-editorial": {
@@ -80,7 +87,14 @@
       "多强调色",
       "圆角卡片堆叠",
       "发光"
-    ]
+    ],
+    "showcase": {
+      "template": "giantType",
+      "title": "先把网格",
+      "emphasis": "立起来",
+      "sub": "字号是唯一的强调手段",
+      "note": "GRID / TYPE / 1957"
+    }
   },
   "kinetic-brutalist": {
     "name": "粗野动态排版",
@@ -120,7 +134,14 @@
       "柔和渐变",
       "细衬线",
       "弹簧动画"
-    ]
+    ],
+    "showcase": {
+      "template": "giantType",
+      "title": "字要大",
+      "emphasis": "留白要狠",
+      "sub": "版面就是宣言，不解释",
+      "note": "BRUTALIST"
+    }
   },
   "editorial-collage": {
     "name": "杂志拼贴",
@@ -157,7 +178,13 @@
     "forbidden": [
       "纯色数码渐变",
       "规整网格无错位"
-    ]
+    ],
+    "showcase": {
+      "template": "collage",
+      "title": "剪下来\n再排一遍",
+      "sub": "杂志拼贴 · 每片都承担证据",
+      "note": "CUT & PASTE"
+    }
   },
   "data-motion": {
     "name": "数据动态",
@@ -202,6 +229,13 @@
         "glow": 0.35,
         "horizon": 50
       }
+    },
+    "showcase": {
+      "template": "giantType",
+      "title": "数字会动",
+      "emphasis": "才叫变化",
+      "sub": "每一个标记都对应一个真实数值",
+      "note": "DATA / MOTION"
     }
   },
   "minimal-ui": {
@@ -240,7 +274,14 @@
       "重描边",
       "多层阴影",
       "复古滤镜"
-    ]
+    ],
+    "showcase": {
+      "template": "giantType",
+      "title": "少到只剩",
+      "emphasis": "该说的那句",
+      "sub": "留白不是空，是节奏",
+      "note": "LESS / MORE"
+    }
   },
   "cinematic-title": {
     "name": "电影片头",
@@ -284,6 +325,13 @@
         "beams": 1,
         "intensity": 0.5
       }
+    },
+    "showcase": {
+      "template": "giantType",
+      "title": "第七夜",
+      "emphasis": "之后",
+      "sub": "片名与演职员表是主角",
+      "note": "A FILM BY ——"
     }
   },
   "crt-vhs": {
@@ -327,6 +375,12 @@
       "props": {
         "intensity": 0.45
       }
+    },
+    "showcase": {
+      "template": "vintageFrame",
+      "title": "请调台",
+      "sub": "磁带信号 · 扫描线",
+      "note": "CH 03 / SP"
     }
   },
   "guochao": {
@@ -364,7 +418,14 @@
     "forbidden": [
       "赛博霓虹",
       "西式极简"
-    ]
+    ],
+    "showcase": {
+      "template": "figureGrid",
+      "title": "龙纹\n重启",
+      "sub": "国潮 · 传统纹样新做",
+      "note": "GUOCHAO",
+      "variant": 2
+    }
   },
   "flat-vector": {
     "name": "扁平插画",
@@ -401,7 +462,14 @@
     "forbidden": [
       "写实纹理",
       "重阴影"
-    ]
+    ],
+    "showcase": {
+      "template": "figureGrid",
+      "title": "三个圆\n讲一件事",
+      "sub": "扁平插画 · 干净的形",
+      "note": "FLAT-VECTOR",
+      "variant": 1
+    }
   },
   "pixel-game": {
     "name": "16-bit 像素游戏",
@@ -438,7 +506,13 @@
     "forbidden": [
       "抗锯齿平滑",
       "现代极简"
-    ]
+    ],
+    "showcase": {
+      "template": "pixelGrid",
+      "title": "第一关",
+      "sub": "16-bit · 一格一块",
+      "note": "STAGE 1-1"
+    }
   },
   "art-deco": {
     "name": "装饰艺术",
@@ -485,6 +559,13 @@
         "periodSec": 6,
         "tone": "暖"
       }
+    },
+    "showcase": {
+      "template": "figureGrid",
+      "title": "镀金的\n几何",
+      "sub": "装饰艺术 · 对称与金线",
+      "note": "DECO / 1925",
+      "variant": 2
     }
   },
   "blueprint": {
@@ -524,7 +605,27 @@
       "彩色插画",
       "弹性回弹",
       "装饰光晕"
-    ]
+    ],
+    "showcase": {
+      "template": "readout",
+      "title": "装配图 · 03",
+      "sub": "工程蓝图",
+      "values": [
+        {
+          "value": "1:5",
+          "label": "比例"
+        },
+        {
+          "value": "Ø42",
+          "label": "主径"
+        },
+        {
+          "value": "4×",
+          "label": "螺孔"
+        }
+      ],
+      "note": "DWG / 03"
+    }
   },
   "cel-anime-80s": {
     "name": "80 年代赛璐璐动画",
@@ -563,7 +664,14 @@
       "连续高反差闪烁",
       "现代渐变高光",
       "粗描边发光"
-    ]
+    ],
+    "showcase": {
+      "template": "figureGrid",
+      "title": "第七话\n出发",
+      "sub": "赛璐璐 · 有限帧 · 高光",
+      "note": "CEL-ANIME-80S",
+      "variant": 1
+    }
   },
   "comic-pop": {
     "name": "漫画分格",
@@ -602,7 +710,13 @@
       "细线插画",
       "平滑缓动",
       "写实阴影"
-    ]
+    ],
+    "showcase": {
+      "template": "halftone",
+      "title": "砰！",
+      "sub": "网点 + 粗黑边 + 分格",
+      "note": "POW / 03"
+    }
   },
   "concept-morph": {
     "name": "数学／概念形变",
@@ -641,7 +755,14 @@
       "无对应关系的淡化",
       "卡通回弹",
       "多强调色"
-    ]
+    ],
+    "showcase": {
+      "template": "giantType",
+      "title": "一个词",
+      "emphasis": "变成一个形",
+      "sub": "概念在运动里改变含义",
+      "note": "MORPH / 01"
+    }
   },
   "copperplate-engraving": {
     "name": "铜版雕刻",
@@ -686,6 +807,12 @@
       "props": {
         "intensity": 0.4
       }
+    },
+    "showcase": {
+      "template": "engrave",
+      "title": "细线\n排成面",
+      "sub": "铜版雕刻 · 凹版 · 平行排线",
+      "note": "ENGRAVING / 1817"
     }
   },
   "crayon-storybook": {
@@ -725,7 +852,14 @@
       "平滑矢量边缘",
       "3D 阴影",
       "高饱和数码色"
-    ]
+    ],
+    "showcase": {
+      "template": "figureGrid",
+      "title": "小熊\n睡不着",
+      "sub": "蜡笔绘本 · 纸的颗粒",
+      "note": "CRAYON-STORYBOOK",
+      "variant": 1
+    }
   },
   "generative-geometry": {
     "name": "生成几何",
@@ -764,7 +898,23 @@
       "随机噪点",
       "多强调色",
       "手绘质感"
-    ]
+    ],
+    "showcase": {
+      "template": "pointfield",
+      "title": "0.37",
+      "sub": "生成几何 · 参数驱动",
+      "values": [
+        {
+          "value": "0.37",
+          "label": "种子"
+        },
+        {
+          "value": "∞",
+          "label": "变体"
+        }
+      ],
+      "note": "GEN / SEED 37"
+    }
   },
   "glass-material": {
     "name": "玻璃金属材质",
@@ -809,6 +959,13 @@
       "props": {
         "intensity": 0.45
       }
+    },
+    "showcase": {
+      "template": "figureGrid",
+      "title": "折射率\n1.52",
+      "sub": "玻璃与金属 · 只有材质",
+      "note": "GLASS-MATERIAL",
+      "variant": 4
     }
   },
   "glitch-digital": {
@@ -855,6 +1012,13 @@
         "intensity": 0.6,
         "lines": 6
       }
+    },
+    "showcase": {
+      "template": "figureGrid",
+      "title": "信号\n丢了",
+      "sub": "数字故障 · 块状错位",
+      "note": "GLITCH-DIGITAL",
+      "variant": 4
     }
   },
   "hologram-hud": {
@@ -901,6 +1065,26 @@
         "flow": 0.7,
         "glow": 0.5
       }
+    },
+    "showcase": {
+      "template": "readout",
+      "title": "结构扫描 · 站点 04",
+      "sub": "全息空间界面",
+      "values": [
+        {
+          "value": "1.28M",
+          "label": "回波点"
+        },
+        {
+          "value": "±2cm",
+          "label": "测量精度"
+        },
+        {
+          "value": "94%",
+          "label": "覆盖率"
+        }
+      ],
+      "note": "SCAN / 04"
     }
   },
   "illuminated-manuscript": {
@@ -948,6 +1132,13 @@
         "periodSec": 6,
         "tone": "暖"
       }
+    },
+    "showcase": {
+      "template": "figureGrid",
+      "title": "首字母\n是一幅画",
+      "sub": "泥金手抄本 · 金箔与朱红",
+      "note": "ILLUMINATED-MANUSC",
+      "variant": 2
     }
   },
   "ink-wash": {
@@ -995,6 +1186,13 @@
         "intensity": 0.4,
         "tone": "灰"
       }
+    },
+    "showcase": {
+      "template": "figureGrid",
+      "title": "留白\n即水",
+      "sub": "水墨 · 晕开与飞白",
+      "note": "INK-WASH",
+      "variant": 3
     }
   },
   "isometric-infographic": {
@@ -1034,7 +1232,14 @@
       "满屏装饰",
       "卡通描边",
       "结构件用强调色"
-    ]
+    ],
+    "showcase": {
+      "template": "figureGrid",
+      "title": "六个零件\n一台机",
+      "sub": "等距信息图 · 30° 轴",
+      "note": "ISOMETRIC-INFOGRAP",
+      "variant": 2
+    }
   },
   "liquid-shader": {
     "name": "液态着色器",
@@ -1079,6 +1284,13 @@
       "props": {
         "speed": 0.8
       }
+    },
+    "showcase": {
+      "template": "figureGrid",
+      "title": "表面\n在流",
+      "sub": "液态着色器 · 折射",
+      "note": "LIQUID-SHADER",
+      "variant": 4
     }
   },
   "mixed-media-era": {
@@ -1125,6 +1337,12 @@
         "intensity": 0.45,
         "periodSec": 5
       }
+    },
+    "showcase": {
+      "template": "collage",
+      "title": "六十年代\n到九十年代",
+      "sub": "一条片里换多个年代的媒介",
+      "note": "MEDIA / 1960-1999"
     }
   },
   "one-line": {
@@ -1164,7 +1382,14 @@
       "多层描边",
       "复杂纹理",
       "粗重阴影"
-    ]
+    ],
+    "showcase": {
+      "template": "figureGrid",
+      "title": "一根线\n画完",
+      "sub": "一笔线描 · 不能断",
+      "note": "ONE-LINE",
+      "variant": 3
+    }
   },
   "painterly": {
     "name": "油画笔触",
@@ -1203,7 +1428,14 @@
       "平滑矢量边缘",
       "高饱和数码渐变",
       "硬边描边"
-    ]
+    ],
+    "showcase": {
+      "template": "figureGrid",
+      "title": "颜料\n还在湿",
+      "sub": "油画笔触 · 厚涂",
+      "note": "PAINTERLY",
+      "variant": 3
+    }
   },
   "paper-cut": {
     "name": "纸艺分层",
@@ -1242,7 +1474,13 @@
       "单层平涂",
       "写实投影",
       "多色相混用"
-    ]
+    ],
+    "showcase": {
+      "template": "layeredPaper",
+      "title": "剪四层\n就有远近",
+      "sub": "纸艺分层 · 层间投影",
+      "note": "PAPER / 4 LAYERS"
+    }
   },
   "particle-field": {
     "name": "粒子场",
@@ -1289,6 +1527,22 @@
         "glow": 0.5,
         "speed": 0.7
       }
+    },
+    "showcase": {
+      "template": "pointfield",
+      "title": "1.2M",
+      "sub": "粒子场 · 不是装饰",
+      "values": [
+        {
+          "value": "1.2M",
+          "label": "粒子"
+        },
+        {
+          "value": "60fps",
+          "label": "帧率"
+        }
+      ],
+      "note": "FIELD / 60FPS"
     }
   },
   "pixel-diorama": {
@@ -1328,7 +1582,13 @@
       "全片统一跳帧",
       "屏幕中央爆炸",
       "抗锯齿平滑"
-    ]
+    ],
+    "showcase": {
+      "template": "pixelGrid",
+      "title": "小岛",
+      "sub": "像素立体场景",
+      "note": "DIORAMA"
+    }
   },
   "risograph-print": {
     "name": "孔版印刷",
@@ -1373,6 +1633,12 @@
       "props": {
         "intensity": 0.5
       }
+    },
+    "showcase": {
+      "template": "halftone",
+      "title": "印歪了\n才对",
+      "sub": "孔版印刷 · 双色错版",
+      "note": "RISO / 2 COLORS"
     }
   },
   "rubber-hose": {
@@ -1412,7 +1678,13 @@
       "写实阴影",
       "棕黄滤镜",
       "连续极速挤压"
-    ]
+    ],
+    "showcase": {
+      "template": "vintageFrame",
+      "title": "跟上拍子",
+      "sub": "橡皮管动画 · 音乐驱动",
+      "note": "1928 / SOUND"
+    }
   },
   "shadow-puppet": {
     "name": "透光皮影",
@@ -1459,6 +1731,12 @@
         "intensity": 0.55,
         "tone": "暖"
       }
+    },
+    "showcase": {
+      "template": "layeredPaper",
+      "title": "光在\n幕后",
+      "sub": "透光皮影 · 关节能动",
+      "note": "SHADOW PLAY"
     }
   },
   "soft-3d-toy": {
@@ -1506,6 +1784,12 @@
         "glow": 0.35,
         "sizePct": 7
       }
+    },
+    "showcase": {
+      "template": "singleObject",
+      "title": "圆角的它",
+      "sub": "软萌 3D · 哑光黏土",
+      "note": "SOFT / 3D"
     }
   },
   "soft-organic": {
@@ -1553,6 +1837,13 @@
         "glow": 0.4,
         "sizePct": 8
       }
+    },
+    "showcase": {
+      "template": "figureGrid",
+      "title": "慢慢\n展开",
+      "sub": "柔光有机 · 缓慢生长",
+      "note": "SOFT-ORGANIC",
+      "variant": 3
     }
   },
   "stained-glass": {
@@ -1592,7 +1883,14 @@
       "软弹簧挤压",
       "高饱和平涂",
       "多色相乱用"
-    ]
+    ],
+    "showcase": {
+      "template": "figureGrid",
+      "title": "光\n从上面来",
+      "sub": "彩色玻璃 · 铅条分格",
+      "note": "STAINED-GLASS",
+      "variant": 2
+    }
   },
   "synthwave-neon": {
     "name": "合成波霓虹",
@@ -1637,6 +1935,13 @@
       "props": {
         "glow": 0.7
       }
+    },
+    "showcase": {
+      "template": "figureGrid",
+      "title": "1986\n夜行",
+      "sub": "合成波 · 霓虹与网格",
+      "note": "SYNTHWAVE-NEON",
+      "variant": 4
     }
   },
   "terminal-ascii": {
@@ -1684,6 +1989,22 @@
         "glow": 0.45,
         "speed": 0.6
       }
+    },
+    "showcase": {
+      "template": "readout",
+      "title": "$ make",
+      "sub": "终端 · 字符即图形",
+      "values": [
+        {
+          "value": "240",
+          "label": "列"
+        },
+        {
+          "value": "80",
+          "label": "行"
+        }
+      ],
+      "note": "TTY / 80x24"
     }
   },
   "tilt-shift-miniature": {
@@ -1723,7 +2044,13 @@
       "三种速度争抢",
       "高饱和小物件",
       "穿楼滑行"
-    ]
+    ],
+    "showcase": {
+      "template": "singleObject",
+      "title": "像模型\n的小镇",
+      "sub": "移轴 · 浅景深",
+      "note": "TILT-SHIFT"
+    }
   },
   "ukiyo-e": {
     "name": "浮世绘木版",
@@ -1769,6 +2096,12 @@
         "intensity": 0.45,
         "vignette": 0.5
       }
+    },
+    "showcase": {
+      "template": "engrave",
+      "title": "浪\n与山",
+      "sub": "浮世绘 · 主版与分版",
+      "note": "UKIYO-E"
     }
   },
   "whiteboard-explainer": {
@@ -1808,6 +2141,1752 @@
       "一根线画完所有",
       "每个镜头换语义色",
       "满屏填色"
-    ]
+    ],
+    "showcase": {
+      "template": "catalogue",
+      "title": "三步讲完",
+      "sub": "白板手绘 · 一笔一笔长出来",
+      "items": [
+        "第一步",
+        "第二步",
+        "第三步"
+      ],
+      "note": "03"
+    }
+  },
+  "engineering-board": {
+    "name": "工程比较墙",
+    "palette": {
+      "background": "#EDE6D6",
+      "surface": "#E4DCC9",
+      "text": "#2E2B27",
+      "textMuted": "#6B6459",
+      "primary": "#2C6E9B",
+      "secondary": "#8C8577",
+      "accent": "#C0392B"
+    },
+    "font": {
+      "heading": "\"STKaiti\", \"KaiTi\", \"Microsoft YaHei\", serif",
+      "body": "\"Inter\", \"Microsoft YaHei\", sans-serif"
+    },
+    "radius": 2,
+    "motion": "24fps 逐帧；相机叠加缓动、速度连续不突变（u^a(1−u)^b），底下垫 ≤3px 手持呼吸；每 1–2 拍有东西落下、画上或摆动",
+    "transition": {
+      "type": "none",
+      "durationInFrames": 0
+    },
+    "sceneBias": [
+      "title",
+      "stats",
+      "compare",
+      "image",
+      "steps"
+    ],
+    "subtitle": {
+      "color": "#2E2B27",
+      "bg": "#EDE6D6",
+      "bgOpacity": 0.85
+    },
+    "forbidden": [
+      "叠化转场",
+      "文字缩放弹出",
+      "弹跳缓动",
+      "文字自己淡入",
+      "生成图冒充实物照片"
+    ],
+    "showcase": {
+      "template": "catalogue",
+      "title": "两个方案",
+      "sub": "手绘工程墙 · 相机在纸面上推拉",
+      "items": [
+        "方案 A",
+        "方案 B",
+        "结论"
+      ],
+      "note": "02"
+    }
+  },
+  "caption-news": {
+    "name": "字幕新闻",
+    "palette": {
+      "background": "#0E0E0C",
+      "surface": "#151512",
+      "text": "#F7F5EF",
+      "textMuted": "#8D8B83",
+      "primary": "#FFC21A",
+      "secondary": "#FF4A3D",
+      "accent": "#FFC21A"
+    },
+    "font": {
+      "heading": "\"Inter Tight\", \"Microsoft YaHei\", sans-serif",
+      "body": "\"Inter\", \"Microsoft YaHei\", sans-serif"
+    },
+    "radius": 0,
+    "motion": "硬切为主：切点锁 120 BPM 半拍网格（0.5 秒的倍数），只有砸入、计数、划线在动",
+    "transition": {
+      "type": "none",
+      "durationInFrames": 0
+    },
+    "sceneBias": [
+      "hero",
+      "bigtext",
+      "stats",
+      "chart",
+      "split"
+    ],
+    "subtitle": {
+      "color": "#F7F5EF",
+      "bg": "#000000",
+      "bgOpacity": 0.2
+    },
+    "forbidden": [
+      "竖屏素材左右补黑边居中",
+      "一行中文折成两行",
+      "叠化/翻页/3D 翻转",
+      "没有出处的数字",
+      "主播台与滚动跑马灯",
+      "生成图冒充实拍素材"
+    ],
+    "showcase": {
+      "template": "giantType",
+      "title": "一句话",
+      "emphasis": "说清一件事",
+      "sub": "静音也读得懂的编辑风格",
+      "note": "CAPTION NEWS"
+    }
+  },
+  "sports-telestrator": {
+    "name": "体育战术板",
+    "palette": {
+      "background": "#0C1411",
+      "surface": "#080C0E",
+      "text": "#F4F1E8",
+      "textMuted": "#7E8A80",
+      "primary": "#FFD400",
+      "secondary": "#3FD8FF",
+      "accent": "#FF3B30"
+    },
+    "font": {
+      "heading": "\"Archivo Black\", \"Microsoft YaHei\", sans-serif",
+      "body": "\"Inter\", \"Microsoft YaHei\", sans-serif"
+    },
+    "radius": 0,
+    "motion": "先 1× 放完再倒带 0.6 秒；冻帧 0.1 秒白闪 + 1.035→1.0 顿挫（0.35 秒）+ 去饱和 42%，2–4 次/段、每次 1.8–2.4 秒；圈→区→标签间隔 0.3–0.6 秒；段间只用 0.34 秒黄斜带",
+    "transition": {
+      "type": "wipe",
+      "durationInFrames": 10
+    },
+    "sceneBias": [
+      "title",
+      "split",
+      "versus",
+      "stats",
+      "compare"
+    ],
+    "subtitle": {
+      "color": "#F4F1E8",
+      "bg": "#000000",
+      "bgOpacity": 0.64
+    },
+    "forbidden": [
+      "手写体",
+      "叠加层脱离冻帧变换",
+      "叠化或翻页转场",
+      "配乐进球蒙太奇",
+      "素材量不出的数字",
+      "冻帧停在可识别观众"
+    ],
+    "showcase": {
+      "template": "readout",
+      "title": "射门路线",
+      "sub": "体育战术板 · 先放完再冻帧",
+      "values": [
+        {
+          "value": "23.4m",
+          "label": "距离"
+        },
+        {
+          "value": "7",
+          "label": "触球"
+        }
+      ],
+      "note": "TELESTRATOR"
+    }
+  },
+  "exploded-teardown": {
+    "name": "爆炸图拆解",
+    "palette": {
+      "background": "#0D0E10",
+      "surface": "#1C1F24",
+      "text": "#F1EFE9",
+      "textMuted": "#9A958C",
+      "primary": "#F1EFE9",
+      "secondary": "#8E939B",
+      "accent": "#FF6B3D"
+    },
+    "font": {
+      "heading": "\"Inter Tight\", \"Microsoft YaHei\", sans-serif",
+      "body": "\"Inter\", \"Microsoft YaHei\", sans-serif"
+    },
+    "radius": 0,
+    "motion": "24fps 逐帧；拆开是慢起—快中—长停（ease-in-out 三次方），层间错拍 0.15–0.2 秒；合拢自下而上、每层约 1 秒；相机单调插值不过冲",
+    "transition": {
+      "type": "none",
+      "durationInFrames": 0
+    },
+    "sceneBias": [
+      "hero",
+      "title",
+      "tech",
+      "image",
+      "steps"
+    ],
+    "subtitle": {
+      "color": "#F1EFE9",
+      "bg": "#0D0E10",
+      "bgOpacity": 0.5
+    },
+    "forbidden": [
+      "切黑转场",
+      "滑页/分屏",
+      "编造的尺寸数字",
+      "零件上的品牌 logo",
+      "过亮扫光洗白塑料",
+      "生成图冒充真实零件"
+    ],
+    "showcase": {
+      "template": "singleObject",
+      "title": "拆开看",
+      "sub": "爆炸图 · 真实零件逐层",
+      "note": "EXPLODED"
+    }
+  },
+  "watercolor-wash": {
+    "name": "水彩笔刷",
+    "palette": {
+      "background": "#F3E8D2",
+      "surface": "#E7D8BC",
+      "text": "#2E2620",
+      "textMuted": "#8A7A66",
+      "primary": "#4E6E3C",
+      "secondary": "#9FB4C4",
+      "accent": "#C8442A"
+    },
+    "font": {
+      "heading": "\"Georgia\", \"Noto Serif SC\", serif",
+      "body": "\"Noto Serif SC\", \"Georgia\", serif"
+    },
+    "radius": 2,
+    "motion": "慢而流利：一切按笔画进度长出来，一笔 0.6–2.4 秒，画完只留微摆",
+    "transition": {
+      "type": "wipe",
+      "durationInFrames": 20
+    },
+    "sceneBias": [
+      "title",
+      "hero",
+      "image",
+      "gallery",
+      "timeline"
+    ],
+    "subtitle": {
+      "color": "#2E2620",
+      "bg": "#F3E8D2",
+      "bgOpacity": 0.6
+    },
+    "forbidden": [
+      "水彩纹理铺满当贴图",
+      "矢量描边勾形体",
+      "粉蓝粉红晕染底+白色手写英文",
+      "纯白高光（白必须是纸）",
+      "硬切或无关画面间叠化",
+      "第二强调色"
+    ],
+    "showcase": {
+      "template": "figureGrid",
+      "title": "雨停\n之后",
+      "sub": "水彩 · 纸就是橡皮",
+      "note": "WATERCOLOR-WASH",
+      "variant": 3
+    }
+  },
+  "game-show-flat": {
+    "name": "综艺节奏扁平",
+    "palette": {
+      "background": "#FFB870",
+      "surface": "#FFF6E6",
+      "text": "#14100E",
+      "textMuted": "#8A5A3B",
+      "primary": "#FF5D8F",
+      "secondary": "#2EC4B6",
+      "accent": "#FFD93D"
+    },
+    "font": {
+      "heading": "\"Archivo Black\", \"Microsoft YaHei\", sans-serif",
+      "body": "\"Inter Tight\", \"Microsoft YaHei\", sans-serif"
+    },
+    "radius": 4,
+    "motion": "全片一个固定快 tempo：弹出/掉落/盖章/打字都落在（小节,拍），落地 0.35 秒阻尼压扁，镜头冲撞 0.16 秒衰减，换幕在小节线硬切 + 一帧白闪",
+    "transition": {
+      "type": "none",
+      "durationInFrames": 0
+    },
+    "sceneBias": [
+      "title",
+      "game",
+      "bigtext",
+      "versus",
+      "stats"
+    ],
+    "subtitle": {
+      "color": "#FFFFFF",
+      "bg": "#14100E",
+      "bgOpacity": 0.85
+    },
+    "forbidden": [
+      "渐变或柔和投影",
+      "缓慢淡入与叠化",
+      "细描边或无描边插画",
+      "不踩拍的随机弹跳",
+      "真实品牌 logo 与吉祥物",
+      "极简留白与大段静止"
+    ],
+    "showcase": {
+      "template": "figureGrid",
+      "title": "第三题\n抢答",
+      "sub": "综艺包装 · 快 tempo",
+      "note": "GAME-SHOW-FLAT",
+      "variant": 1
+    }
+  },
+  "liminal-footage": {
+    "name": "后室录像",
+    "palette": {
+      "background": "#141310",
+      "surface": "#2A2620",
+      "text": "#E8E0C8",
+      "textMuted": "#9A8F73",
+      "primary": "#D5BD66",
+      "secondary": "#4D3D26",
+      "accent": "#D93A22"
+    },
+    "font": {
+      "heading": "\"VT323\", \"Microsoft YaHei\", monospace",
+      "body": "\"Inter\", \"Microsoft YaHei\", sans-serif"
+    },
+    "radius": 0,
+    "motion": "一镜到底的手持：走路步态 + 呼吸 + 随恐惧增长的颤抖；只在磁带断处切",
+    "transition": {
+      "type": "none",
+      "durationInFrames": 0
+    },
+    "sceneBias": [
+      "title",
+      "image",
+      "quote",
+      "bigtext"
+    ],
+    "subtitle": {
+      "color": "#FFFFFF",
+      "bg": "#000000",
+      "bgOpacity": 1
+    },
+    "forbidden": [
+      "扫描线与 RGB 荧光点（那是 crt-vhs）",
+      "跳吓、怪物贴脸、血浆",
+      "配乐铺底与尖叫刺音",
+      "全片都在抖、全程故障",
+      "既有作品名、层级编号、实体名、真实机构 logo",
+      "干净的白平衡分级"
+    ],
+    "showcase": {
+      "template": "vintageFrame",
+      "title": "这里来过",
+      "sub": "后室录像 · 重复的空间",
+      "note": "CAM 01 / 1996"
+    }
+  },
+  "newsreel-1920s": {
+    "name": "1920 年代新闻片",
+    "palette": {
+      "background": "#0A0908",
+      "surface": "#141210",
+      "text": "#F3EEE4",
+      "textMuted": "#D6CFC0",
+      "primary": "#EFEBE2",
+      "secondary": "#9E978A",
+      "accent": "#FFFDF6"
+    },
+    "font": {
+      "heading": "\"Noto Serif SC\", \"Microsoft YaHei\", serif",
+      "body": "\"Inter\", \"Microsoft YaHei\", sans-serif"
+    },
+    "radius": 2,
+    "motion": "乐队即时钟：190–220 BPM，切点与字卡咬在拍上；走片 ±1.6/2.2px、闪烁 ±3.5%，转场只用新闻片自己那几种",
+    "transition": {
+      "type": "wipe",
+      "durationInFrames": 8
+    },
+    "sceneBias": [
+      "title",
+      "image",
+      "bigtext",
+      "compare"
+    ],
+    "subtitle": {
+      "color": "#F3EEE4",
+      "bg": "#0A0908",
+      "bgOpacity": 0.95
+    },
+    "forbidden": [
+      "彩色或棕褐滤镜",
+      "画出 1.37:1 窗框外",
+      "叠化与推拉模糊转场",
+      "静帧超 1 秒无任何运动",
+      "生成或重绘的假档案画面",
+      "字层跟着画面抖"
+    ],
+    "showcase": {
+      "template": "vintageFrame",
+      "title": "横渡大西洋",
+      "sub": "1929 · 第七版新闻片",
+      "note": "NEWSREEL / 1929"
+    }
+  },
+  "realtime-countdown": {
+    "name": "实时倒计时分屏",
+    "palette": {
+      "background": "#06080A",
+      "surface": "#0B0E11",
+      "text": "#F2F5F7",
+      "textMuted": "#7C878D",
+      "primary": "#FF5B1F",
+      "secondary": "#FF3B30",
+      "accent": "#FF5B1F"
+    },
+    "font": {
+      "heading": "\"Inter Tight\", \"Microsoft YaHei\", sans-serif",
+      "body": "\"Inter\", \"Microsoft YaHei\", sans-serif"
+    },
+    "radius": 0,
+    "motion": "整秒驱动：每整秒数字下落 14px/0.12s，重排版 0.34s，零点合成 0.42s，不加速不跳时",
+    "transition": {
+      "type": "none",
+      "durationInFrames": 0
+    },
+    "sceneBias": [
+      "split",
+      "timeline",
+      "image",
+      "hero"
+    ],
+    "subtitle": {
+      "color": "#F2F5F7",
+      "bg": "#06080A",
+      "bgOpacity": 0.8
+    },
+    "forbidden": [
+      "变速、慢动作或抽帧跳时",
+      "叠化/翻页/缩放转场",
+      "圆角、投影、3D",
+      "让音乐决定切点",
+      "未同步素材冒充逐帧同步",
+      "格子里塞文字或居中标题页"
+    ],
+    "showcase": {
+      "template": "readout",
+      "title": "00:12",
+      "sub": "实时倒计时 · 时钟走画面",
+      "values": [
+        {
+          "value": "00:12",
+          "label": "距开始"
+        },
+        {
+          "value": "3",
+          "label": "分屏"
+        }
+      ],
+      "note": "LIVE"
+    }
+  },
+  "timelapse-symphony": {
+    "name": "延时摄影交响",
+    "palette": {
+      "background": "#000000",
+      "surface": "#141210",
+      "text": "#EDE8DF",
+      "textMuted": "#B0AAA0",
+      "primary": "#D9772F",
+      "secondary": "#5A6168",
+      "accent": "#D9772F"
+    },
+    "font": {
+      "heading": "\"Inter\", \"Microsoft YaHei\", sans-serif",
+      "body": "\"Inter\", \"Microsoft YaHei\", sans-serif"
+    },
+    "radius": 0,
+    "motion": "切点全落拍上：120BPM 一拍 15 帧、十六分 3.75 帧；速度 0.3×–75×，只有硬切与一次硬切到黑",
+    "transition": {
+      "type": "none",
+      "durationInFrames": 0
+    },
+    "sceneBias": [
+      "hero",
+      "image",
+      "gallery",
+      "stats",
+      "quote"
+    ],
+    "subtitle": {
+      "color": "#EDE8DF",
+      "bg": "#000000",
+      "bgOpacity": 0.35
+    },
+    "forbidden": [
+      "旁白解说",
+      "淡入淡出转场",
+      "无人机炫技混剪",
+      "居中标题卡",
+      "漂浮贴纸与速度线特效",
+      "生成图冒充实拍"
+    ],
+    "showcase": {
+      "template": "singleObject",
+      "title": "一整天\n压成三分钟",
+      "sub": "延时 · 配乐先写",
+      "note": "TIMELAPSE"
+    }
+  },
+  "visual-investigation": {
+    "name": "视觉调查",
+    "palette": {
+      "background": "#0B0C0E",
+      "surface": "#141619",
+      "text": "#ECEAE4",
+      "textMuted": "#8B9097",
+      "primary": "#FF4A2E",
+      "secondary": "#4A4F57",
+      "accent": "#E4E0D4"
+    },
+    "font": {
+      "heading": "\"Inter Tight\", \"Microsoft YaHei\", sans-serif",
+      "body": "\"Inter\", \"Noto Serif SC\", \"Microsoft YaHei\", sans-serif"
+    },
+    "radius": 0,
+    "motion": "硬切换入 ≤0.1s 与 3–4 帧白闪；只有画出来的才有过程：圈 0.5s 顺时针 ease-out cubic、引线 0.4–0.8s；框内慢推 ≤1.9×（地图）/1.06×（照片），相机不动；事件钟匀速，每 1 秒必有变化",
+    "transition": {
+      "type": "none",
+      "durationInFrames": 0
+    },
+    "sceneBias": [
+      "timeline",
+      "compare",
+      "split",
+      "chart",
+      "quote"
+    ],
+    "subtitle": {
+      "color": "#ECEAE4",
+      "bg": "#000000",
+      "bgOpacity": 0.55
+    },
+    "forbidden": [
+      "暗示素材里没有的因果或时间对齐",
+      "慢放灾难、满屏火焰、给死亡配声效",
+      "蓝紫科技渐变与发光",
+      "留空占位框（灰底「无素材」）",
+      "页眉、居中标题页、翻页式转场",
+      "用生成图冒充历史影像"
+    ],
+    "showcase": {
+      "template": "readout",
+      "title": "同一秒",
+      "sub": "三路来源在同一刻对上",
+      "values": [
+        {
+          "value": "14:02:11",
+          "label": "同步点"
+        },
+        {
+          "value": "3",
+          "label": "来源"
+        }
+      ],
+      "note": "INVESTIGATION"
+    }
+  },
+  "constructivist-montage": {
+    "name": "构成主义蒙太奇",
+    "palette": {
+      "background": "#EDE4D0",
+      "surface": "#141210",
+      "text": "#141210",
+      "textMuted": "#7A7166",
+      "primary": "#D52B1E",
+      "secondary": "#141210",
+      "accent": "#EDE4D0"
+    },
+    "font": {
+      "heading": "\"Archivo Black\", \"Microsoft YaHei\", sans-serif",
+      "body": "\"Inter\", \"Microsoft YaHei\", sans-serif"
+    },
+    "radius": 0,
+    "motion": "120 BPM 网格；斜轴砸入硬停、卡拍切换，红擦与虹膜取代叠化，无弹性回弹",
+    "transition": {
+      "type": "wipe",
+      "durationInFrames": 8
+    },
+    "sceneBias": [
+      "title",
+      "stats",
+      "compare",
+      "image",
+      "timeline"
+    ],
+    "subtitle": {
+      "color": "#EDE4D0",
+      "bg": "#141210",
+      "bgOpacity": 0.9
+    },
+    "forbidden": [
+      "红色叠红色",
+      "柔和渐变与发光",
+      "圆角卡片",
+      "装饰性拼贴",
+      "慢动作与英雄特写",
+      "生成图冒充实拍档案"
+    ],
+    "showcase": {
+      "template": "collage",
+      "title": "把事实\n排成方阵",
+      "sub": "构成主义 · 1923",
+      "note": "PROUN / 1923"
+    }
+  },
+  "news-package-system": {
+    "name": "电视新闻包装",
+    "palette": {
+      "background": "#121417",
+      "surface": "#1B1E23",
+      "text": "#F4F1E8",
+      "textMuted": "#8C8878",
+      "primary": "#F2CF1D",
+      "secondary": "#D4B064",
+      "accent": "#F2CF1D"
+    },
+    "font": {
+      "heading": "\"Inter Tight\", \"Microsoft YaHei\", sans-serif",
+      "body": "\"Inter\", \"Microsoft YaHei\", sans-serif"
+    },
+    "radius": 1,
+    "motion": "120 BPM 拍网格：切与擦除落在拍或半拍；纸条换字 0.32 秒，竖带擦除 0.3 秒；镜头内每 0.5–1 秒一个包装动作",
+    "transition": {
+      "type": "wipe",
+      "durationInFrames": 9
+    },
+    "sceneBias": [
+      "title",
+      "stats",
+      "chart",
+      "table",
+      "quote"
+    ],
+    "subtitle": {
+      "color": "#F4F1E8",
+      "bg": "#000000",
+      "bgOpacity": 0.2
+    },
+    "forbidden": [
+      "叠化/翻页/3D 翻转转场",
+      "通栏跑马灯与烧死字幕",
+      "虚拟演播室、主播与生成主播",
+      "把 #FE6B3D 当常规强调色",
+      "圆角卡片与投影浮层",
+      "包装层（纸条/标签/来源行/角标）不随画面走"
+    ],
+    "showcase": {
+      "template": "catalogue",
+      "title": "晚间新闻",
+      "sub": "品牌板 · 标签 · 纸条 · 墨卡",
+      "items": [
+        "品牌板",
+        "标签",
+        "纸条",
+        "印章"
+      ],
+      "note": "01"
+    }
+  },
+  "satellite-briefing": {
+    "name": "卫星地图简报",
+    "palette": {
+      "background": "#070B0E",
+      "surface": "#14191C",
+      "text": "#F2F5F6",
+      "textMuted": "#A1A7A9",
+      "primary": "#FFBE55",
+      "secondary": "#2E70CE",
+      "accent": "#FFBE55"
+    },
+    "font": {
+      "heading": "\"Inter Tight\", \"Microsoft YaHei\", sans-serif",
+      "body": "\"Inter\", monospace, sans-serif"
+    },
+    "radius": 0,
+    "motion": "相机不停：距离在对数空间插值，停顿也留 2–5% 蠕动，一帧不动不超过 1 秒；标记是「被做出来」的，线生长、计数滚到终值一顿",
+    "transition": {
+      "type": "wipe",
+      "durationInFrames": 16
+    },
+    "sceneBias": [
+      "title",
+      "hero",
+      "image",
+      "stats",
+      "timeline"
+    ],
+    "subtitle": {
+      "color": "#F2F5F6",
+      "bg": "#05080A",
+      "bgOpacity": 0.55
+    },
+    "forbidden": [
+      "底图上绘制、风格化或生成地面",
+      "影像上压伪彩渐变或彩色 ramp",
+      "发光网格、科幻 HUD 线框与虚构机身装饰",
+      "无关地点之间叠化、一次缩放中途硬切",
+      "装饰性地使用强调色或第二个强调色",
+      "不可授权影像（Google Earth/Bing/Esri/Mapbox/Planet/Maxar）"
+    ],
+    "showcase": {
+      "template": "readout",
+      "title": "选址 · B-12",
+      "sub": "卫星地图简报",
+      "values": [
+        {
+          "value": "12.4ha",
+          "label": "面积"
+        },
+        {
+          "value": "1:25k",
+          "label": "比例"
+        },
+        {
+          "value": "03-11",
+          "label": "日期"
+        }
+      ],
+      "note": "影像 © 自有归档",
+      "placeholder": "此处需真实卫星／航拍影像\n标记层只是我们画的那一层"
+    }
+  },
+  "pointcloud-scan": {
+    "name": "激光点云扫描",
+    "palette": {
+      "background": "#05080A",
+      "surface": "#0F1714",
+      "text": "#E6EFE9",
+      "textMuted": "#6E7B74",
+      "primary": "#D4FFF0",
+      "secondary": "#5C9A7A",
+      "accent": "#FFB347"
+    },
+    "font": {
+      "heading": "\"Inter Tight\", \"Microsoft YaHei\", sans-serif",
+      "body": "\"Inter\", \"Microsoft YaHei\", sans-serif"
+    },
+    "radius": 0,
+    "motion": "相机不停，24fps 逐帧、朝向/距离/俯仰 C1 连续；前缘缓动 1.5–3 秒扫过主体，主体处最慢，单点就地变面 5–7 帧；切割面按拍进格+短停；读数带一小下 pop 落定",
+    "transition": {
+      "type": "wipe",
+      "durationInFrames": 16
+    },
+    "sceneBias": [
+      "title",
+      "hero",
+      "stats",
+      "chart"
+    ],
+    "subtitle": {
+      "color": "#E6EFE9",
+      "bg": "#05080A",
+      "bgOpacity": 0.55
+    },
+    "forbidden": [
+      "彩虹高程色带",
+      "装饰性粒子或星空背景",
+      "编造的科幻 HUD 界面",
+      "点云被摆成形状或 logo",
+      "生成的点云冒充真实测绘",
+      "荧光霓虹乱闪"
+    ],
+    "showcase": {
+      "template": "pointfield",
+      "title": "1.28M",
+      "sub": "站点 04 · 正在扫描",
+      "values": [
+        {
+          "value": "±2cm",
+          "label": "精度"
+        },
+        {
+          "value": "94%",
+          "label": "覆盖"
+        }
+      ],
+      "note": "回波点 · 站点 04"
+    }
+  },
+  "architectural-model": {
+    "name": "白模投影",
+    "palette": {
+      "background": "#08090B",
+      "surface": "#17181B",
+      "text": "#F3F3F1",
+      "textMuted": "#8A8C90",
+      "primary": "#E9A13B",
+      "secondary": "#2E4E7C",
+      "accent": "#58C4DE"
+    },
+    "font": {
+      "heading": "\"Inter Tight\", \"Microsoft YaHei\", sans-serif",
+      "body": "\"Noto Serif SC\", \"Microsoft YaHei\", sans-serif"
+    },
+    "radius": 0,
+    "motion": "只动光和相机：光从投影轴铺开，一栋栋点亮，机位连续不停死",
+    "transition": {
+      "type": "fade",
+      "durationInFrames": 12
+    },
+    "sceneBias": [
+      "title",
+      "hero",
+      "stats",
+      "steps",
+      "compare"
+    ],
+    "subtitle": {
+      "color": "#F3F3F1",
+      "bg": "#000000",
+      "bgOpacity": 0.45
+    },
+    "forbidden": [
+      "把颜色画进模型材质",
+      "线框/扫描线/全息 HUD",
+      "生成图冒充真实地点",
+      "编造建造年份层",
+      "暖色 HDRI 把白模照成米黄",
+      "硬边光带横扫桌面或滑页转场"
+    ],
+    "showcase": {
+      "template": "singleObject",
+      "title": "街区白模",
+      "sub": "按 1:1000 挤出的体量",
+      "note": "1:1000"
+    }
+  },
+  "data-as-objects": {
+    "name": "数据实体化",
+    "palette": {
+      "background": "#C4BEB4",
+      "surface": "#E6E1D8",
+      "text": "#1C1D20",
+      "textMuted": "#7A766D",
+      "primary": "#D4521C",
+      "secondary": "#C8CCD1",
+      "accent": "#D2B07A"
+    },
+    "font": {
+      "heading": "\"Inter Tight\", \"Microsoft YaHei\", sans-serif",
+      "body": "\"Inter\", \"Microsoft YaHei\", sans-serif"
+    },
+    "radius": 2,
+    "motion": "物件逐件落下堆叠、相机永不停、计数只跟落地件数走",
+    "transition": {
+      "type": "fade",
+      "durationInFrames": 10
+    },
+    "sceneBias": [
+      "compare",
+      "stats",
+      "timeline",
+      "bigtext"
+    ],
+    "subtitle": {
+      "color": "#1C1D20",
+      "bg": "#E6E1D8",
+      "bgOpacity": 0.84
+    },
+    "forbidden": [
+      "发光物件与假界面",
+      "彩虹序列色或按数值上色",
+      "柱状图、坐标轴、图例这类纸面图表",
+      "用缩放/形变代替逐件装配",
+      "计数器按时间滚而不跟落地件",
+      "无出处的数字或生成图冒充实物"
+    ],
+    "showcase": {
+      "template": "stack",
+      "title": "一台风机，\n就是一千户人家",
+      "items": [
+        "1 台风机",
+        "1000 户人家"
+      ],
+      "values": [
+        {
+          "value": "6.2 GWh／年"
+        },
+        {
+          "value": "6.1 GWh／年"
+        }
+      ],
+      "count": 10,
+      "note": "一格 = 0.62 GWh"
+    }
+  },
+  "microscope-story": {
+    "name": "显微镜故事",
+    "palette": {
+      "background": "#0B0D0F",
+      "surface": "#1B2126",
+      "text": "#F4F1EC",
+      "textMuted": "#8C949B",
+      "primary": "#78F0CD",
+      "secondary": "#2A3036",
+      "accent": "#007A63"
+    },
+    "font": {
+      "heading": "\"Noto Serif SC\", \"Georgia\", serif",
+      "body": "\"Inter Tight\", \"Microsoft YaHei\", sans-serif"
+    },
+    "radius": 0,
+    "motion": "24fps 逐帧；相机为相似变换按对数螺线插值（围绕两帧的不动点做 M^u），缓入缓出，静置时每秒 2–5% 微推，最长静止不超过 1 秒；倍率只在层板真正换级处变，每次配一次对焦呼吸与一声转塔咔哒",
+    "transition": {
+      "type": "blur",
+      "durationInFrames": 12
+    },
+    "sceneBias": [
+      "title",
+      "image",
+      "compare",
+      "stats"
+    ],
+    "subtitle": {
+      "color": "#F4F1EC",
+      "bg": "#0C0E11",
+      "bgOpacity": 0.74
+    },
+    "forbidden": [
+      "生成图或 AI 图冒充实拍标本",
+      "改图：修结构、补细节、假上色",
+      "没有文件依据的放大倍数与比例尺",
+      "叠化、切黑转场",
+      "发光网格/准星一类科幻 HUD",
+      "临床诊断式结论"
+    ],
+    "showcase": {
+      "template": "singleObject",
+      "title": "细胞壁",
+      "sub": "标本是真实显微照片",
+      "note": "×400 / 比例尺 20μm",
+      "placeholder": "此处需真实显微影像\n标注与比例尺才是我们加的"
+    }
+  },
+  "archive-lightbox": {
+    "name": "档案灯箱",
+    "palette": {
+      "background": "#F7F9FB",
+      "surface": "#EDF0F3",
+      "text": "#15171A",
+      "textMuted": "#6E757C",
+      "primary": "#FF5A1F",
+      "secondary": "#2A2E33",
+      "accent": "#FF5A1F"
+    },
+    "font": {
+      "heading": "\"Georgia\", \"Noto Serif SC\", serif",
+      "body": "\"Inter\", \"Microsoft YaHei\", sans-serif"
+    },
+    "radius": 1,
+    "motion": "24fps 逐帧、相机单调曲线无过冲、台面本身不动；放大镜落与起各 0.4 秒快出且垂直 90°，线与下划线 0.3–0.6 秒画上",
+    "transition": {
+      "type": "none",
+      "durationInFrames": 0
+    },
+    "sceneBias": [
+      "title",
+      "image",
+      "gallery",
+      "compare",
+      "quote"
+    ],
+    "subtitle": {
+      "color": "#F4F5F7",
+      "bg": "#0E0F11",
+      "bgOpacity": 0.74
+    },
+    "forbidden": [
+      "棕褐做旧与颗粒滤镜",
+      "生成图冒充档案物件",
+      "物件之间的叠化与翻页",
+      "第二个强调色",
+      "把灯箱当铺满画面的背景板",
+      "没有出处的编号与数字"
+    ],
+    "showcase": {
+      "template": "vintageFrame",
+      "title": "第 47 号",
+      "sub": "档案摊在灯箱上",
+      "note": "BOX 12 / FOLDER 47"
+    }
+  },
+  "pen-wash-sketch": {
+    "name": "钢笔淡彩",
+    "palette": {
+      "background": "#EFE3C8",
+      "surface": "#E4D5B4",
+      "text": "#3A2A1E",
+      "textMuted": "#8B7156",
+      "primary": "#7FA04A",
+      "secondary": "#9FBCD6",
+      "accent": "#C9573F"
+    },
+    "font": {
+      "heading": "\"STKaiti\", \"Georgia\", serif",
+      "body": "\"STKaiti\", \"Noto Serif SC\", serif"
+    },
+    "radius": 1,
+    "motion": "墨按笔画顺序长出来（一笔 0.4–1.6 秒），颜色后到、从一点绽开或沿湿边漫开，永不瞬切；人与水洗 12fps 抖，纸不抖、相机每帧平滑",
+    "transition": {
+      "type": "wipe",
+      "durationInFrames": 16
+    },
+    "sceneBias": [
+      "title",
+      "hero",
+      "life",
+      "gallery",
+      "split"
+    ],
+    "subtitle": {
+      "color": "#3A2A1E",
+      "bg": "#EFE3C8",
+      "bgOpacity": 0.72
+    },
+    "forbidden": [
+      "纯水彩没有线",
+      "只有线没有色",
+      "颜色顺着线走、在线内填满",
+      "涂到页边、没有留白",
+      "发光与数码渐变",
+      "精修矢量插画感"
+    ],
+    "showcase": {
+      "template": "figureGrid",
+      "title": "现场\n速写",
+      "sub": "先墨线后淡彩 · 两层不合",
+      "note": "PEN-WASH-SKETCH",
+      "variant": 3
+    }
+  },
+  "red-papercut": {
+    "name": "红色窗花剪纸",
+    "palette": {
+      "background": "#EFE3CE",
+      "surface": "#F7EEDF",
+      "text": "#4A1512",
+      "textMuted": "#8C6A5E",
+      "primary": "#D2201F",
+      "secondary": "#1E2A4A",
+      "accent": "#C79A3B"
+    },
+    "font": {
+      "heading": "\"Noto Serif SC\", \"STKaiti\", serif",
+      "body": "\"Noto Serif SC\", \"Microsoft YaHei\", serif"
+    },
+    "radius": 0,
+    "motion": "人物 12fps 步进（floor(t·12)/12），镜头/光/火 24fps；铆钉关节、1 帧过冲 1.15×；一折约半秒、展开 ease-out 脆响",
+    "transition": {
+      "type": "wipe",
+      "durationInFrames": 12
+    },
+    "sceneBias": [
+      "title",
+      "hero",
+      "gallery",
+      "steps",
+      "timeline"
+    ],
+    "subtitle": {
+      "color": "#F4E9D6",
+      "bg": "#8E1517",
+      "bgOpacity": 0.95
+    },
+    "forbidden": [
+      "层间投影与分层视差",
+      "渐变与轮廓描边",
+      "透视与三维体积",
+      "叠化转场",
+      "第二种主色",
+      "塑料高光与发光边"
+    ],
+    "showcase": {
+      "template": "layeredPaper",
+      "title": "一张红纸\n全是孔",
+      "sub": "窗花 · 平摊 · 没有层",
+      "note": "窗花 / 双喜"
+    }
+  },
+  "halftone-dossier": {
+    "name": "复古半调案卷",
+    "palette": {
+      "background": "#F1E7D4",
+      "surface": "#E6D8BC",
+      "text": "#201C18",
+      "textMuted": "#6B6154",
+      "primary": "#1F3A5F",
+      "secondary": "#D9455F",
+      "accent": "#C63A2B"
+    },
+    "font": {
+      "heading": "\"Noto Serif SC\", \"Microsoft YaHei\", serif",
+      "body": "\"Inter\", \"Microsoft YaHei\", sans-serif"
+    },
+    "radius": 2,
+    "motion": "30fps 变换 + 约 10fps 煮沸线；一切过冲进场（back ease 0.3–0.45s，从下方升起或 0→1，无淡入），逐字下落 30–100px 后压扁弹回、错峰 0.05–0.08s，盖章 0.09s 从 2.6× 砸到 1× 再阻尼回弹",
+    "transition": {
+      "type": "circle",
+      "durationInFrames": 13
+    },
+    "sceneBias": [
+      "title",
+      "bigtext",
+      "cards",
+      "stats",
+      "image"
+    ],
+    "subtitle": {
+      "color": "#F1E7D4",
+      "bg": "#1F3A5F",
+      "bgOpacity": 0.95
+    },
+    "forbidden": [
+      "渐变（明暗只能靠网点大小）",
+      "任何发光的暗场、辉光与光晕",
+      "叠化转场",
+      "元素淡入",
+      "把煮沸线加在字、网点、HUD、字幕上",
+      "超过五种油墨（不含纸）"
+    ],
+    "showcase": {
+      "template": "halftone",
+      "title": "海面之下\n仍有回波",
+      "sub": "案卷 · 第四十七号",
+      "note": "记录 1978–2024　共 47 次"
+    }
+  },
+  "woodcut-print": {
+    "name": "木刻版画",
+    "palette": {
+      "background": "#E8DDC3",
+      "surface": "#F1E8D2",
+      "text": "#16130F",
+      "textMuted": "#6A6153",
+      "primary": "#B0471C",
+      "secondary": "#16130F",
+      "accent": "#2E4A63"
+    },
+    "font": {
+      "heading": "\"Georgia\", \"Noto Serif SC\", serif",
+      "body": "\"Noto Serif SC\", \"Georgia\", serif"
+    },
+    "radius": 0,
+    "motion": "人物 12fps on twos、镜头光火 24fps；刻痕逐笔长出，每笔 0.08–0.35 秒；硬切两帧错版，转场只揭纸",
+    "transition": {
+      "type": "slide",
+      "durationInFrames": 16
+    },
+    "sceneBias": [
+      "title",
+      "image",
+      "gallery",
+      "quote",
+      "bigtext"
+    ],
+    "subtitle": {
+      "color": "#16130F",
+      "bg": "#F1E8D2",
+      "bgOpacity": 0.92
+    },
+    "forbidden": [
+      "套色叠加",
+      "灰调渐变与柔光",
+      "网点半调",
+      "无纸边的满幅画面",
+      "纸纹逐帧抖动",
+      "发光与霓虹"
+    ],
+    "showcase": {
+      "template": "engrave",
+      "title": "刻掉的地方\n才是白的",
+      "sub": "木刻 · 单版 · 只有黑",
+      "note": "WOODCUT / 1931"
+    }
+  },
+  "screenprint-poster": {
+    "name": "丝印旅行海报",
+    "palette": {
+      "background": "#F3EBDC",
+      "surface": "#E5D9C2",
+      "text": "#1E3B3F",
+      "textMuted": "#5A6E6B",
+      "primary": "#2F6E8E",
+      "secondary": "#9A7FA8",
+      "accent": "#E8553D"
+    },
+    "font": {
+      "heading": "\"Archivo Black\", \"Inter Tight\", \"Microsoft YaHei\", sans-serif",
+      "body": "\"Inter Tight\", \"Microsoft YaHei\", sans-serif"
+    },
+    "radius": 0,
+    "motion": "刮印匀速直线不缓动，一层一拍；强调色比本层主墨晚半拍；抬框约 0.4 秒、换色斜扫约 0.35 秒；松层在重音上卡回对位；全片无淡入淡出",
+    "transition": {
+      "type": "wipe",
+      "durationInFrames": 10
+    },
+    "sceneBias": [
+      "title",
+      "image",
+      "stats",
+      "gallery",
+      "bigtext"
+    ],
+    "subtitle": {
+      "color": "#F3EBDC",
+      "bg": "#1E3B3F",
+      "bgOpacity": 1
+    },
+    "forbidden": [
+      "渐变",
+      "半调网点",
+      "错版漂移抖动",
+      "噪点或复古滤镜",
+      "柔边与投影模糊",
+      "任何淡入淡出"
+    ],
+    "showcase": {
+      "template": "halftone",
+      "title": "一张海报\n四种墨",
+      "sub": "丝网 · 实色叠印 · 没有渐变",
+      "note": "SCREEN / 4"
+    }
+  },
+  "spy-title-60s": {
+    "name": "60s 间谍片头",
+    "palette": {
+      "background": "#EFE4C9",
+      "surface": "#1B1714",
+      "text": "#1B1714",
+      "textMuted": "#8A7A60",
+      "primary": "#D23A22",
+      "secondary": "#E2A52A",
+      "accent": "#EFE4C9"
+    },
+    "font": {
+      "heading": "\"Archivo Black\", \"Microsoft YaHei\", sans-serif",
+      "body": "\"Inter\", \"Microsoft YaHei\", sans-serif"
+    },
+    "radius": 0,
+    "motion": "木偶 12fps 二拍一动、相机与字走 24fps；铜管一记即硬切，字落在拍上停死，刺音处整幅停顿两拍",
+    "transition": {
+      "type": "none",
+      "durationInFrames": 0
+    },
+    "sceneBias": [
+      "title",
+      "hero",
+      "bigtext",
+      "split",
+      "timeline"
+    ],
+    "subtitle": {
+      "color": "#1B1714",
+      "bg": "#EFE4C9",
+      "bgOpacity": 0.92
+    },
+    "forbidden": [
+      "渐变与叠化",
+      "霓虹发光",
+      "圆角与弹簧回弹",
+      "枪管开场与卡通豹",
+      "半调网点与瑞士网格",
+      "真实片名字形与真人姓名"
+    ],
+    "showcase": {
+      "template": "collage",
+      "title": "代号\n夜莺",
+      "sub": "四色实墨 · 手剪硬边",
+      "note": "1964 / TITLE"
+    }
+  },
+  "pictogram-catalogue": {
+    "name": "图鉴卡",
+    "palette": {
+      "background": "#F2EBDD",
+      "surface": "#E3D9C4",
+      "text": "#171512",
+      "textMuted": "#6E6759",
+      "primary": "#D8452F",
+      "secondary": "#1C6E68",
+      "accent": "#E3A02B"
+    },
+    "font": {
+      "heading": "\"Inter Tight\", \"Microsoft YaHei\", sans-serif",
+      "body": "\"Inter\", \"Microsoft YaHei\", sans-serif"
+    },
+    "radius": 0,
+    "motion": "一个速度定全片，加速靠切分拍不靠变速；常规卡一小节、同族子项变半长做连发；入场指数缓出、回弹全片至多一次；转场只许网格类（滑行行、下落列、瓦片翻转、虹膜）且只占切点前后几帧；静止帧真静止",
+    "transition": {
+      "type": "wipe",
+      "durationInFrames": 12
+    },
+    "sceneBias": [
+      "cards",
+      "gallery",
+      "list",
+      "bigtext"
+    ],
+    "subtitle": {
+      "color": "#F2EBDD",
+      "bg": "#D8452F",
+      "bgOpacity": 1
+    },
+    "forbidden": [
+      "3D 相机运动 / 景深 / 手持抖动",
+      "叠化与软淡入",
+      "符号有五官或表情",
+      "渐变、投影、描边",
+      "把数字画成图表",
+      "复制真实赛会的象形、会徽、口号与配色命名"
+    ],
+    "showcase": {
+      "template": "catalogue",
+      "title": "减针",
+      "sub": "两针并一针，织物由宽变窄",
+      "items": [
+        "平针",
+        "反针",
+        "加针"
+      ],
+      "note": "04"
+    }
+  },
+  "redrawn-screencast": {
+    "name": "重绘实机录屏",
+    "palette": {
+      "background": "#E9E7E2",
+      "surface": "#FFFFFF",
+      "text": "#16181D",
+      "textMuted": "#7A7E87",
+      "primary": "#3C6DF0",
+      "secondary": "#202226",
+      "accent": "#FF5C2B"
+    },
+    "font": {
+      "heading": "\"Inter Tight\", \"Microsoft YaHei\", sans-serif",
+      "body": "\"Inter\", \"Microsoft YaHei\", sans-serif"
+    },
+    "radius": 3,
+    "motion": "30fps，界面 on ones、角色按像素网格步进；相机一镜到底、倍率≥1、只做缓动位移不瞬移，光标弹簧缓动+点击小推近",
+    "transition": {
+      "type": "wipe",
+      "durationInFrames": 10
+    },
+    "sceneBias": [
+      "title",
+      "image",
+      "steps",
+      "split"
+    ],
+    "subtitle": {
+      "color": "#16181D",
+      "bg": "#FFFFFF",
+      "bgOpacity": 0.82
+    },
+    "forbidden": [
+      "真实录屏画面顶替重绘界面",
+      "手/手臂/手指入镜",
+      "叠化转场",
+      "倍率缩到 1 以下或拍出显示器边界",
+      "发明功能与改名的模式",
+      "给必读文字加模糊假景深"
+    ],
+    "showcase": {
+      "template": "readout",
+      "title": "重画的录屏",
+      "sub": "相机能钻进一个按钮",
+      "values": [
+        {
+          "value": "1.0×",
+          "label": "倍率"
+        },
+        {
+          "value": "0",
+          "label": "模糊"
+        }
+      ],
+      "note": "REDRAWN UI"
+    }
+  },
+  "adult-scifi-toon": {
+    "name": "科幻情景喜剧卡通",
+    "palette": {
+      "background": "#2A2233",
+      "surface": "#3E3448",
+      "text": "#FFF6E6",
+      "textMuted": "#B4A6BD",
+      "primary": "#D9654B",
+      "secondary": "#C2187E",
+      "accent": "#C8E23C"
+    },
+    "font": {
+      "heading": "\"Archivo Black\", \"Microsoft YaHei\", sans-serif",
+      "body": "\"Inter Tight\", \"Microsoft YaHei\", sans-serif"
+    },
+    "radius": 3,
+    "motion": "角色 12fps 步进（on twos），镜头/漩涡/飞出的道具 24fps 连续；预备→发力→停住，落地 22% 衰减余弦挤压；冷场只留线在抖",
+    "transition": {
+      "type": "wipe",
+      "durationInFrames": 10
+    },
+    "sceneBias": [
+      "title",
+      "chat",
+      "versus",
+      "split",
+      "life"
+    ],
+    "subtitle": {
+      "color": "#FFFFFF",
+      "bg": "#1A1620",
+      "bgOpacity": 0.85
+    },
+    "forbidden": [
+      "渐变阴影",
+      "平滑网页缓动",
+      "日式闪光大眼",
+      "静止不抖的干净矢量线",
+      "复制现成动画角色或传送枪",
+      "分格漫画边框"
+    ],
+    "showcase": {
+      "template": "figureGrid",
+      "title": "我们\n到站了",
+      "sub": "成人向 2D · 粗线煮沸",
+      "note": "ADULT-SCIFI-TOON",
+      "variant": 1
+    }
+  },
+  "upa-50s-flat": {
+    "name": "五十年代扁平卡通",
+    "palette": {
+      "background": "#F2E8D5",
+      "surface": "#E7DBC2",
+      "text": "#241F1B",
+      "textMuted": "#6E6255",
+      "primary": "#E2634B",
+      "secondary": "#3E8E8A",
+      "accent": "#E0A32E"
+    },
+    "font": {
+      "heading": "\"Georgia\", \"Noto Serif SC\", serif",
+      "body": "\"Inter\", \"Microsoft YaHei\", sans-serif"
+    },
+    "radius": 3,
+    "motion": "配色层始终错位并二拍变化：姿势、手型、套色抖动每两帧换一组值（12fps），镜头与圆形转场逐帧（24fps）；手部按预备→快动作 0.15–0.25s→跟随→落到拍；弹出用 0.25s back-ease 过冲",
+    "transition": {
+      "type": "circle",
+      "durationInFrames": 16
+    },
+    "sceneBias": [
+      "title",
+      "steps",
+      "split",
+      "bigtext",
+      "cards"
+    ],
+    "subtitle": {
+      "color": "#241F1B",
+      "bg": "#F2E8D5",
+      "bgOpacity": 0.88
+    },
+    "forbidden": [
+      "色块与线条完全对位的干净矢量",
+      "渐变、柔和光影或发光",
+      "纯黑纯白、霓虹色、未调和的原色",
+      "叠化转场与手持晃动",
+      "逐帧随机噪声抖动（那是胶片抖动，不是套色抖动）",
+      "闭合的描边（墨线必须留 12–25% 断口）"
+    ],
+    "showcase": {
+      "template": "figureGrid",
+      "title": "换个\n说法",
+      "sub": "50s 扁平 · 套色错位",
+      "note": "UPA-50S-FLAT",
+      "variant": 1
+    }
+  },
+  "microgame-flash": {
+    "name": "微游戏快闪",
+    "palette": {
+      "background": "#2A0F5C",
+      "surface": "#3D1A78",
+      "text": "#FFF3E6",
+      "textMuted": "#B49BE6",
+      "primary": "#FF2E88",
+      "secondary": "#1FD1D1",
+      "accent": "#FFC928"
+    },
+    "font": {
+      "heading": "\"Archivo Black\", \"Microsoft YaHei\", sans-serif",
+      "body": "\"Inter Tight\", \"Microsoft YaHei\", sans-serif"
+    },
+    "radius": 3,
+    "motion": "一个微游戏 2.5–4 秒：指令词约 3 帧砸入（过冲回稳）后缩成角标，推进画中画 0.25 秒开场、缩回 0.33 秒盖章收尾；每几关 tempo／关卡时长／停留／帧率一起加速，不叠化不空帧",
+    "transition": {
+      "type": "zoom",
+      "durationInFrames": 8
+    },
+    "sceneBias": [
+      "game",
+      "title",
+      "bigtext",
+      "split",
+      "stats"
+    ],
+    "subtitle": {
+      "color": "#FFFFFF",
+      "bg": "#14100E",
+      "bgOpacity": 0.82
+    },
+    "forbidden": [
+      "全片只用一套画风（每段必须换媒介）",
+      "用条纹放射等综艺包装替代媒介轮换",
+      "叠化、空白帧、超过 60% 的白闪",
+      "一个微游戏短于 2.5 秒或长于 4 秒",
+      "没有结果的关卡（缺 ✓/✗ 印章或失败演出）",
+      "指令词同时烧进字卡和字幕"
+    ],
+    "showcase": {
+      "template": "figureGrid",
+      "title": "跳！",
+      "sub": "每关换一种媒介",
+      "note": "MICROGAME-FLASH",
+      "variant": 1
+    }
+  },
+  "silent-film-1920s": {
+    "name": "1920 年代默片",
+    "palette": {
+      "background": "#0A0908",
+      "surface": "#161311",
+      "text": "#EDE7D8",
+      "textMuted": "#8E8779",
+      "primary": "#EDE7D8",
+      "secondary": "#4A1F1C",
+      "accent": "#C99552"
+    },
+    "font": {
+      "heading": "\"Georgia\", \"Noto Serif SC\", serif",
+      "body": "\"Noto Serif SC\", \"Georgia\", serif"
+    },
+    "radius": 1,
+    "motion": "手摇 16fps 采样、24fps 的闪晃与重描；固定机位为主，缓动关键帧，只有包袱硬切，转场只用虹膜/淡黑/直切/幕布",
+    "transition": {
+      "type": "circle",
+      "durationInFrames": 18
+    },
+    "sceneBias": [
+      "title",
+      "bigtext",
+      "quote",
+      "life",
+      "split"
+    ],
+    "subtitle": {
+      "color": "#EDE7D8",
+      "bg": "#0A0908",
+      "bgOpacity": 1
+    },
+    "forbidden": [
+      "人声、旁白与拟音",
+      "高饱和彩色或棕褐滤镜",
+      "画到片门与幕布之外",
+      "同场叠化、现代甩镜与推拉变焦",
+      "用真实影像冒充手绘画面",
+      "现代无衬线 UI 卡片与圆角投影"
+    ],
+    "showcase": {
+      "template": "vintageFrame",
+      "title": "误会一场",
+      "sub": "默片 · 字幕卡替对白",
+      "note": "REEL 2 / 1925"
+    }
+  },
+  "brick-toys": {
+    "name": "积木玩具",
+    "palette": {
+      "background": "#C8A87B",
+      "surface": "#F2F2EE",
+      "text": "#1B2A34",
+      "textMuted": "#8A7A63",
+      "primary": "#C91A09",
+      "secondary": "#0055BF",
+      "accent": "#F2CD37"
+    },
+    "font": {
+      "heading": "\"Archivo Black\", \"Microsoft YaHei\", sans-serif",
+      "body": "\"Inter Tight\", \"Microsoft YaHei\", sans-serif"
+    },
+    "radius": 1,
+    "motion": "角色与积木 12fps 逐格（每 2 帧一个姿势），相机/焦点/火/飞行器 24fps 连续；吸附落位带一粒凸点的过冲，约 4 帧回零；倒塌用预演算刚体，回弹 0.3、重力低于真实；每 6–10 格主光轻闪 2–3%",
+    "transition": {
+      "type": "wipe",
+      "durationInFrames": 10
+    },
+    "sceneBias": [
+      "title",
+      "steps",
+      "gallery",
+      "bigtext",
+      "life"
+    ],
+    "subtitle": {
+      "color": "#F2F2EE",
+      "bg": "#1B2A34",
+      "bgOpacity": 0.88
+    },
+    "forbidden": [
+      "圆润软萌的黏土/潮玩质感",
+      "像素风与等距棋盘地台",
+      "光滑无瑕的 3D 产品渲染",
+      "粒子或软渐变模拟火烟水",
+      "任何商标名称与小人剪影",
+      "暖钨丝环境下发橙的白砖"
+    ],
+    "showcase": {
+      "template": "stack",
+      "title": "八块积木，\n就是一栋房子",
+      "items": [
+        "一块",
+        "八块"
+      ],
+      "values": [
+        {
+          "value": "1 × 2"
+        },
+        {
+          "value": "8 × 1"
+        }
+      ],
+      "count": 8,
+      "note": "一块 = 两个凸点"
+    }
+  },
+  "popup-book": {
+    "name": "纸片立体书",
+    "palette": {
+      "background": "#EFE3CE",
+      "surface": "#FBF4E4",
+      "text": "#3B2A1E",
+      "textMuted": "#8C7F72",
+      "primary": "#D2452F",
+      "secondary": "#4F8FA8",
+      "accent": "#E0A93C"
+    },
+    "font": {
+      "heading": "\"Archivo Black\", \"Microsoft YaHei\", sans-serif",
+      "body": "\"Inter\", \"Microsoft YaHei\", sans-serif"
+    },
+    "radius": 0,
+    "motion": "on ones 60fps；弹起用 back() 过冲 1.4–1.8、由后向前错峰 40–80ms；绳吊件弹簧；转身用 scale.x 翻转，房间绝不动",
+    "transition": {
+      "type": "flip",
+      "durationInFrames": 16
+    },
+    "sceneBias": [
+      "title",
+      "hero",
+      "split",
+      "steps",
+      "image"
+    ],
+    "subtitle": {
+      "color": "#3B2A1E",
+      "bg": "#FBF4E4",
+      "bgOpacity": 0.9
+    },
+    "forbidden": [
+      "纯纸世界（没有真实房间）",
+      "纸雕灯箱/背光剪纸",
+      "叠化转场",
+      "荧光色",
+      "角色绕 Y 轴旋转",
+      "圆角 UI 卡片"
+    ],
+    "showcase": {
+      "template": "layeredPaper",
+      "title": "翻开\n就站起来",
+      "sub": "立体书 · 真实房间 + 纸世界",
+      "note": "POP-UP"
+    }
+  },
+  "lowpoly-isometric": {
+    "name": "低多边形等距",
+    "palette": {
+      "background": "#DCE6F2",
+      "surface": "#F2E4CB",
+      "text": "#2A3350",
+      "textMuted": "#7C8798",
+      "primary": "#E2705C",
+      "secondary": "#7FA98A",
+      "accent": "#F2B34C"
+    },
+    "font": {
+      "heading": "\"Inter Tight\", \"Microsoft YaHei\", sans-serif",
+      "body": "\"Inter\", \"Microsoft YaHei\", sans-serif"
+    },
+    "radius": 0,
+    "motion": "24fps 逐帧；升起=短促 ease-out + 一次过冲再回稳，破水面加一圈水环；落下叠高=快 ease-in + 一次回弹 + 落地挤压；弹出放大到 1.25 再回 1；过冲用 2–3 段 easeOut 拼，最小格子里最多一块，加密不加速",
+    "transition": {
+      "type": "none",
+      "durationInFrames": 0
+    },
+    "sceneBias": [
+      "title",
+      "bigtext",
+      "steps",
+      "gallery"
+    ],
+    "subtitle": {
+      "color": "#FFF6E9",
+      "bg": "#2A3350",
+      "bgOpacity": 0.28
+    },
+    "forbidden": [
+      "透视汇聚与广角",
+      "平滑着色的圆润高光",
+      "描边与纯黑",
+      "写实贴图",
+      "叠化转场",
+      "一格落两块"
+    ],
+    "showcase": {
+      "template": "pixelGrid",
+      "title": "浮岛",
+      "sub": "低多边形 · 正交等距",
+      "note": "LOWPOLY"
+    }
   }
 }

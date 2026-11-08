@@ -91,11 +91,10 @@ export function listSkills(): SkillInfo[] {
  * 所以这里先把别名和标题模糊匹配吃掉，实在匹配不上再报错，并且报错要指路。
  */
 const ALIASES: Record<string, string> = {
-  // 参考风格翻译：这几个词进不来就会掉到 ROUTES 的"你可能想读 X"提示里，多一次往返
-  参考风格: "style-translate",
-  风格库: "style-translate",
+  // 画风翻译：用户说"照这张图的感觉做""我要这种画风"时直接进这一篇，别掉到 ROUTES 的提示里
   画风翻译: "style-translate",
-  字雨: "style-translate",
+  参考图: "style-translate",
+  对标片: "style-translate",
   // 文字这一篇：用户说的是"字太小/读不完/断行断了意思"，别让它们掉进 freeform 的"排版"路由
   文字: "text-events",
   文字排版: "text-events",

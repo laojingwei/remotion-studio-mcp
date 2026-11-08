@@ -32,7 +32,8 @@ import { densitySummary, projectDensity, rhythmIssues } from "../shared/density"
 import { readScript, saveScript, confirmScript, scriptToText, estimateSeconds, scriptChars, SCRIPT_TYPES, type Script } from "./script.service";
 import { BLOCKING_LEVELS, REVIEW_LEVELS, blockingIssues, readReview, markReviewRequested, markReviewConfirmed, markNeedsWork, markSelfRender, markProbe, markChosenStyle, reviewToText, type ReviewIssue, type ReviewLevel } from "./review.service";
 import { listStyles, presetBackdropIssue, presetOf, readStyle, stylePresetIssues, styleSummary } from "./styles.service";
-import { itemById as styleLibItem, listLibrary as listStyleLib, picksSummary, readPrompt as readStylePrompt } from "./styleLibrary.service";
+import { picksSummary } from "./stylePicks.service";
+import { adaptShowcaseToBrief, buildShowcaseProps } from "./showcase";
 import { fetchLinkHints } from "./style-link.service";
 import { readStoryboard, saveStoryboard, storyboardToText, type Storyboard } from "./storyboard.service";
 import { readTiming, saveTiming } from "./narration-timing.service";
@@ -45,7 +46,7 @@ import {
   type LooseScene,
 } from "./revise.service";
 import { allLibraryItems, elementFromLibrary } from "../shared/elementLibrary";
-import { getMeta, normalizeProps, describeTypeDeep } from "../shared/sceneMetas";
+import { getMeta, normalizeProps, describeTypeDeep, isAgentVisible } from "../shared/sceneMetas";
 import {
   assetIdOf,
   assetToElement,
@@ -189,6 +190,7 @@ const TOOLS: ToolDef[] = [
         "# 创作流程（接单 → 成片）",
         "插件：现有能力满足不了需求时，可在合适时机建议把这部分做成插件（别打断当前流程）——写法见 docs/PLUGIN-GUIDE.md（18 节，含 9 份示例），装进 plugins/ 即生效",
         "铁律：标【闸口】的 9 个节点一个都不能跳（跳过必返工）；没标的步骤可合并提速，但省之前先跟用户说一句。",
+        "场景选型：默认只用 list_scene_types 返回的类型（freeform 自由画布 / scene3d / iso 图解 / 动效类 / 氛围类 / 插件场景）。内置固定版式（title / bullets / chart / stats 这类现成骨架）默认不在这张表里，别主动拿它们搭片子——画面会被锁进既有骨架；用户点名要用某个版式时才用。",
         "【闸口】① 工程归属　② 9 步真的问了用户　③ brief 用户点头　④ 稿件用户点头　⑤ **风格样张用户挑**　⑥ 分镜提案用户选　⑦ 风格帧用户过目　⑧ 观感规格齐 + 用户到编辑器看片　⑨ 交付前自检",
         "⑤⑥ 在用户明确说「直接做 / 别问了」时可跳（跳过要在最后说明「这版没做风格帧确认」）；①②③④⑦⑧ 永不跳。",
         "",
@@ -230,8 +232,8 @@ const TOOLS: ToolDef[] = [
         "   ↳ 这五项决定\"好不好看、专不专业\"。写分镜时可以先不齐（会软提醒），但**请用户看片前必须齐**——标准没定，他只能说「感觉不对」。",
         "7. 风格样张【闸口⑤】 → **主动请用户去编辑器「风格库」面板挑**（顶栏按钮 → 勾选 → 点「告诉 agent」）；收到他\"选好了\"的回话再往下走，别替他猜进度 → get_style_pick() 拿到编号 → probe_style(slugs=[候选1,候选2,候选3])：同一幕出 2–3 张不同风格的图 → **发给用户挑** → confirm_style_probe(slug)",
         "   ↳ 这是\"别一股脑开干\"最硬的一道防线。用户没看过图就往下做，等于让他在成片里做第一次审美判断——那时候改一张图要动 50 幕。",
-        "   ↳ get_style_pick() 会分两组回来：**内置风格（slug）直接 apply_style 就能落 palette/font，不要翻译**；**参考风格（编号）不能套**——先 get_guide(\"style-translate\") 学怎么翻（六槽位 / 三条降级路径），再 get_style_library_prompt 读原文，翻成本片的主题/版式/氛围，最后 probe_style 出我们引擎的样张。两组搞反，一边是白扔现成预设，一边是拿画风参考图当成片效果。翻不出等价版式时，可走自由画布 get_guide(\"freeform\") 自己排，上限比套现成版式高、也更容易出效果。",
-        "   ↳ 用户没挑、或说\"你定\"：list_style_library(q/use/mood) 自己找 2–3 个候选，把「编号 + 一句长什么样」发给他选——别替他决定审美。",
+        "   ↳ get_style_pick() 回来的都是**内置风格（slug）**，带 palette/font 预设，`apply_style(slug)` 一次落到位，**不要翻译**。要换画风不要自己编配色，从 list_styles 里挑另一个 slug 再 apply_style。翻不出等价版式时，可走自由画布 get_guide(\"freeform\") 自己排，上限比套现成版式高、也更容易出效果。",
+        "   ↳ 用户没挑、或说\"你定\"：list_styles 里按八组挑 2–3 个候选，把「slug + 中文名 + 一句长什么样」发给他选——别替他决定审美。",
         "   ↳ 没 probe 过，build_storyboard 会直接拒绝。",
         "8. 风格落地 → 定好 slug 后按需微调：get_style 读规则 → set_theme / apply_style；用 mood 反查一遍（要「高级」就别上弹跳动效）",
         "9. 分镜【闸口⑥】 → get_guide(\"formats\") 定结构 → **get_guide(\"meaning\") 想清每幕让观众看懂什么变化** → 2–3 个拉开差距的提案给用户选 → save_storyboard（每幕 text 直接取自稿件分段）",
@@ -257,7 +259,7 @@ const TOOLS: ToolDef[] = [
         "   ↳ 让他把问题**标在帧上**（编辑器画面右上「批注」）：他会拿到精确到幕内帧的定位 → 你读 get_annotations 逐条改、改完 resolve_annotation，比一句\"这里怪怪的\"少返工好几轮",
         "   ↳ 通过 → confirm_review(approved=true)　要改 → confirm_review(approved=false, feedback=[用户原话], issues=[{level:\"P1\",scene:3,text:\"字幕压住二维码\"}])　他自己导出 → selfRender=true",
         "   ↳ 反馈**必须标级**：P0 意思错了（事实/结论/因果反了）、P1 观众会误解、P2 体验（节奏/转场/音量）、P3 打磨（错别字/间距）。有 P0/P1 时 approved=true 会被拒——**用户点头不等于意思对了**。用户说\"还行/差不多\"要先追问拆成具体条目，别直接记通过。见 get_guide(\"qa\") 的 P0–P3 一节。",
-        "16. 渲染 → render_video(dryRun) → render_video（没验收过 / 刚改过没抽帧都会被拒；用户明确说「不用看了直接渲」才 force=true + forceUserQuote=他的原话）",
+        "16. 渲染 → render_video(dryRun) → render_video（没验收过 / 刚改过没抽帧都会被拒；用不没验收全场景效果不允许私自渲染；用户明确说「不用看了直接渲」才 force=true + forceUserQuote=他的原话）",
         "   ↳ 长片别用 wait 硬等（上限 240s，超过也等不到）：拿 taskId 用 **get_render_status(taskId, waitSec=25)**，状态一变立刻返回，12 分钟的片子约 30 次就够——别几秒一查，纯浪费轮次。",
         "   ↳ 渲染期间不要抽帧 / 出封面（共用同一个浏览器实例，会 delayRender 超时）：等它结束，或先 cancel_render。",
         "17. 交付 → render_cover 出封面候选给用户挑（要单独设计封面就另建一幕再抽）；再 remember / save_template",
@@ -334,7 +336,7 @@ const TOOLS: ToolDef[] = [
       "craft（画面质感：惊艳公式/节奏/签名时刻/禁止清单）、formats（用途→幕结构）、" +
       "script（稿件写法）、content（文案打磨：标题写结论/删形容词/去 AI 味）、subtitle（字幕：一屏一句、无标点）、" +
       "sound（声音设计）、narration（旁白配音与对齐）、long-form（超 12 幕长片）、" +
-      "scene-recipes（75 个版式逐个速查）、freeform（自由画布全部写法与坑）、" +
+      "scene-recipes（内置固定版式速查：默认不对 agent 开放，用户点名或人工调整时才读）、freeform（自由画布全部写法与坑）、" +
       "**scene3d（3D 场景：6 个预设怎么选 + graph 场景图全字段 + 公转/卫星 + 太阳系示例 + 13 个坑）**、" +
       "external-tools（iso 等轴测图解：anatomy 出图→落盘→套主题）、" +
       "qa（分阶段自检）、delivery（画幅/字幕样式/渲染/交付）、memory（记忆与模板）、tools-quickref（薄入口）。\n" +
@@ -359,7 +361,9 @@ const TOOLS: ToolDef[] = [
   {
     name: "probe_style",
     description:
-      "开工前的视觉锚点：按 1–3 个候选风格，各出**两张同款样张**——密度页（看内容会不会空）+ 封面页（看调性）——让用户挑。\n" +
+      "开工前的视觉锚点：按 1–3 个候选风格，各出一张**该风格的招牌样张**（用它的 showcase 构图：巨字／堆叠／网点／点云／刻痕…），让用户挑。\n" +
+      "样张不是「五行要点」通用页——那种图看不出风格差别。标题会换成 brief 里的话，画面结构仍按该风格的配方来。\n" +
+      "只有没配 showcase 的老风格才退回密度页 + 封面页两张。\n" +
       "这是「别一股脑开干」的防线——50 幕做完才发现方向不对，返工量是现在的几十倍。\n" +
       "抽完把图发给用户，选中的用 confirm_style_probe 记下来；没 probe 过，build_storyboard 会拒绝。\n" +
       "⚠️ 冷启动第一次调用可能报浏览器连接超时——服务起来后浏览器要拉起，**重试一次通常就过**；连续两次超时才是真故障。",
@@ -465,26 +469,63 @@ const TOOLS: ToolDef[] = [
 
       let shots: { slug: string; urls: { kind: string; url: string }[] }[] = [];
       let restoreNote = "";
-      try {
-      const targets: { id: string; kind: "density" | "title" }[] = [];
-      if (a.sceneId) {
-        targets.push({ id: a.sceneId, kind: "density" });
-      } else {
-        const densityId = await findOrCreate("样张·密度", "list", densityProps);
-        const titleId = await findOrCreate("样张·封面", "title", {
-          eyebrow: "STYLE PROBE",
-          title: a.title ?? brief.core?.action ?? brief.takeaway ?? brief.goal ?? "标题样张",
-          subtitle: `${brief.durationSec ?? 30}s · ${brief.platform ?? "竖屏"}`,
-        });
-        if (densityId) targets.push({ id: densityId, kind: "density" });
-        if (titleId) targets.push({ id: titleId, kind: "title" });
-      }
-      if (!targets.length) {
-        throw new Error("样张场景创建失败，检查场景类型 list / title 是否可用（list_scene_types）");
-      }
+      // 画幅：模板按"短边百分比"排，竖屏/横屏都能用，但需要知道短边是哪一边
+      const fmt = (p as { formats?: { width: number; height: number }[] }).formats?.[0];
+      const canvas = { w: fmt?.width ?? 1920, h: fmt?.height ?? 1080 };
+      /**
+       * 标题换成用户自己的话，让用户一眼看出"这是我的片子在这个风格下长什么样"。
+       * 适配（降字号 / 清强调词 / 哪些模板不换）交给模板层的 adaptShowcaseToBrief，
+       * 别在这里硬塞字符串——早期版本直接 slice(0,18) 换进巨字模板，换行后压住了强调词。
+       */
+      const briefTitle = String(
+        a.title ?? brief.takeaway ?? brief.core?.believe ?? brief.goal ?? "",
+      ).trim();
 
+      try {
       const applyTool = TOOLS.find((d) => d.name === "apply_style");
       for (const slug of slugs) {
+        const preset = presetOf(slug) as { palette: Record<string, string>; showcase?: Record<string, unknown> } | null;
+        const sc = preset?.showcase as
+          | (Parameters<typeof buildShowcaseProps>[0] & { template: string })
+          | undefined;
+
+        /** 这一轮要抽的幕：有 showcase 就是一张招牌页，没有就退回"密度+封面"两张 */
+        const targets: { id: string; kind: string }[] = [];
+        if (a.sceneId) {
+          targets.push({ id: a.sceneId, kind: "density" });
+        } else if (sc) {
+          const show = adaptShowcaseToBrief(sc, briefTitle);
+          const created = await api<{ createdSceneIds: string[] }>(`/api/projects/${p.id}/ops`, {
+            method: "POST",
+            body: JSON.stringify({
+              actor: "agent",
+              ops: [
+                {
+                  op: "add_scene",
+                  type: "freeform",
+                  name: `样张·${sc.template}`,
+                  props: buildShowcaseProps(show, preset!.palette, canvas),
+                },
+              ],
+            }),
+          });
+          const id = created.createdSceneIds?.[0];
+          if (!id) throw new Error(`样张场景创建失败（${sc.template}）`);
+          targets.push({ id, kind: "showcase" });
+        } else {
+          const densityId = await findOrCreate("样张·密度", "list", densityProps);
+          const titleId = await findOrCreate("样张·封面", "title", {
+            eyebrow: "STYLE PROBE",
+            title: a.title ?? brief.core?.action ?? brief.takeaway ?? brief.goal ?? "标题样张",
+            subtitle: `${brief.durationSec ?? 30}s · ${brief.platform ?? "竖屏"}`,
+          });
+          if (densityId) targets.push({ id: densityId, kind: "density" });
+          if (titleId) targets.push({ id: titleId, kind: "title" });
+        }
+        if (!targets.length) {
+          throw new Error("样张场景创建失败，检查场景类型 freeform / list / title 是否可用（list_scene_types）");
+        }
+
         try {
           await applyTool?.run({ slug, projectId: p.id });
         } catch (err) {
@@ -501,6 +542,7 @@ const TOOLS: ToolDef[] = [
           const idx = (fresh.project.scenes ?? []).findIndex((x: { id?: string }) => x.id === t.id);
           if (idx < 0) continue;
           const span = freshSpans[idx];
+          // 0.6 而不是 0.5：网点/点阵/方块要长完，抽早了是一张"还在建"的图
           const frame = (span?.start ?? 0) + Math.max(0, Math.floor((span?.dur ?? 30) * 0.6));
           const stills = await api<{ stills: { format: string; url: string }[] }>(
             `/api/projects/${p.id}/stills`,
@@ -528,7 +570,12 @@ const TOOLS: ToolDef[] = [
       }
 
       markProbe(p.id, slugs);
-      const kindLabel = (k: string) => (k === "density" ? "密度页（看内容会不会空）" : "封面页（看调性）");
+      const kindLabel = (k: string) =>
+        k === "showcase"
+          ? "招牌样张（这个风格该长的样子）"
+          : k === "density"
+            ? "密度页（看内容会不会空）"
+            : "封面页（看调性）";
       const body = shots
         .map((x, i) => {
           const byKind = new Map<string, string[]>();
@@ -644,136 +691,29 @@ const TOOLS: ToolDef[] = [
     },
   },
   /**
-   * 风格库（341 条外部风格提示词）和内置 43 个风格是两回事，工具也分开：
-   * 这两个只负责"找"和"读用户挑的"，出图仍然走 probe_style。
+   * 用户挑的风格（内置，能直接 apply_style）。
+   *
+   * 这个工具只负责"读用户挑了什么"，出图仍然走 apply_style / probe_style。
+   * 参考风格那一套（list_style_library / get_style_library_prompt）已经下线：
+   * 那批画风描述要么升级成了内置风格，要么并进了提示词库，不再单独存在。
    */
-  {
-    name: "list_style_library",
-    description:
-      "检索风格库（341 条外部风格提示词，按用途/气质分类）。**用户没挑风格时**用它找候选；" +
-      "用户已经在编辑器「风格库」面板挑过，就直接 get_style_pick，别重复检索。" +
-      "返回编号 + 名称 + 一句长什么样 + 有无静帧。这些是**参考风格**，不是能 apply_style 的内置风格。",
-    shape: {
-      q: z.string().optional().describe("关键词：名称/关键词/适合里搜，如「手绘」「纸」「数据」"),
-      use: z
-        .enum(["structure", "technique", "texture", "character", "layout", "kit"])
-        .optional()
-        .describe("用途：structure 整片结构 / technique 手法 / texture 画面质感 / character 角色画风 / layout 版式配色 / kit 成套方案"),
-      mood: z
-        .string()
-        .optional()
-        .describe("气质：克制 活泼 高级 温暖 科技 复古 东方 荒诞 压抑 浪漫（用户说\"想要安静一点\"这类就用它）"),
-      limit: z.number().optional().describe("最多回多少条，默认 40"),
-    },
-    run: async (a) => {
-      const nl = String.fromCharCode(10);
-      const { items, total } = listStyleLib({
-        q: a.q,
-        use: a.use,
-        mood: a.mood as never,
-        limit: a.limit ?? 40,
-      });
-      if (!items.length) {
-        return `没有匹配（库里共 ${total} 条）。换个更短的词，或不带条件看全部：list_style_library(limit=60)。`;
-      }
-      const lines = items.map(
-        (i) =>
-          `- ${i.id} ${i.name}${i.still ? "" : "（无样张）"}：${i.summary ?? i.fit ?? i.tags.join("、") ?? "（源库没写简介）"}` +
-          (i.moods.length ? `〔${i.moods.join("/")}〕` : ""),
-      );
-      return [
-        `命中 ${items.length} 条（库里共 ${total} 条）：`,
-        ...lines,
-        "",
-        "下一步：挑 2–3 条候选 → get_style_library_prompt 读完整提示词 → 翻译成本片的主题/版式/氛围，再用 probe_style 出我们引擎的样张。",
-        "⚠ 这些是画风**描述**，不能 apply_style；真正能一键套的是 list_styles 里的 43 个内置风格。",
-      ].join(nl);
-    },
-  },
   {
     name: "get_style_pick",
     description:
-      "读用户在编辑器「风格库」面板里勾选的风格。分两组：内置（43 个，带 palette/font 预设，可直接 apply_style）+ 参考（341 条画风提示词，要翻译成本片主题/版式）。" +
-      "用户说\"风格选好了 / 我挑完了\"就先调它。有了这条就不用再问用户要编号，也不要自己另挑一套。",
+      "读用户在编辑器「风格库」面板里勾选的风格（都是带 palette/font 预设、能直接 apply_style 的内置风格）。" +
+      '用户说"风格选好了 / 我挑完了"就先调它。有了这条就不用再问用户要 slug，也不要自己另挑一套。',
     shape: {},
     run: async () => {
       const text = picksSummary();
       const nl = String.fromCharCode(10);
       if (text.includes("还没")) return text;
-      return (
-        text +
-        `${nl}${nl}读参考条的完整提示词：get_style_library_prompt(id)` +
-        `${nl}出我们引擎的样张给用户看：probe_style(slugs=[...]) → 用户点头再往下做`
-      );
-    },
-  },
-  {
-    name: "get_style_library_prompt",
-    description:
-      "读风格库里某一条的完整「风格提示词」正文（编号，如 A1 / L36）。只在选定 1–3 条候选后读，别一次读一堆。",
-    shape: {
-      id: z.string().describe("风格编号，如 A1 / M10 / O10（list_style_library 返回的那个 id）"),
-    },
-    run: async (a) => {
-      const it = styleLibItem(a.id);
-      if (!it) {
-        return `库里没有「${a.id}」这一条。先用 list_style_library(q=...) 找编号。`;
-      }
-      const prompt = readStylePrompt(a.id);
-      const nl = String.fromCharCode(10);
-      if (!prompt) {
-        return `「${a.id} ${it.name}」这条在源库里还是空的（只有编号和分类，没有正文）。换一条候选。`;
-      }
-      /**
-       * 参考实现代码**不再砍**（2026-11 用户定调）：js 绘制函数里常常埋着真技法
-       * （位移怎么算、密度怎么控），agent 的任务是淘金，不能替它删。
-       * token 压力交给下面 MAX_PROMPT 截断——只截尾，且留读全文的文件路径。
-       */
-      let body = prompt;
-      // 薄条目（M 系列「一句简介」型）：正文只有简介，提示词原文在外链页面上——
-      // agent 打不开链接，服务端代抓（带缓存）。抓不到时 fetchLinkHints 如实说明，
-      // agent 按一句话简介淘意图、不硬编细节。
-      if (prompt.includes("提示词原文要去")) {
-        const hints = await fetchLinkHints(prompt);
-        if (hints) body = `${body}${nl}${nl}${hints}`;
-      }
-      // L/X 系列（成套方案）的完整正文 8–13KB：上限定 20000 字**全库条目都能整篇过**
-      // （最大 L10 = 13248 字），截断只作为防手滑的兜底。别压回 6000——那次截断把
-      // 实现层技法也截掉了，用户明确要求给足。单次只读 1–3 条候选，这个量级可控。
-      const MAX_PROMPT = 20000;
-      if (body.length > MAX_PROMPT) {
-        body =
-          `${body.slice(0, MAX_PROMPT).trimEnd()}${nl}…（正文共 ${body.length} 字，只给了前 ${MAX_PROMPT} 字。` +
-          `要全量读文件：server/skills/style-library/${it.file}）`;
-      }
-      // 不 filter 空串：空串就是段落间的空行，过滤掉会把正文和结尾提示粘成一段
-      // 阅读框架放正文**前面**：开头定调，agent 读到 Engine/构建脚本那类章节时，
-      // "哪些不适用"已经在注意力里——放结尾等于读完才提醒，噪音已经被吸进上下文了
-      const lines = [
-        `# ${it.id} ${it.name}`,
-        it.summary ? `长什么样：${it.summary}` : "",
-        it.fit ? `适合：${it.fit}` : "",
-        "",
-        "⚠ 这份参考怎么读（先看这段再往下）：" + nl +
-          "库里 341 条都是**外部参考**：原作者用 Canvas/代码逐帧工作流做的 demo 笔记，我们的引擎是 Remotion 版式。" + nl +
-          "所以它**不是给你的指令清单，是原矿**——你的任务是把能用的淘出来，翻成我们的语言（get_guide(\"style-translate\") 六槽位）：" + nl +
-          "· 直接可用：长什么样、材质配色、构图版式、动作重量、节奏、分镜思路、什么别做" + nl +
-          "· 要翻译的：引擎实现/代码段落——不必逐行读懂，读出它想做出什么**画面效果**，在我们 DSL/skill 里找等价做法；没有等价就近似或舍弃" + nl +
-          "· 标了〔参考说明〕的章节：已就地注明它是什么性质、怎么淘——内容**没有删**，值得挖的信息在里面" + nl +
-          "· 通常不照做：文件名/demo 路径（别去找文件）、交付格式、评分；但规则与自评清单里的**质量标准**可以借鉴" + nl +
-          "· 与本仓库既有约定冲突时（读窗、转场、ease 白名单等），以本仓库为准",
-        "",
-        body,
-        "",
-        "—— 以上是参考画风，不能直接 apply_style：按 get_guide(\"style-translate\") 的六槽位把它换成 theme + 版式 + 氛围，再用 probe_style 出我们引擎的样张给用户确认。",
-      ];
-      return lines.join(nl);
+      return text + `${nl}${nl}出我们引擎的样张给用户看：probe_style(slugs=[...]) → 用户点头再往下做`;
     },
   },
   {
     name: "list_styles",
     description:
-      "列出风格库：slug + 名称，标明哪些能 apply_style 一键套 / probe_style 出真样张（标「仅规则」的只能 get_style 读规则手动改）。共 40+ 种（暗色发布会/瑞士编辑/粗野排版/电影片头/像素/国潮/水墨/白板手绘…）。",
+      "列出风格库：slug + 名称，标明哪些能 apply_style 一键套 / probe_style 出真样张（标「仅规则」的只能 get_style 读规则手动改）。共 77 种，按「图形与排版 / 界面与产品 / 复古与屏幕 / 3D 与材质 / 生成与抽象 / 插画与漫画 / 手作 / 电影感」八组归类（完整名录见 server/styles/INDEX.md 的目录表）。",
     shape: {},
     run: async () => {
       const list = listStyles();
@@ -785,7 +725,7 @@ const TOOLS: ToolDef[] = [
         `共 ${list.length} 种风格（${ready} 种可一键套用）：` +
         nl +
         list
-          // 全都有预设时不再逐行打「可一键套用」——43 个一样的标记只是噪音，只标例外
+          // 全都有预设时不再逐行打「可一键套用」——77 个一样的标记只是噪音，只标例外
           .map((x) => `- ${x.slug}：${x.name}${x.hasPreset ? "" : "（仅规则，套不上）"}`)
           .join(nl) +
         (issues.length ? `${nl}${nl}⚠ 插件预设问题：${nl}${issues.map((i) => `- ${i}`).join(nl)}` : "")
@@ -1105,14 +1045,18 @@ const TOOLS: ToolDef[] = [
   {
     name: "list_scene_types",
     description:
-      "列出场景类型及其字段、取值、默认时长。**要判断某类能不能做某事，就传 type 只查它**——返回展开到嵌套的完整字段表：数组元素的形状、几何体每个变体的字段、DSL 内层键。" +
+      "列出**默认对 agent 开放**的场景类型及其字段、取值、默认时长。" +
+      "内置固定版式（title / bullets / chart / stats 这类现成骨架）默认不在这张表里：别拿它们搭片子，画面会被锁进既有骨架。" +
+      "要非常规排版用 freeform，要 3D 用 scene3d，要零件级图解用 iso，要节奏用动效类、要空气感用氛围类。" +
+      "**要判断某类能不能做某事，就传 type 只查它**——返回展开到嵌套的完整字段表：数组元素的形状、几何体每个变体的字段、DSL 内层键。" +
       "不传 type 时默认给全表（很长），summary=true 只给一句话 + 字段名。" +
-      "3D 场景与图解有专属写法指南：get_guide(\"scene3d\") / get_guide(\"external-tools\")。",
+      "3D 场景与图解有专属写法指南：get_guide(\"scene3d\") / get_guide(\"external-tools\")。" +
+      "清单外的固定版式只在用户点名要用时才查：list_scene_types(type:\"title\") 仍返回字段表，但会提醒这是例外。",
     shape: {
       type: z
         .string()
         .optional()
-        .describe("只查这一个类型（如 scene3d / freeform / iso），返回完整嵌套字段表"),
+        .describe("只查这一个类型（如 scene3d / freeform / iso），返回完整嵌套字段表；清单外的固定版式也能查，但只该在用户点名时查"),
       summary: z.boolean().optional().describe("不传 type 时生效：只列类型 + 一句话 + 字段名（省 token）"),
     },
     run: async (a: { type?: string; summary?: boolean }) => {
@@ -1123,21 +1067,41 @@ const TOOLS: ToolDef[] = [
         freeform: "freeform",
       };
       const NL = String.fromCharCode(10);
+      /** agent 视图：只回标签允许的类型。编辑器选择器走不带参数的同一个端点，仍是全量。 */
+      const agentTypes = () =>
+        api<{ types: any[]; hiddenCount?: number }>("/api/scene-types?audience=agent");
       if (a.type) {
         const text = describeTypeDeep(a.type);
         if (!text) {
-          const { types } = await api<{ types: any[] }>("/api/scene-types");
+          const { types, hiddenCount } = await agentTypes();
           throw new Error(
-            `没有场景类型「${a.type}」。可用：${types.map((t: any) => t.type).join("、")}`,
+            `没有场景类型「${a.type}」。默认可用：${types.map((t: any) => t.type).join("、")}。` +
+              `${hiddenCount ? `另有 ${hiddenCount} 个内置固定版式默认不列出；` : ""}` +
+              `清单外的版式不要主动用于新建场景，用户点名时再查。`,
           );
         }
+        // 点名查字段不拦（用户说"就用标题页"时得有地方看 items 的 key），
+        // 但要把"这是例外"顶在最前面，免得 agent 把深查当成可用清单的旁路。
+        const meta = getMeta(a.type);
+        const hiddenNotice =
+          meta && !isAgentVisible(meta)
+            ? `⚠️ 「${a.type}」被标记为默认不给 agent 看，它不在 list_scene_types 的清单里。` +
+              `只有用户明确点名要用这个版式时才用它；其它情况请用 freeform / scene3d / iso / 动效类 / 氛围类。${NL}${NL}`
+            : "";
         const guide = TYPE_GUIDE[a.type];
-        return text + (guide ? `${NL}${NL}写法、示例与坑（建议先读）：get_guide("${guide}")` : "");
+        return (
+          hiddenNotice +
+          text +
+          (guide ? `${NL}${NL}写法、示例与坑（建议先读）：get_guide("${guide}")` : "")
+        );
       }
-      const { types } = await api<{ types: any[] }>("/api/scene-types");
+      const { types, hiddenCount } = await agentTypes();
       const guideHint =
         `${NL}${NL}有专属写法指南的：freeform→get_guide("freeform")、scene3d→get_guide("scene3d")、iso→get_guide("external-tools")。` +
         `${NL}只查某一个类型的完整字段（含嵌套）：list_scene_types(type:"scene3d")。`;
+      const boundary =
+        `${NL}${NL}【范围】以上 ${types.length} 个是默认对 agent 开放的场景类型；另有 ${hiddenCount ?? 0} 个内置固定版式默认不列出。` +
+        `${NL}别主动用清单外的版式搭片子（会把画面锁进既有骨架）；用户点名要用某个版式时，再 list_scene_types(type:"那个 type") 查字段。`;
       if (a.summary) {
         return (
           types
@@ -1152,7 +1116,7 @@ const TOOLS: ToolDef[] = [
                   })
                   .join("/")}`,
             )
-            .join(NL) + guideHint
+            .join(NL) + guideHint + boundary
         );
       }
       return (
@@ -1186,7 +1150,7 @@ const TOOLS: ToolDef[] = [
               : "";
             return `${t.type} · ${t.name}：${t.summary}\n  时长 ${t.duration.min}-${t.duration.max} 帧，默认 ${t.duration.default}${els}\n${fields}`;
           })
-          .join("\n\n") + guideHint
+          .join("\n\n") + guideHint + boundary
       );
     },
   },
@@ -1222,7 +1186,7 @@ const TOOLS: ToolDef[] = [
   {
     name: "add_scene",
     description:
-      "新增一个场景。type 必须是 list_scene_types 返回的类型；props 只需给出想覆盖的字段，其余用默认值。元素 durationInFrames 是「出现多久」，不传或 -1 = 撑到场景结尾；想要独特排版用 type=\"freeform\"（写法见 get_guide(\"freeform\")）。返回新场景 id。",
+      "新增一个场景。type 优先用 list_scene_types 返回的默认开放类型（freeform / scene3d / iso / 动效 / 氛围 / 插件场景）；清单外的内置固定版式只有用户点名时才用，别主动拿来搭片子。props 只需给出想覆盖的字段，其余用默认值。元素 durationInFrames 是「出现多久」，不传或 -1 = 撑到场景结尾；想要独特排版用 type=\"freeform\"（写法见 get_guide(\"freeform\")）。返回新场景 id。",
     shape: {
       type: z.string(),
       props: z.record(z.any()).optional(),

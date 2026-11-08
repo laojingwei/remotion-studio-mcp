@@ -12,9 +12,10 @@
  * normalizeProps 里炸出来。默认值必须自己过一遍 schema —— 这条现在自动验。
  */
 import assert from "node:assert/strict";
-import { SCENE_METAS, MIN_SCENE_FRAMES, normalizeProps } from "../shared/sceneMetas";
+import { SCENE_METAS, MIN_SCENE_FRAMES, normalizeProps, isAgentVisible, metaList } from "../shared/sceneMetas";
 import { SCENE_COMPONENTS } from "../src/scenes/components";
-import { BACKDROP_TYPES, MOTION_SCENE_TYPES, isBackdropType, isMotionScene } from "../shared/sceneKinds";
+import { AGENT_VISIBLE_BUILTIN_TYPES, BACKDROP_TYPES, MOTION_SCENE_TYPES, isAgentVisibleBuiltinType, isBackdropType, isMotionScene } from "../shared/sceneKinds";
+import { jsonToSceneMeta } from "../shared/pluginSceneMeta";
 import { describeFields, getMeta, SCENE_METAS } from "../shared/sceneMetas";
 import type { z } from "zod";
 
@@ -84,6 +85,75 @@ test("BACKDROP 名单不得包含带正文的版式（垫在别的版式下会�
 test("名单里没有重复项", () => {
   assert.equal(new Set(BACKDROP_TYPES).size, BACKDROP_TYPES.length);
   assert.equal(MOTION_SCENE_TYPES.size, [...MOTION_SCENE_TYPES].length);
+});
+
+console.log("\n[visibility] 场景可见性标签（agent 清单只回白名单）");
+
+test("每一个场景都有显式的 agentVisible 标签", () => {
+  const missing = SCENE_METAS.filter((m) => typeof m.agentVisible !== "boolean").map((m) => m.type);
+  assert.deepEqual(missing, [], `这些场景没打标签：${missing.join(", ")}`);
+});
+
+test("白名单是注册表的子集，且每个都有组件", () => {
+  for (const t of AGENT_VISIBLE_BUILTIN_TYPES) {
+    assert.ok(getMeta(t), `白名单里有不存在的类型：${t}`);
+    assert.ok(SCENE_COMPONENTS[t], `白名单里的 ${t} 没有组件`);
+  }
+});
+
+test("默认可见：3D / 图解 / 空白 / 自由画布 / 动效 / 氛围", () => {
+  for (const t of ["scene3d", "iso", "empty", "freeform", "glow", "typewriter", "bokeh", "confetti", "wave"]) {
+    const m = getMeta(t);
+    assert.ok(m, `缺 ${t}`);
+    assert.equal(isAgentVisible(m), true, `${t} 应该默认对 agent 可见`);
+    assert.ok(isAgentVisibleBuiltinType(t), `${t} 应该落在白名单常量里`);
+  }
+});
+
+test("默认隐藏：内置固定版式（title / bullets / chart / stats …）", () => {
+  for (const t of ["title", "bullets", "chart", "stats", "quote", "outro", "hero", "pricing", "gallery", "linechart"]) {
+    const m = getMeta(t);
+    assert.ok(m, `缺 ${t}`);
+    assert.equal(isAgentVisible(m), false, `${t} 是固定版式，应该默认隐藏`);
+    assert.ok(!isAgentVisibleBuiltinType(t), `${t} 不该落在白名单常量里`);
+  }
+});
+
+test("清单两个视图：编辑器全量、agent 只回标签允许的类型", () => {
+  const all = metaList();
+  const agent = metaList({ agentOnly: true });
+  assert.equal(all.length, SCENE_METAS.length, "编辑器视图必须是全量（隐藏只影响列清单）");
+  assert.ok(all.every((t) => typeof t.agentVisible === "boolean"), "全量清单每一项都要带标签");
+  assert.ok(agent.length < all.length, "agent 清单必须比全量少");
+  assert.ok(agent.every((t) => t.agentVisible), "agent 清单里混进了隐藏类型");
+  assert.deepEqual(
+    agent.map((t) => t.type).sort(),
+    [...AGENT_VISIBLE_BUILTIN_TYPES].sort(),
+    "agent 清单应当正好等于白名单（插件场景由服务端额外注册）",
+  );
+});
+
+test("被隐藏的固定版式仍然有 meta 和组件（老工程照常渲染）", () => {
+  const hidden = SCENE_METAS.filter((m) => !isAgentVisible(m));
+  assert.ok(hidden.length > 0, "应当有一批默认隐藏的固定版式");
+  for (const m of hidden) {
+    assert.ok(getMeta(m.type), `${m.type} 隐藏后连 meta 都没了`);
+    assert.ok(SCENE_COMPONENTS[m.type], `${m.type} 隐藏后连组件都没了，老工程会白屏`);
+  }
+});
+
+test("插件场景默认可见，写 false 才隐藏", () => {
+  const base = {
+    type: "t-vis-probe",
+    name: "可见性探针",
+    fields: [{ key: "title", type: "text", label: "标题", default: "探针" }],
+  };
+  const a = jsonToSceneMeta(base, "test");
+  assert.ok(a.meta, `插件 meta 解析失败：${a.issues.join("; ")}`);
+  assert.equal(a.meta!.agentVisible, true, "插件场景必须默认让 agent 查到");
+  const b = jsonToSceneMeta({ ...base, agentVisible: false }, "test");
+  assert.ok(b.meta, `插件 meta 解析失败：${b.issues.join("; ")}`);
+  assert.equal(b.meta!.agentVisible, false, "插件写了 agentVisible:false 就该藏起来");
 });
 
 console.log("\n[defaults] 默认值能过自己的 schema");
