@@ -8,7 +8,9 @@
  * 为什么合并：任何一张图重出，戳都要变。分开维护两个戳就得改两处前端、两处路由，
  * 漏一处就回到「磁盘是新的、浏览器还是旧的」。
  *
- * 戳由每张图的「相对路径 + size + mtimeMs」汇总 sha1 前 12 位。
+ * 戳由每张图的「相对路径 + size + 内容 sha1」汇总 sha1 前 12 位。
+ * 不能用 mtime：git 克隆不保留修改时间，CI 全新 checkout 后 mtime 全变，
+ * 戳必然对不上（test-styles 在 CI 必红的根因）。内容进 git，跨克隆稳定。
  * 由出图脚本在成功写入后调用 `refreshStillVersion()` 自动刷新，勿手改生成的文件。
  */
 import fs from "node:fs";
@@ -48,7 +50,8 @@ export function computeStillVersion(): string | null {
   const hash = createHash("sha1");
   for (const { key, abs } of entries) {
     const st = fs.statSync(abs);
-    hash.update(`${key}:${st.size}:${Math.round(st.mtimeMs)};`);
+    const content = createHash("sha1").update(fs.readFileSync(abs)).digest("hex");
+    hash.update(`${key}:${st.size}:${content};`);
   }
   return hash.digest("hex").slice(0, 12);
 }

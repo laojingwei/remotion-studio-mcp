@@ -6,4 +6,4 @@
  * 现在 URL 带 ?v=<这个戳>：内容一变戳就变，URL 就变，浏览器必然重新取。
  * 戳汇总了内置风格样张与提示词缩略图两类资源，算法见 scripts/still-version.mts。
  */
-export const STILL_VERSION = "cda89fea4ca5";
+export const STILL_VERSION = "1687fc553546";
