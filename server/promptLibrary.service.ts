@@ -353,12 +353,22 @@ export function genreCounts(): Record<PromptGenre, number> {
 
 const PICK_FILE = path.join(DATA_ROOT, "prompt-pick.json");
 
-export function readPick(): PromptPick | null {
+/**
+ * 采纳状态。**两种"没有"必须分开报**：从没采纳过（面板上没选），和采纳过但那条已从库里消失
+ * （换机器 / 库重建 / 条目被删）。混成一句"用户还没采纳"，agent 就会自己从库里挑一条——
+ * 那恰好是配方场景里最坏的猜法（选错骨架 = 整片重做）。
+ */
+export function readPickState(): { pick: PromptPick | null; staleId?: string } {
   const p = readJson<PromptPick | null>(PICK_FILE, null);
-  if (!p?.id) return null;
+  if (!p?.id) return { pick: null };
+  if (!itemById(p.id)) return { pick: null, staleId: p.id };
+  return { pick: p };
+}
+
+export function readPick(): PromptPick | null {
   // 库被重建（换机器、删了那篇）后旧的采纳会指向不存在的编号：
   // 留着会让 agent 去读一个不存在的文件，报错点离真因很远。所以读的时候顺手校验。
-  return itemById(p.id) ? p : null;
+  return readPickState().pick;
 }
 
 /**

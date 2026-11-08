@@ -3,7 +3,7 @@
 一份 `Project JSON`，三个消费方：**Agent 改它、用户在 Web 上拖它、Remotion 渲染它**。
 因为共用同一个数据源，agent 和用户的编辑天然互通 —— 不是后期加的功能，是架构的结果。
 
-> **版本** 1.2.0（开发线 v1.02）· **MCP 工具** 135 个（4 个常驻 + 131 个按需）·
+> **版本** 1.3.0（开发线 v1.03）· **MCP 工具** 135 个（4 个常驻 + 131 个按需）·
 > **变更** 每一版改了什么见 [CHANGELOG.md](CHANGELOG.md)
 > **许可** 本仓库代码 MIT，依赖里有两个非宽松（Remotion License / AGPL），见 [开源协议](#开源协议)
 
@@ -173,7 +173,6 @@ get_guide(name="manual", section="…")   → 按需读指南（不常驻）
 | 渲染 | `preview_frame` / `preview_frames` / `render_video` / `get_render_status` / `cancel_render` / `refresh_bundle` / `cleanup_renders` |
 | 素材 | `upload_asset` / `get_asset_info` / `list_assets`（共用库）/ `list_project_assets`（本工程）/ `delete_project_asset` / `organize_assets`（老文件归位）/ `rename_asset` / `delete_asset` |
 | 风格 | `list_styles` / `get_style` / `apply_style`（一键套风格，21 个氛围型风格连带垫每幕的氛围层） |
-| 风格库（341 条参考风格） | `list_style_library`（按用途/气质/关键词检索）/ `get_style_pick`（读用户在编辑器面板勾选的）/ `get_style_library_prompt`（读某一条完整提示词）。**是画风描述、不能 apply_style** |
 | 提示词配方（179 条整片骨架） | `get_prompt_pick`（读用户在「提示词库」采纳的配方/技法 + 槽位表）。**只借骨架**：内容按槽位对账后的 `actual` 走，示例值一个字都不能进成片 |
 | 需求 / 分镜 | `intake`（9 步问诊）/ `save_brief` / `get_brief` / `confirm_brief` / `save_storyboard` / `get_storyboard` / `export_design`（出给人看的设计稿）/ `build_storyboard` / `check_project`（只读诊断） |
 | 技能 / 记忆 | `list_guides` / `remember` / `recall` |
@@ -603,27 +602,32 @@ screen = stageCenter + pan + zoom * localPoint
 | **对某一帧提意见** | 画面右上「批注」→ 停到出问题的那一帧 → 写一句 → 保存（Ctrl/⌘+Enter）。agent 用 `get_annotations` 读到「第几幕 + 幕内第几帧 + 原话」，改完标「已修」 |
 | 看 agent 干了什么 | 顶栏 `⋯` → 「运行日志」：每次工具调用的时间 / 工具名 / 耗时 / 参数 / 报错，2.5 秒自动刷新（可暂停） |
 | 取消渲染 | 渲染进度旁出现的「取消」按钮 |
-| **挑风格** | 顶栏「风格库」顶部两个标签页切换，**两边都能勾、一起发**：`参考风格` 341 条（按用途/气质筛，勾了 agent 要翻译）；`内置风格` 43 个（勾了 agent 直接 `apply_style`）。选完点「告诉 agent」。缩略图 hover 右下角 ⤢ 放大看细节，ⓘ 看规则与配色 |
+| **挑风格 / 选配方** | 顶栏「风格库」，顶部两个标签页：`内置风格` 77 条（勾选，agent 直接 `apply_style`）+ `提示词` 179 条（整片配方 153 + 单技法 26，单选）。选完点「告诉 agent」。缩略图 hover 右下角 ⤢ 放大看细节，ⓘ 看规则与配色 |
 
-### 风格库（341 条参考风格，不是可套用的内置风格）
+### 风格库（77 条内置风格 + 179 条提示词）
 
-`server/skills/style-library/` 下按用途分 6 个文件夹（整片结构 / 手法 / 画面质感 / 角色画风 / 版式配色 / 成套方案），
-每条是一个 `.md` 提示词 + 同名 `.webp` 静帧。它**不是** `server/styles/` 那 43 个带 `palette/font` 预设的风格：
-勾一条只能当「视觉目标」，得先翻译成 theme + 版式，再用 `probe_style` 出我们引擎的样张给用户确认。
+两套东西回答两个不同的问题，别混：
 
-面板里两个分区都能勾选并一次发给 agent，`get_style_pick()` 会**分两组**返回：
-`builtinSlugs`（可直接 `apply_style`）与 `ids`（要翻译）。这两组别搞反——把参考编号传给 `apply_style`
-会套不上，把内置当参考翻译等于白扔一份现成预设。
+**内置风格 77 条**（`server/styles/`）答"画面长什么样"。每条一个 `.md` 规则（本质 / 辨识信号 / 配色 / 字体 / 运动 / 坑）+ 一条 `presets.json` 预设 + 一张 `stills/*.webp` 样张。
+勾了 agent 直接 `apply_style(slug)`：主题色、字体、圆角、入场转场、氛围层一次到位，**不用翻译**。`probe_style` 能给任意一条出我们引擎的真样张。
+
+**提示词 179 条**（`server/skills/prompt-library/`，8 个体裁目录）答"这条片子怎么拍 / 这个效果怎么做"，每条一个 `.md` + 同名 `.webp` 缩略图：
+
+- **整片配方 153 条（`PMxxx`）**：一条就是一部片子的骨架——贯穿物、叙事结构、动效铁律、禁止项，外加一张「## 槽位」表（产品 / 品牌 / 画幅 / 时长 / CTA…）。
+- **单技法 26 条（`TKxxx`）**：往某一幕里加的一招（字雨、粒子聚形、手绘线条生长…），不为它单独拉一整条片。
+
+**配方只借骨架，内容一格都不照抄。** 勾选后 agent 先 `get_prompt_pick()` 拿 md 路径与槽位表，把表填一版发你确认（缺的一次问齐、和配方冲突的当场说按谁走），你点头后写进 `brief.recipeSlots` 再进分镜。`confirm_brief`（闸口③）会拦「槽位没填就盖章」。
+`get_style_pick()` 只回内置风格的 slug；配方 / 技法走 `get_prompt_pick()`，两者不是一回事。
 
 ```sh
-npm run style:import          # 从源库复制 md 进来（源库路径见脚本头部，可 --src 覆盖）
-npm run style:webp            # 静帧 jpg → webp（长边 720、q82；需要带 libwebp 的 ffmpeg）
-npm run style:build           # 重建索引 data/style-library.json
-npm run style:all             # 上面三步
-npm run style:builtin-stills  # 给 43 个内置风格出静帧 → server/styles/stills/
+npm run style:builtin-stills    # 给内置风格出静帧 → server/styles/stills/（--force 重出）
+npm run prompt:check            # 校验提示词库：编号 / 回链 / 槽位 / 缩略图齐全
+npm run prompt:build            # 由源数据重建 md + manifest
+npm run prompt:stills           # 配方缩略图 → 与 md 同基名
+npm run prompt:technique-stills # 技法缩略图
 ```
 
-补静帧的路径：jpg 丢进对应分类文件夹 → `npm run style:webp` → 面板点「刷新」。
+补缩略图：把图放到对应目录、与 md 同基名即可，面板点「刷新」。
 
 ### 场景类型
 

@@ -41,6 +41,7 @@ export const BRIEF_TOOLS: ToolDef[] = [
     description:
       "记录「用户已确认需求」。4 组问完、契约完整后，把 brief 总结发给用户，用户确认后调用它；没有确认过，build_storyboard 会拒绝。\n" +
       "闸口是**内容判据**而不是「必填有没有填」：段落表每段有时长+内容、镜头清单能直接排拍摄（动画片换成元素清单）、参考指到时间点、素材有责任人+截止、交付有版本列表。缺了会逐条告诉你缺什么。\n" +
+      "采纳过整片配方（brief.recipe，技法不算）还会校验槽位对账：recipeSlots 不能空、每格 actual 不能空——配方只给骨架，产品名/网址/文案照抄就是事故。\n" +
       "如果 brief 里有 assumed（你替用户拍板的字段），**必须带上用户原话**：confirm_brief(assumptions=[{field, userSaid}])。\n" +
       "用户是一次性认可的（「都按你建议的来」）就传 batchAck=true + batchUserSaid=\"他那句原话\"，一条原话覆盖全部推断项。\n" +
       "只传 acknowledgedAssumptions=true 会被拒绝——布尔记不下用户说了什么，事后也查不出他同意了哪几条。",
@@ -398,30 +399,9 @@ export const BRIEF_TOOLS: ToolDef[] = [
         const short = Math.min(W, H);
         const hits: string[] = [];
         for (const sc of scenes as any[]) {
-          // freeform 元素：x/y 是中心百分比，size 是短边百分比
-          if (sc.type === "freeform") {
-            const els = (sc.props?.elements ?? []) as any[];
-            els.forEach((el, i) => {
-              if (el.type === "fx" || el.x === undefined || el.y === undefined) return;
-              const size = Number(el.size ?? 0);
-              if (!size) return;
-              // width/height 不给就回落到 size（矩形现在可以单独定宽高）
-              const wPct = Number(el.width ?? size);
-              const hPct = Number(el.height ?? size);
-              // size 是短边百分比 → 换算成「占画面宽/高的百分比」的半宽半高
-              // 之前这里多乘了 100，导致任何元素都被判成几百 % 宽，安全区提醒全是误报
-              const halfW = (wPct / 2) * (short / W);
-              const halfH = (hPct / 2) * (short / H);
-              const x = Number(el.x);
-              const y = Number(el.y);
-              // 满屏元素是背景/出血，边缘一定贴着画面，报了就是噪音
-              if (Math.max(wPct, hPct) >= 80) return;
-              const label = el.id ? `元素 ${el.id}` : `元素 #${i + 1}`;
-              if (sa.right && 100 - (x + halfW) < sa.right) hits.push(`「${sc.name}」${label} 右边缘进了右侧 ${sa.right}% 按钮栏`);
-              if (100 - (y + halfH) < sa.bottom) hits.push(`「${sc.name}」${label} 下边缘进了底部 ${sa.bottom}% 文案区`);
-              if (y - halfH < sa.top) hits.push(`「${sc.name}」${label} 上边缘进了顶部 ${sa.top}% 状态栏`);
-            });
-          }
+          // 自由画布 / 声明 layoutFree 的幕**不做元素级安全区审计**：落字、文字海、
+          // 文字完全飞出画面都是正常动画语言，按「别贴边」查全是误伤（这是动画工具不是 PPT）。
+          // 画中画小窗与字幕仍要查——压到平台按钮/文案区是真事故。
           // 画中画小窗：x/y 是中心百分比，scale 是缩放
           if (sc.box) {
             const bx = Number(sc.box.x ?? 50);
@@ -460,25 +440,14 @@ export const BRIEF_TOOLS: ToolDef[] = [
         }
 
         // 竖屏构图（提醒级）：竖屏上下各 20% 是平台 UI 与拇指的地盘，主体放进去就被压
-        // 判「元素中心」而不是边缘：出血/延伸是常见设计，中心在禁区才是真的「放错地方」
+        // 判「元素中心」而不是边缘：出血/延伸是常见设计，中心在禁区才是真的「放错地方」。
+        // 自由画布 / layoutFree 幕不查元素——雨从顶部落下、字从底部滚出去都是正常动画，
+        // 只查画中画小窗（那才是"放错地方的主体"）。
         if (portrait) {
           const TOP = 20;
           const BOTTOM = 80;
           const off: string[] = [];
           for (const sc of scenes as any[]) {
-            if (sc.type === "freeform") {
-              const els = (sc.props?.elements ?? []) as any[];
-              els.forEach((el, i) => {
-                if (el.type === "fx" || el.y === undefined) return;
-                const size = Number(el.size ?? 0);
-                // 满屏背景不算主体（出血是设计），只查真正被看见的那几个元素
-                if (size >= 80) return;
-                const y = Number(el.y);
-                const label = el.id ? `元素 ${el.id}` : `元素 #${i + 1}`;
-                if (y < TOP) off.push(`「${sc.name}」${label} 中心在顶部 ${TOP}% 内（状态栏/下拉刷新区）`);
-                if (y > BOTTOM) off.push(`「${sc.name}」${label} 中心在底部 ${100 - BOTTOM}% 内（字幕/平台文案/按钮区）`);
-              });
-            }
             if (sc.box) {
               const by = Number(sc.box.y ?? 50);
               if (by < TOP) off.push(`「${sc.name}」画中画中心在顶部 ${TOP}% 内（状态栏区）`);
@@ -648,6 +617,8 @@ export const BRIEF_TOOLS: ToolDef[] = [
           "其余没答的字段一律按默认值走，但**必须逐条写进 assumed**，confirm_brief 时要带用户原话；",
           "想按 4 组详问就传 intake(mode=\"full\")。",
           "",
+          "⚠️ 闸口⓪ 开工第一问快问也不能省：问用户「要不要去编辑器风格库挑提示词和风格」，他明说不需要才跳过。",
+          "",
           covBlock,
         ].join(nl);
       }
@@ -660,6 +631,12 @@ export const BRIEF_TOOLS: ToolDef[] = [
           `这一组要拿到：${g.output}`,
           "问用户（一次问完，别一条一条抛）：",
           ...g.questions.map((q) => `- ${q}`),
+          ...(g.no === 1
+            ? [
+                "",
+                "⚠️ 闸口⓪ 开工第一问过了吗：动手前先问过用户「要不要去编辑器风格库挑提示词和风格」吗？没问先补这一问（他挑好了 → get_prompt_pick() / get_style_pick() 读）；他明说「不需要」才继续。",
+              ]
+            : []),
           "",
           `要提交的字段（就是 save_brief 的参数名）：${g.fields.join(" / ")}`,
           `一条能直接抄的：save_brief(${g.sample})`,
@@ -682,6 +659,7 @@ export const BRIEF_TOOLS: ToolDef[] = [
         };
         return [
           "需求问诊（4 组，按生产依赖排序；intake(group=N) 取某一组的问题）：",
+          "⚠️ 闸口⓪ 开工第一问：动手前必须先问用户「要不要去编辑器风格库挑提示词和风格」——他挑好了让你读时用 get_prompt_pick() / get_style_pick()；他明说「不需要」才按正常步骤走。没问就开干 = 跳闸口。",
           ...CONFIRM_GROUPS.map(
             (g) => `${g.no}. ${g.title}（${g.covers}）${groupDone(g.no) ? " ✅" : ""}${nl}   产出：${g.output}`,
           ),

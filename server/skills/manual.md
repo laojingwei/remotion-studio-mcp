@@ -179,10 +179,11 @@ fx 类的序列帧文件夹会整体成一个结果，直接给带 `{frame}` 的
 | 配音前发现 TTS 没开 | `tts_check()` 探连通 → `tts_check(deep=true)` 验配置。**开工时做**，别等第 6 步 |
 | 换全套视觉 | `list_styles` → `get_style`（读规则）→ `apply_style`（77 种都能一键套：配色/字体/圆角/转场）。预设只覆盖"系统的值"，画面与文案仍要按风格规则重做；要改得更像品牌，再 `set_theme` 覆盖三个值 |
 | 用户说"风格我选好了" | `get_style_pick()`：回来的**全是内置风格 slug → 直接 `apply_style`**，不用翻译。`probe_style` 出**我们引擎的**样张给用户确认。用户没挑就用 `list_styles` 给 2–3 个候选 |
-| 用户说"配方/提示词我选好了" | `get_prompt_pick()`：拿 id + md 路径 + 槽位表。先读 md，把槽位填一版**发用户确认**（缺的一次问齐，冲突的说明按谁走），点头后 `save_brief(recipe=…, recipeSlots=[…])`。示例内容一律不照抄——照抄就是别人的产品名进你的片子 |
+| 用户说"配方/提示词我选好了" | `get_prompt_pick()`：拿 id + md 路径 + 槽位表。先读 md，把槽位填一版**发用户确认**（缺的一次问齐，冲突的说明按谁走），点头后 `save_brief(recipe=…, recipeSlots=[…])`。示例内容一律不照抄——照抄就是别人的产品名进你的片子。**槽位没填全，`confirm_brief` 会直接拒**（技法 TK 不拦） |
 | 数字/图表页 | 默认用 `counter`（数字滚动）或 freeform 自己画（`get_guide("freeform")`）；`stats`/`chart`/`linechart`/`ring` 是固定版式（默认不对 agent 开放），用户点名要用时才按 `scene-recipes-archive` 查。数据只能来自用户或可靠来源 |
 | 元素动画 | `update_element(anim=[{frame,from,to}])`；弹簧手感 = 过冲关键帧（craft §4） |
 | 完全自定义画面 | `freeform` 场景（`get_guide("freeform")`），上限 40 元素，`layout_grid`/`align_elements` 辅助排版 |
+| 字雨/落字/文字海/文字飞出画面等文字特效 | `freeform`（天然豁免版面审计）或任意幕 `update_scene(id,{layoutFree:true})` 一行声明——元素数/字号档位/安全区/竖屏构图/文字宽度提醒全部跳过。**这是动画不是 PPT**：满屏叠字、出框、落出去不回来都是设计；preview_frames 抽帧看到别当问题纠正 |
 | 要 3D：太空/行星/分子/装置/空间感 | `add_scene(type:"scene3d")`。抽象氛围用 `preset`（6 个母题）；**具体物体必须写 `graph` 场景图**——`get_guide("scene3d")`（给 graph 之后 preset/spin/count/hue 全部失效，别以为没生效） |
 | 要等轴测技术插图（零件、剖面、拆解） | `get_guide("external-tools")`：anatomy 出图 → 落盘套主题 → `add_scene(type:"iso")`，可按帧高亮零件 |
 | 长片（>12 幕） | `get_guide("long-form")`：分章规划、分章配音、分章验收 |

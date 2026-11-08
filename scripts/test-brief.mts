@@ -26,7 +26,7 @@ const test = (name: string, fn: () => void) => {
   }
 };
 
-const { briefToText } = await import("../server/brief.service");
+const { briefToText, recipeGateError } = await import("../server/brief.service");
 const { storyboardToText } = await import("../server/storyboard.service");
 
 console.log("[brief] 用途类型与声音计划字段");
@@ -104,6 +104,64 @@ test("没采纳配方时不出现配方段", () => {
   const text = briefToText({ goal: "涨粉" } as never);
   assert.ok(!text.includes("配方对账"), text);
   assert.ok(!text.includes("recipeSlots"), text);
+});
+
+console.log("[brief] 配方闸口（confirm_brief 会拦）");
+
+test("没采纳配方 → 闸口放行（老工程不受影响）", () => {
+  assert.equal(recipeGateError({ goal: "涨粉" } as never), null);
+  assert.equal(recipeGateError(null), null);
+});
+
+test("采纳整片配方但没有槽位 → 拦住", () => {
+  const err = recipeGateError({ recipe: { id: "PM010", name: "FigPad" } } as never);
+  assert.ok(err && err.includes("recipeSlots 空"), String(err));
+  assert.ok(err!.includes("get_prompt_pick"), String(err));
+});
+
+test("槽位有一格 actual 空着 → 拦住并点名", () => {
+  const err = recipeGateError({
+    recipe: { id: "PM010", name: "FigPad" },
+    recipeSlots: [
+      { slot: "产品", actual: "回声笔记" },
+      { slot: "时长", recipe: "60 秒" },
+    ],
+  } as never);
+  assert.ok(err && err.includes("时长"), String(err));
+  assert.ok(!err!.includes("产品、"), String(err));
+});
+
+test("槽位全填 → 放行", () => {
+  assert.equal(
+    recipeGateError({
+      recipe: { id: "PM010", name: "FigPad" },
+      recipeSlots: [
+        { slot: "产品", actual: "回声笔记" },
+        { slot: "时长", recipe: "60 秒", actual: "30 秒", conflict: "按用户" },
+      ],
+    } as never),
+    null,
+  );
+});
+
+test("技法（TK）不拦——它不改整片结构", () => {
+  assert.equal(
+    recipeGateError({
+      recipe: { id: "TK002", name: "光标打字", kind: "tech" },
+      recipeSlots: [],
+    } as never),
+    null,
+  );
+  // kind 忘了写、但编号是 TK：仍按技法放行（编号是唯一可靠的判据）
+  assert.equal(recipeGateError({ recipe: { id: "TK007", name: "x" } } as never), null);
+});
+
+test("槽位条目缺 slot 名 → 视为没对账", () => {
+  const err = recipeGateError({
+    recipe: { id: "PM001", name: "x" },
+    recipeSlots: [{ actual: "随便填的" }],
+  } as never);
+  assert.ok(err && err.includes("recipeSlots 空"), String(err));
 });
 
 console.log("[storyboard] 三问字段与长片提示");

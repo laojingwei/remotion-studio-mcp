@@ -14,8 +14,10 @@
  * ## 判据
  *
  * 不用人眼比对，直接读 `npm pack --dry-run --json` 的真实清单（与 publish 同一份），
- * 断言两组规则：
+ * 断言三组规则：
  *   必须存在 —— 运行期入口、文档、示例、构建配置；
+ *   必须齐套 —— `server/skills`、`server/styles` 下磁盘有什么，包里就得有什么
+ *               （白名单是「整目录放行 + 负向排除」，写错一条只会静默少文件）；
  *   必须不存在 —— 本机生成物（src/_plugins.generated.ts）、依赖、运行期数据、私货文档。
  *
  * `npm run check:package` 本地可跑；ci.yml 与 publish.yml 都会调它。
@@ -39,6 +41,15 @@ const REQUIRED_FILES = [
   "web/main.tsx",
   "src/index.ts",
   "shared/sceneMetas.ts",
+  // Agent 指南：get_guide 是按名实时读盘，少一篇就是运行期报「没有这篇」
+  "server/skills/manual.md",
+  "server/skills/tools-quickref.md",
+  "server/skills/scene-recipes-archive.md",
+  // 风格库：apply_style 的两份原料（规则 md + 结构化预设），静帧是面板缩略图
+  "server/styles/presets.json",
+  "server/styles/INDEX.md",
+  // 提示词库：挑一篇**中文目录 + 中文文件名**的，顺带守住 tarball 里路径不被转义 / 丢字
+  "server/skills/prompt-library/01-产品宣传/PM010_FigPad-产品宣传.md",
   // 构建 / 启动配置
   "tsconfig.json",
   "vite.config.ts",
@@ -70,6 +81,10 @@ const REQUIRED_DIRS = [
   "plugins/_example-text",
   "plugins/_example-tool",
   "plugins/_example-ui",
+  // 内容资产：指南少一篇 agent 就少一条能力，配方少一张封面面板就是空图
+  "server/skills",
+  "server/skills/prompt-library",
+  "server/styles/stills",
 ];
 
 /** 必须不存在的路径（精确） */
@@ -200,6 +215,52 @@ if (otherMods.length) {
   );
 }
 
+// ⑧ 内容资产齐套：`server/skills` 与 `server/styles` 是「整目录放行 + 负向排除」，
+// 白名单写错一条（或将来加个 `!**/*.webp`）不会报错，只会静默少文件——少的是 agent
+// 要读的指南、用户要看的配方封面。发布流程看到的是绿，用户看到的是空图。
+// 所以不靠人眼：磁盘上有什么，包里就得有什么；三组数量还得对得上。
+const RESOURCE_ROOTS = ["server/skills", "server/styles"];
+const RESOURCE_EXT = /\.(md|webp|json)$/;
+const onDisk = [];
+const walkRes = (rel) => {
+  for (const e of fs.readdirSync(path.join(ROOT, rel), { withFileTypes: true })) {
+    const p = `${rel}/${e.name}`;
+    if (e.isDirectory()) walkRes(p);
+    else if (RESOURCE_EXT.test(e.name)) onDisk.push(p);
+  }
+};
+for (const d of RESOURCE_ROOTS) if (fs.existsSync(path.join(ROOT, d))) walkRes(d);
+const missingRes = onDisk.filter((f) => !files.includes(f));
+if (missingRes.length) {
+  problems.push(
+    `  内容资产没进包：${missingRes.length} 个（例：${missingRes[0]}）` +
+      `——files 里加了排除规则或漏了目录，指南/配方/静帧装完就是缺的`,
+  );
+}
+
+// 三组配对：配方 179 md ↔ 179 封面；77 个风格 md ↔ 77 条 preset ↔ 77 张静帧
+const count = (re) => files.filter((f) => re.test(f)).length;
+const recipeMd = count(/^server\/skills\/prompt-library\/.+\.md$/);
+const recipeWebp = count(/^server\/skills\/prompt-library\/.+\.webp$/);
+if (recipeMd !== recipeWebp) {
+  problems.push(`  配方不配对：${recipeMd} 篇 md / ${recipeWebp} 张封面 webp（面板会出现空图）`);
+}
+const styleMd = files.filter(
+  (f) => /^server\/styles\/[^/]+\.md$/.test(f) && !/\/(INDEX|_template)\.md$/.test(f),
+).length;
+const styleStill = count(/^server\/styles\/stills\/.+\.webp$/);
+let presetCount = 0;
+try {
+  const raw = fs.readFileSync(path.join(ROOT, "server/styles/presets.json"), "utf8");
+  const parsed = JSON.parse(raw);
+  presetCount = Object.keys(parsed.styles ?? parsed).length;
+} catch {
+  problems.push("  读不了 server/styles/presets.json——apply_style 会没有任何预设可用");
+}
+if (styleMd !== styleStill || styleMd !== presetCount) {
+  problems.push(`  风格不齐：${styleMd} 个 md / ${presetCount} 条 preset / ${styleStill} 张静帧`);
+}
+
 if (problems.length) {
   fail([
     `✗ 发布包内容不合格（共 ${problems.length} 处）：`,
@@ -211,5 +272,6 @@ if (problems.length) {
 
 const mb = ((report.size ?? 0) / 1024 / 1024).toFixed(2);
 console.log(`✓ 发布包内容合格：${files.length} 个文件 / ${mb}MB`);
-console.log(`  必需项 ${REQUIRED_FILES.length} 个文件 + ${REQUIRED_DIRS.length} 个示例目录齐全`);
+console.log(`  必需项 ${REQUIRED_FILES.length} 个文件 + ${REQUIRED_DIRS.length} 个目录齐全`);
+console.log(`  内容资产齐套：指南/配方 ${recipeMd} 篇 · 风格 ${styleMd} 个（preset ${presetCount} / 静帧 ${styleStill}）`);
 console.log("  本机生成物、依赖、运行期数据均未混入");

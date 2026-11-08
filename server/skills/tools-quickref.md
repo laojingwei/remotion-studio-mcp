@@ -30,7 +30,8 @@
   用户给的是参考图/对标片（没有 slug）时，才走 `get_guide("style-translate")` 翻成 theme/版式
 - **提示词库（179 条整片骨架）**：用户采纳后 `get_prompt_pick` 拿 id + md 路径 + 槽位表 →
   读 md → 槽位填一版发用户确认（缺的一次问齐、冲突的说明按谁走）→ `save_brief(recipe, recipeSlots)`。
-  **配方只借骨架**：示例产品名/网址/文案照抄就是事故；技法（TK）只用在某一幕，不拉整片
+  **配方只借骨架**：示例产品名/网址/文案照抄就是事故；技法（TK）只用在某一幕，不拉整片。
+  槽位空着 `confirm_brief` 会拒——这是硬闸口，不是提示。
 - 批量：apply_ops（整批原子）
 - 协作记忆：reply_user / remember / recall
 

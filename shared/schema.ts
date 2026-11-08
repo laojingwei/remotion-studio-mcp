@@ -467,6 +467,17 @@ export const sceneSchema = z.object({
   transitionOut: transitionSchema.optional(),
   /** 元素 id → 偏移量；没有条目就走模板原始排版 */
   transforms: z.record(transformSchema).optional(),
+  /**
+   * 自由排版声明：true 后这一幕退出**所有版面类审计**——
+   * 设计锁（元素数/字号档位/叠字转场）、check_project 的安全区与竖屏构图元素提醒、
+   * add_element 的文字宽度提醒全部跳过。给字雨 / 落字 / 文字海 / 文字飞出画面这类
+   * 动画特效用的：动画里文字天然会叠、会飞出去，按版面查全是误伤。
+   * freeform 自由画布不用声明（天然就是）；回执会记账「N 幕自由排版」让用户看得见。
+   */
+  layoutFree: z
+    .boolean()
+    .optional()
+    .describe("自由排版声明：true=本幕是动画特效（字雨/落字/文字飞出），跳过元素数/字号/出框/安全区等版面审计"),
   /** 场景之上的自由元素层（贴纸 / 图标 / 标签 / 图片 / 视频），各有场景内起点/时长 */
   elements: z.array(elementSchema).optional(),
   /**

@@ -13,7 +13,7 @@
 
 ---
 
-## 直接依赖清单（按 `node_modules` 实际安装版本读取）
+## 依赖清单（`dependencies` + `devDependencies`，按 `node_modules` 实际安装版本读取）
 
 | 包 | 版本 | 许可 |
 |---|---|---|
@@ -22,12 +22,15 @@
 | `@remotion/cli` | 4.0.538 | 同上 |
 | `@remotion/renderer` | 4.0.538 | 同上 |
 | `@remotion/player` | 4.0.538 | 同上 |
-| `@remotion/media-utils` | 4.0.538 | MIT |
+| `@remotion/three` | 4.0.538 | 同上 |
 | `essentia.js` | 0.1.3 | **AGPL-3.0** |
-| `hono` | 4.13.13 | MIT |
-| `@hono/node-server` | 1.19.17 | MIT |
+| `hono` | 4.13.16 | MIT |
+| `@hono/node-server` | 2.1.6 | MIT |
 | `@modelcontextprotocol/sdk` | 1.32.2 | MIT |
 | `react` / `react-dom` | 19.3.1 | MIT |
+| `three` | 0.187.0 | MIT |
+| `@react-three/fiber` | 9.8.2 | MIT |
+| `esbuild` | 0.28.2 | MIT |
 | `zustand` | 5.0.16 | MIT |
 | `zod` | 3.25.76 | MIT |
 | `zod-to-json-schema` | 3.25.2 | ISC |
@@ -38,6 +41,9 @@
 | `tsx` | 4.23.15 | MIT |
 | `concurrently` | 9.2.5 | MIT |
 | `@types/node` / `@types/react` / `@types/react-dom` | 22.20.5 / 19.3.0 / 19.3.0 | MIT |
+
+> `@remotion/media-utils` 不是直接依赖（随 `@remotion/*` 一起装上，MIT），列在这里只为让清单完整：
+> 音频波形与时长解析走的就是它。
 
 ## 离线媒体处理
 

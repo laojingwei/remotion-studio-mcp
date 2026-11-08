@@ -54,6 +54,19 @@ export const isMotionScene = (type?: string): boolean =>
   !!type && MOTION_SCENE_TYPES.has(type);
 
 /**
+ * 「自由排版」幕：freeform 自由画布，或任何显式声明 layoutFree 的幕。
+ *
+ * 这是动画工具不是 PPT——字雨、落字、文字海、文字飞出画面都是正常设计语言：
+ * 元素几十个、字号由动画决定、文字落出去完全不回来。对这些幕做「一屏几个字 /
+ * 字号档位 / 出框 / 安全区」的版面审计就是条条必违规，所以直接豁免
+ * （设计锁 / check_project 竖屏构图与安全区 / add_element 宽度提醒都看这个函数）。
+ * freeform 天然就是自由排版，不用声明；其它类型 agent 想造假效，
+ * update_scene(sceneId, { layoutFree: true }) 一行声明，审计回执会记账让用户看得见。
+ */
+export const isLayoutFreeScene = (s?: { type?: string; layoutFree?: boolean }): boolean =>
+  !!s && (s.layoutFree === true || s.type === "freeform");
+
+/**
  * agent 默认能查到的**内置**场景类型。
  *
  * 为什么要有这张表：78 个内置版式是给人挑的骨架（标题页/柱状图/价格表…），

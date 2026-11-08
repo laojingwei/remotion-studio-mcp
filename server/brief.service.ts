@@ -1324,6 +1324,43 @@ const FIELD_HINTS: Record<string, string> = {
   segments: `segments: [{ "startSec": 0, "endSec": 3, "content": "钩子" }]  ← 字段名是 startSec/endSec`,
 };
 
+/**
+ * 配方闸口：采纳了整片配方，就必须做过槽位对账。返回错误文案，`null` = 通过。
+ *
+ * 为什么卡在这儿而不是只在 brief 文本里标 ⚠：漏填的后果不是"不好看"，
+ * 是**别人的产品名 / 网址印在你的片子里**——这种错用户到成片才可能发现。
+ * 只卡整片配方；技法（TK）不改整片结构，有它没它都不该挡住确认。
+ *
+ * 抽成纯函数是为了能单独测：构造一份「9 步全绿 + 契约完整」的 brief 才能走到
+ * confirmBrief 的其余闸口，测这一条不该付那个代价。
+ */
+export function recipeGateError(b: Brief | null): string | null {
+  const rp = b?.recipe;
+  if (!rp?.id) return null;
+  if (rp.kind === "tech" || /^TK/i.test(String(rp.id))) return null;
+  const label = `${rp.id}${rp.name ? ` ${rp.name}` : ""}`;
+  const slots = (b?.recipeSlots ?? []).filter((s) => s && String(s.slot ?? "").trim());
+  if (!slots.length) {
+    return (
+      `你采纳了整片配方 ${label}，但 brief 里没有槽位对账（recipeSlots 空）。\n` +
+      `配方只给骨架——产品名 / 网址 / 文案 / 时长 / 画幅都得换成用户的实际值，` +
+      `这些格子没换，成片里印的就是别人的东西。\n` +
+      `下一步：get_prompt_pick() 拿「## 槽位」表 → 填一版发用户确认（缺的一次问齐、冲突的说清按谁走）→ ` +
+      `save_brief(recipeSlots=[{slot,recipe,actual,conflict}…]) → 再 confirm_brief。`
+    );
+  }
+  const blank = slots.filter((s) => !String(s.actual ?? "").trim()).map((s) => String(s.slot).trim());
+  if (blank.length) {
+    return (
+      `配方 ${label} 的槽位还没填完：${blank.join("、")}\n` +
+      `每格都要有 actual（用户的实际值）。还没问就去问；用户说“你定”就写你定的那个值，` +
+      `并在 conflict 里说明按谁走（例：actual:"30 秒" / conflict:"配方 60 秒，用户要 30 秒，按用户"）。\n` +
+      `不许留空确认，也不许把配方里的示例值抄进 actual。`
+    );
+  }
+  return null;
+}
+
 /** 用户确认需求：9 步走完才能确认；有「替用户拍板」的字段要先逐条核对 */
 export function confirmBrief(
   projectId: string,
@@ -1406,6 +1443,8 @@ export function confirmBrief(
     }
     opts = { ...opts, assumptions: check.checks };
   }
+  const rErr = recipeGateError(b);
+  if (rErr) throw new Error(rErr);
   // v4 闸口：不只看"填没填"，看"说清没说清"（段落表有没有内容、参考有没有指到点、素材有没有责任人）
   const cov = briefCoverage(b);
   if (!cov.ok) {

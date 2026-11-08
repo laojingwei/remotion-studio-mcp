@@ -14,7 +14,7 @@
  * 这里保持纯函数 + 结构化类型（不 import schema），避免和 shared/schema.ts 绕成循环依赖
  * —— 和 shared/transitions.ts 处理接缝转场时是同一个理由。
  */
-import { isMotionScene } from "./sceneKinds";
+import { isLayoutFreeScene, isMotionScene } from "./sceneKinds";
 
 /** 7 种主形态。决定"哪些问题要问"和"默认档位"。 */
 export const VIDEO_FORMS = [
@@ -344,7 +344,7 @@ export function deriveDesignLock(input: {
     `动感：${motion} —— ${m.note}（入场 ${m.inFrames} 帧，错峰 ${m.staggerFrames} 帧）`,
     `转场：${transition} —— 只用 ${TRANSITION_WHITELIST[transition].join(" / ")}，单次 ≤ ${TRANSITION_MAX_FRAMES[transition]} 帧`,
     `背景：${bg}底${effects === "关" ? "，不加特效" : `，特效限 ${EFFECTS_WHITELIST[effects].join(" / ")}`}`,
-    "文字密集的幕禁止用 flip / circle / wipe 做转场（会叠字，已实测）",
+    "文字密集的幕禁止用 flip / circle / wipe 做转场（会叠字，已实测）；freeform / 声明 layoutFree 的特效幕除外",
     "特效不能当转场用（punch 每幕砸一下 = 廉价方案，已被否决过）",
   ];
 
@@ -423,8 +423,10 @@ export function lockViolations(lock: DesignLock, scenes: readonly LooseScene[]):
 
     // 动效场景（glow/grain/lightleak/kinetic/maskreveal）是效果件，不是版面：
     // 逐字动画天然几十个 span，按「一屏文字元素 / 标题字号」审计就是每条必违规。
+    // 自由排版幕（freeform / layoutFree）同理：字雨/文字海就是要满屏叠字。
     // 它们仍然要过下面的转场审计。
-    if (!isMotionScene(String(s.type ?? ""))) {
+    const layoutAudit = !isMotionScene(String(s.type ?? "")) && !isLayoutFreeScene(s);
+    if (layoutAudit) {
       // 装饰层天然可以多（背景是三层也不为过），所以这里只看信息元素
       if (textEls.length > lock.maxTextElements) {
         out.push({
@@ -468,8 +470,8 @@ export function lockViolations(lock: DesignLock, scenes: readonly LooseScene[]):
       }
     }
 
-    // 文字密集的幕禁 flip/circle/wipe（动效场景本身就是文字动画，这条不适用）
-    const dense = !isMotionScene(String(s.type ?? "")) && textEls.reduce((n, e) => n + String(e.text ?? "").length, 0) > 20;
+    // 文字密集的幕禁 flip/circle/wipe（动效场景本身就是文字动画，这条不适用；自由排版幕同理）
+    const dense = layoutAudit && textEls.reduce((n, e) => n + String(e.text ?? "").length, 0) > 20;
     for (const t of [s.transitionIn, s.transitionOut]) {
       if (dense && t?.type && ["flip", "circle", "wipe"].includes(t.type)) {
         out.push({
@@ -482,8 +484,8 @@ export function lockViolations(lock: DesignLock, scenes: readonly LooseScene[]):
     }
 
     // 标题字号偏离（只查最大的那个文字元素，容差 1.2 个百分点）
-    // 动效场景的「字」是效果的一部分，字号由动画决定，不跟版面档位比。
-    if (!isMotionScene(String(s.type ?? ""))) {
+    // 动效场景的「字」是效果的一部分，字号由动画决定，不跟版面档位比；自由排版幕同理。
+    if (layoutAudit) {
       const biggest = textEls.reduce<LooseElement | null>(
         (acc, e) => (!acc || Number(e.size ?? 0) > Number(acc.size ?? 0) ? e : acc),
         null,

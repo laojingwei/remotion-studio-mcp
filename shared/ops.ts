@@ -79,6 +79,8 @@ export type Op =
       start?: number;
       /** 轨道号，0 = 主轨；画中画场景传 1+ */
       track?: number;
+      /** 自由排版声明：true = 本幕是动画特效（字雨/落字/文字飞出），版面类审计全部跳过 */
+      layoutFree?: boolean;
     }
   | {
       op: "update_scene";
@@ -512,7 +514,7 @@ function normalizeSubtitleStyle(
  * 在这里直接拒绝，报「第 N 个操作（op 名）」+ 字段名。
  */
 export const OP_FIELDS: Record<string, readonly string[]> = {
-  add_scene: ["op", "type", "props", "afterSceneId", "name", "durationInFrames", "id", "elements", "transitionIn", "start", "track"],
+  add_scene: ["op", "type", "props", "afterSceneId", "name", "durationInFrames", "id", "elements", "transitionIn", "start", "track", "layoutFree"],
   update_scene: ["op", "sceneId", "patch"],
   set_scene_timing: ["op", "sceneId", "durationInFrames"],
   set_subtitle: ["op", "sceneId", "text", "style"],
@@ -667,6 +669,7 @@ const UPDATE_SCENE_KEYS = [
   "transitionIn",
   "transitionOut",
   "elements",
+  "layoutFree",
 ] as const;
 
 /** set_audio 的 audio 对象允许的字段（与项目 schema 的 audio 一致） */
@@ -938,6 +941,7 @@ export function applyOps(project: Project, ops: Op[]): OpResult {
             : { transitionIn: op.transitionIn ?? { type: "fade", durationInFrames: 12 } }),
           ...(op.start === undefined ? {} : { start: Math.max(0, Math.round(op.start)) }),
           ...(op.track === undefined || op.track <= 0 ? {} : { track: Math.round(op.track) }),
+          ...(op.layoutFree === true ? { layoutFree: true } : {}),
         };
         if (op.afterSceneId) {
           /*
@@ -1307,6 +1311,15 @@ export function applyOps(project: Project, ops: Op[]): OpResult {
           const els = patch.elements as OverlayElement[];
           if (els.length) scene.elements = els;
           else delete scene.elements;
+        }
+        if (patch.layoutFree !== undefined) {
+          if (patch.layoutFree === null) delete scene.layoutFree;
+          else scene.layoutFree = patch.layoutFree === true;
+          summary.push(
+            scene.layoutFree
+              ? `ℹ「${scene.name}」已声明自由排版：版面类审计（元素数/字号/出框/安全区）对本幕跳过`
+              : `ℹ「${scene.name}」已取消自由排版声明，版面审计恢复`,
+          );
         }
         summary.push(`更新「${scene.name}」`);
         break;

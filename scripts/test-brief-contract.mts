@@ -160,6 +160,41 @@ test("相同的违约在多幕重复时聚合成一条（避免 14 条噪声）"
   assert.ok(v[0].sceneName.includes("6 幕"), v[0].sceneName);
 });
 
+console.log("[lockViolations] 自由排版豁免（字雨/落字是动画设计，不是版面违规）");
+
+test("layoutFree 幕：元素数 / 字号档位 / 叠字转场全部豁免", () => {
+  const lock = deriveDesignLock({ form: "口播讲解", density: "讲稿", transitionTone: "柔和" });
+  // 30 个单字（远超上限 7）、字号偏离锁定值、30 字 > 20 用 flip——三条必撞
+  const rain = Array.from({ length: 30 }, (_, i) => ({ kind: "text", text: `${i}`, size: 2.1 }));
+  const s = scene({
+    layoutFree: true,
+    elements: rain,
+    transitionIn: { type: "flip", durationInFrames: 12 },
+  });
+  const v = lockViolations(lock, [s]);
+  assert.equal(v.filter((x) => x.kind === "elements" || x.kind === "titleSize").length, 0, JSON.stringify(v));
+  assert.ok(!v.some((x) => x.message.includes("会叠字")), JSON.stringify(v));
+});
+
+test("freeform 天然豁免，不用声明 layoutFree", () => {
+  const lock = deriveDesignLock({ form: "口播讲解", density: "讲稿" });
+  const rain = Array.from({ length: 12 }, (_, i) => ({ kind: "text", text: `字${i}`, size: 2.1 }));
+  const v = lockViolations(lock, [scene({ type: "freeform", elements: rain })]);
+  assert.ok(!v.some((x) => x.kind === "elements" || x.kind === "titleSize"), JSON.stringify(v));
+});
+
+test("layoutFree 只豁免版面三条，转场白名单与时长上限仍然生效", () => {
+  const lock = deriveDesignLock({ form: "口播讲解", transitionTone: "柔和" });
+  const v = lockViolations(lock, [
+    scene({
+      layoutFree: true,
+      elements: [{ kind: "text", text: "短", size: 5.6 }],
+      transitionIn: { type: "blur", durationInFrames: 40 },
+    }),
+  ]);
+  assert.ok(v.some((x) => x.kind === "transitionLength"), JSON.stringify(v));
+});
+
 console.log("[briefCoverage] 六条「算说清了」的判据");
 
 test("空 brief：六条全缺，且明确不可开工", () => {

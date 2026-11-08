@@ -11,6 +11,7 @@
 import { totalDuration } from "../shared/schema";
 import { lockViolations, type DesignLock } from "../shared/designLock";
 import { sceneAuditElements } from "../shared/sceneElements";
+import { isLayoutFreeScene } from "../shared/sceneKinds";
 import { frozenSnapshot, hasHook, runHook } from "./plugin/hooks";
 import type { Brief } from "./brief.service";
 
@@ -115,6 +116,7 @@ function sceneLockView(scenes: AnyScene[]) {
     id: s.id,
     name: s.name,
     type: s.type,
+    layoutFree: (s as any).layoutFree === true,
     durationInFrames: s.durationInFrames,
     subtitle: s.subtitle,
     transitionIn: s.transitionIn ?? null,
@@ -241,6 +243,13 @@ export function auditBriefAgainstProject(
     const v = lockViolations(lock, sceneLockView(scenes));
     for (const x of v) {
       warnings.push(`${x.sceneName}：${x.message}`);
+    }
+    // 自由排版幕必须显式记账：豁免口子要让用户看得见，不能变成 agent 静默绕过版式检查的暗门
+    const lfCount = scenes.filter((s) => isLayoutFreeScene(s as any)).length;
+    if (lfCount) {
+      passed.push(
+        `自由排版 ${lfCount} 幕（freeform / layoutFree）：元素数 / 字号档位 / 叠字转场检查已跳过（动画特效按设计走）`,
+      );
     }
     if (!v.length) passed.push("设计锁无违约（元素数 / 转场白名单 / 转场时长 / 字号）");
   }

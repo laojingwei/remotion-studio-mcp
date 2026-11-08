@@ -85,7 +85,8 @@
 - 没有这一步 `build_storyboard` 会拒绝——这是用户第一次看到画面的机会，不能让他盲签
 
 ### 单幕（build 后逐幕查）
-- `preview_frames` 抽首/中/尾三帧：文字不溢出、不重叠、不挡主体
+- `preview_frames` 抽首/中/尾三帧：文字不溢出、不重叠、不挡主体——**只对信息版面适用**；
+  freeform / 声明 layoutFree 的幕做的是动画特效（字雨、落字、文字海、文字飞出画面），叠着、出框都是设计，别当问题纠正
 - **横屏先看横向铺没铺开**：内容缩在左边一小块是最常见的「没做过设计」。
   填不满时**补信息层，别推翻重排**（`get_guide("craft")` §11.5：加氛围层 / kicker / 结论行三层，
   用 `apply_to_scenes` 一次铺满）；把已经排好的画面推倒重写，坐标白写，错峰也会丢。
@@ -156,7 +157,7 @@
 
 | 现象 | 先查 | 修法 |
 |---|---|---|
-| 文字溢出/被裁 | preview_frames | 缩短文案、用 `maxWidth` 主动折行、分栏或拆幕 |
+| 文字溢出/被裁 | preview_frames | 缩短文案、用 `maxWidth` 主动折行、分栏或拆幕（freeform / layoutFree 特效幕除外——出框是设计） |
 | 字幕又长又带标点 | `check_project` 的字幕段 | `fix_subtitles(dryRun=true)` 看预演 → `fix_subtitles` 落盘；稿子太书面就回去改稿 |
 | 字幕来不及读（一闪而过） | `check_project` 的字/秒 | 加幕长（`update_scene` 的 durationInFrames）或减字，别缩字号 |
 | 元素中途消失 | 元素 `durationInFrames` vs 场景时长 | **场景拉长后元素不会自动跟**（落盘的是具体帧数）。`update_element` 把 `durationInFrames` 改到新幕长，或传 `-1` |

@@ -21,7 +21,7 @@ import { formatProjectList } from "./projects-text";
 import { loadUploadFile } from "./upload-path";
 import { recallAll, remember, type MemoryKind } from "./memory.service";
 import { ROOT as PROJECT_ROOT } from "./root";
-import { BACKDROP_TYPES } from "../shared/sceneKinds";
+import { BACKDROP_TYPES, isLayoutFreeScene } from "../shared/sceneKinds";
 import { CONFIRM_GROUPS, briefCoverage, briefProgress, briefToText, confirmBrief, legacyFieldNotice, readBrief, recomputeDesignLock, saveBrief, sceneCountHint, stepMissingFields, type Brief } from "./brief.service";
 import { listAnnotations, resolveAnnotations } from "./annotation.service";
 import { FORM_SPECS, designLockSummary, lockViolations, normalizeForm } from "../shared/designLock";
@@ -36,7 +36,7 @@ import { picksSummary } from "./stylePicks.service";
 import {
   LIB_REL as PROMPT_LIB_REL,
   readDetail as readPromptDetail,
-  readPick as readPromptPick,
+  readPickState,
 } from "./promptLibrary.service";
 import { adaptShowcaseToBrief, buildShowcaseProps } from "./showcase";
 import type { Showcase } from "../shared/builtin-styles";
@@ -202,7 +202,7 @@ const TOOLS: ToolDef[] = [
   {
     name: "start_guide",
     description:
-      "开工入口：返回完整创作流程（接单→brief→风格→分镜→搭建→配音→自检→渲染→沉淀，含 3D/iso 场景的环境前置），以及你现在处在哪一步、该读哪篇技能、下一步动作。每次新任务先调它一次。",
+      "开工入口：返回完整创作流程（开工第一问→接单→brief→风格→分镜→搭建→配音→自检→渲染→沉淀，含 3D/iso 场景的环境前置），以及你现在处在哪一步、该读哪篇技能、下一步动作。每次新任务先调它一次。开工第一问（要不要去编辑器风格库挑提示词和风格）是闸口⓪，不许跳。",
     shape: {
       projectId: z.string().optional().describe("传了会判断当前工程进度"),
     },
@@ -211,10 +211,10 @@ const TOOLS: ToolDef[] = [
       const lines: string[] = [
         "# 创作流程（接单 → 成片）",
         "插件：现有能力满足不了需求时，可在合适时机建议把这部分做成插件（别打断当前流程）——写法见 docs/PLUGIN-GUIDE.md（18 节，含 9 份示例），装进 plugins/ 即生效",
-        "铁律：标【闸口】的 9 个节点一个都不能跳（跳过必返工）；没标的步骤可合并提速，但省之前先跟用户说一句。",
+        "铁律：标【闸口】的 10 个节点一个都不能跳（跳过必返工）；没标的步骤可合并提速，但省之前先跟用户说一句。",
         "场景选型：默认只用 list_scene_types 返回的类型（freeform 自由画布 / scene3d / iso 图解 / 动效类 / 氛围类 / 插件场景）。内置固定版式（title / bullets / chart / stats 这类现成骨架）默认不在这张表里，别主动拿它们搭片子——画面会被锁进既有骨架；用户点名要用某个版式时才用。",
-        "【闸口】① 工程归属　② 9 步真的问了用户　③ brief 用户点头　④ 稿件用户点头　⑤ **风格样张用户挑**　⑥ 分镜提案用户选　⑦ 风格帧用户过目　⑧ 观感规格齐 + 用户到编辑器看片　⑨ 交付前自检",
-        "⑤⑥ 在用户明确说「直接做 / 别问了」时可跳（跳过要在最后说明「这版没做风格帧确认」）；①②③④⑦⑧ 永不跳。",
+        "【闸口】⓪ **开工先问风格库**　① 工程归属　② 9 步真的问了用户　③ brief 用户点头　④ 稿件用户点头　⑤ **风格样张用户挑**　⑥ 分镜提案用户选　⑦ 风格帧用户过目　⑧ 观感规格齐 + 用户到编辑器看片　⑨ 交付前自检",
+        "⓪ 只有用户自己明说「不需要 / 不用挑」才算过——agent 不得替他跳；⑤⑥ 在用户明确说「直接做 / 别问了」时可跳（跳过要在最后说明「这版没做风格帧确认」）；①②③④⑦⑧ 永不跳。",
         "",
         "项目根（技能和文档里写的 <项目根> 都指这里，相关相对路径从这里出发）：" + PROJECT_ROOT,
         "环境前置【用到 3D（scene3d）或 iso 图解幕时，开工前先过一遍，这两个功能环境如不能用，明确告知用户】：",
@@ -225,6 +225,7 @@ const TOOLS: ToolDef[] = [
         "    在 → 按 get_guide(\"external-tools\") 画图并落盘；",
         "    不在 → 询问用户是让你来处理下载还是让用户自己下载，下载好后放进 .other_modules（主路径）。",
         "    工具没下载时 iso 幕仍可引用已有 SVG（素材在 public/assets/projects/<id>/iso/），只是画不了新图。",
+        "开工第一问【闸口⓪ · 每个新任务必问，不许跳】：动手（接单 / intake / 建工程）之前，先问用户一句——「要不要先去编辑器顶栏「风格库」挑提示词和风格？」（提示词=配方=片子骨架，风格=画风；同一个面板，顶部标签页切换）。他说选好了、让你读时：提示词 get_prompt_pick()、风格 get_style_pick()。他明说「不需要 / 不用挑」→ 按正常步骤继续。没问就开干 = 跳闸口，必返工。",
         "0. 定位《导演》 → get_guide(\"director\")，第一次使用时必须认真读完里面的内容；连续做同类片子可只读一节：get_guide(\"director\",\"流程\")",
         "1. 查记忆 → recall()：先看以前踩过什么坑、这个用户有什么偏好（一次调用，别省）",
         "2. 定工程归属【闸口①】 → list_projects() → **问用户：这次是新增一支，还是改已有工程？**",
@@ -239,7 +240,7 @@ const TOOLS: ToolDef[] = [
         "   ⚠ save_brief 不传 step 的批量通道只有一种合法用法：用户已一次性把信息给全、且你已逐字段复述请他确认。替你拍板的字段写进 assumed（>3 条会提醒）。",
         "   ⚠ 画幅必须问死：横屏（课程/B站/视频号）还是竖屏（抖音原生）。画幅是不可逆的架构决策——排版、字号基准、安全区、能放几列全跟着它变。",
         "3b. 配方对账（用户说「提示词/配方我选好了」时） → get_prompt_pick() → 读它给的 md → 把「## 槽位」填一版：brief 里有的直接填，缺的**一次问齐**，和 brief 冲突的（时长/画幅/节奏）当场说按谁走 → 用户点头 → save_brief(recipe={...}, recipeSlots=[...])",
-        "   ↳ 配方只借骨架（三幕结构 / 动效铁律 / 禁止项），**内容一格都不照抄**——示例里的产品名、网址、文案进成片就是事故；槽位 actual 空着就问，不许自己补。",
+        "   ↳ 配方只借骨架（三幕结构 / 动效铁律 / 禁止项），**内容一格都不照抄**——示例里的产品名、网址、文案进成片就是事故；槽位 actual 空着就问，不许自己补。confirm_brief 会拦：recipeSlots 空、或哪格 actual 空着，都不让确认。",
         "   ↳ 技法（TK）不是整片骨架：挑合适的一幕用，别为它单独拉一整条片。配方与风格是两件事，互不替代（风格走步骤 7）。",
         "4. 确认【闸口③】 → confirm_brief（不确认，build_storyboard 直接拒绝）",
         "   ↳ 闸口判的是**内容**不是必填：段落表每段有时长+内容、镜头能直接排拍摄（动画片换元素清单）、参考指到时间点、素材有责任人+截止、交付有版本列表。缺了会逐条告诉你缺什么。",
@@ -333,7 +334,7 @@ const TOOLS: ToolDef[] = [
       } else {
         lines.push(
           "",
-          "还没指定工程【闸口①】：先 list_projects 看有哪些，然后**直接问用户**：「这次是新增一支，还是改已经有的一条？」",
+          "还没指定工程【闸口①】：先过闸口⓪（问用户要不要去风格库挑提示词和风格），再 list_projects 看有哪些，然后**直接问用户**：「这次是新增一支，还是改已经有的一条？」",
           "  改已有 → switch_project + get_project + get_history 复述现状，并问清「这次只动什么」（写进 brief 的 changeScope）",
           "  新增 → create_project；形态没定就留空建空白工程（别为了建工程提前把版式定死），brief 确认后再决定模板 / 风格",
         );
@@ -759,8 +760,15 @@ const TOOLS: ToolDef[] = [
     shape: {},
     run: async () => {
       const nl = String.fromCharCode(10);
-      const p = readPromptPick();
+      const { pick: p, staleId } = readPickState();
       if (!p) {
+        if (staleId) {
+          return (
+            `面板上采纳的 ${staleId} 在库里已经不存在了（库重建过，或那一条被删了）。` +
+            `${nl}请用户在顶栏「风格库」→「提示词」标签页重新选一条，再点「告诉 agent」；` +
+            `${nl}别拿编号相近的条目顶上、也别自己从库里挑一条——配方是整片骨架，选错等于重做。`
+          );
+        }
         return (
           "用户还没在「提示词库」面板采纳配方。" +
           `${nl}要的话请他打开顶栏「风格库」→ 顶部切到「提示词」标签页 → 选一条 → 点「告诉 agent」；` +
@@ -775,6 +783,11 @@ const TOOLS: ToolDef[] = [
         `用户在「提示词库」采纳了${isTech ? "技法" : "整片配方"}：${p.id} ${p.name}（${p.genre}）`,
         `正文：${rel}`,
       ];
+      if (p.at) {
+        lines.push(
+          `（采纳于 ${String(p.at).slice(0, 10)}——如果用户这次说的是另一支片子，先确认是不是还指这条）`,
+        );
+      }
       if (item?.fidelity === "bound") {
         lines.push("⚠ 这条绑在媒介上（手绘/像素/剪纸这类），挑风格时别跨媒介，否则片子会散。");
       }
@@ -790,21 +803,33 @@ const TOOLS: ToolDef[] = [
         for (const s of slots) {
           lines.push(`· ${s.label}：${s.value}${s.hint ? ` —— ${s.hint}` : ""}`);
         }
+      } else if (isTech) {
+        lines.push("", "（技法没有槽位表：直接看正文的参数、作用点与禁止项）");
       } else {
-        lines.push("", "（这条没写「## 槽位」段：按正文里出现的具体名词自己列一份对账表）");
+        lines.push("", "（这条没写「## 槽位」段：按正文里出现的具体名词自己列一份对账表，照样一格一格问）");
       }
-      lines.push(
-        "",
-        "下一步（顺序别倒）：",
-        "1. 读正文：先弄清它「要证明什么」、贯穿物/记忆点是什么，再动画面",
-        "2. 把上面这张表填一版：brief 里已有的值直接填；缺的**一次性问齐**（别一格一问，也不许编）",
-        isTech
-          ? "3. 说明用在第几幕、替换掉什么（技法不改变整片结构）"
-          : "3. 和 brief 冲突的逐条裁决：「配方 60s 横屏 120BPM，你是 30s 竖屏 → 按你的，保留三幕分段与逐拍节奏，压到 30 秒」",
-        "4. 用户点头 → save_brief(recipe={id,name,file,kind}, recipeSlots=[{slot,recipe,actual,conflict}])",
-        "5. 再进分镜（get_guide(\"formats\") → get_guide(\"meaning\")）",
-        "⚠ 示例产品名 / 网址 / 文案一律不许照抄——留在成片里 = 事故。actual 空着的格，问，不许补。",
-      );
+      if (isTech) {
+        lines.push(
+          "",
+          "下一步（顺序别倒）：",
+          "1. 读正文：弄清它的参数、作用点、禁止项，以及用出来应该看到什么",
+          "2. 说明用在第几幕、替换掉原有画面里的什么、占多长时间——技法不改变整片结构，别为它加幕",
+          '3. 用户点头就开工；要留档就 save_brief(recipe={id,name,file,kind:"tech"})，**不用**写 recipeSlots（那是整片配方的对账）',
+          "⚠ 技法里的示例内容（示例文案、示例配色）按用户的片子替换，别照抄。",
+        );
+      } else {
+        lines.push(
+          "",
+          "下一步（顺序别倒）：",
+          "1. 读正文：先弄清它「要证明什么」、贯穿物/记忆点是什么，再动画面",
+          "2. 把上面这张表填一版：brief 里已有的值直接填；缺的**一次性问齐**（别一格一问，也不许编）",
+          "3. 和 brief 冲突的逐条裁决：「配方 60s 横屏 120BPM，你是 30s 竖屏 → 按你的，保留三幕分段与逐拍节奏，压到 30 秒」",
+          '4. 用户点头 → save_brief(recipe={id,name,file,kind:"recipe"}, recipeSlots=[{slot,recipe,actual,conflict}])',
+          '5. 再进分镜（get_guide("formats") → get_guide("meaning")）',
+          "⚠ 示例产品名 / 网址 / 文案一律不许照抄——留在成片里 = 事故。actual 空着的格，问，不许补。",
+          "⚠ confirm_brief 会拦：recipeSlots 空着、或哪一格 actual 还空着，都不让确认。",
+        );
+      }
       if (p.note) lines.push("", `用户备注：${p.note}`);
       return lines.join(nl);
     },
@@ -1295,6 +1320,10 @@ const TOOLS: ToolDef[] = [
       durationInFrames: z.number().optional(),
       start: z.number().optional().describe("绝对起始帧；省略=接在同轨上一块之后"),
       track: z.number().optional().describe("轨道号，0=主轨；画中画用 1"),
+      layoutFree: z
+        .boolean()
+        .optional()
+        .describe("自由排版声明：true=本幕是动画特效（字雨/落字/文字海/文字飞出画面），元素数/字号/出框/安全区等版面审计全部跳过。freeform 不用声明（天然就是）"),
       projectId: z.string().optional().describe("要操作的工程 id，不传 = 当前默认工程（list_projects 查）"),
     },
     run: async (a) => {
@@ -1313,6 +1342,7 @@ const TOOLS: ToolDef[] = [
               durationInFrames: a.durationInFrames,
               start: a.start,
               track: a.track,
+              layoutFree: a.layoutFree,
             },
           ],
         }),
@@ -1330,7 +1360,7 @@ const TOOLS: ToolDef[] = [
       "scene3d 场景给了 graph 后 preset/spin/count/hue 不参与渲染（想调那些先清 graph）。\n" +
       "⚠️ update_scene **不会同步分镜表**：按分镜重建（build_storyboard replace=true）会把精修改回旧版——" +
       "改完场景记得 save_storyboard 同步，或只用 build_storyboard 做初次搭建。\n" +
-      "name/durationInFrames 是场景级字段（改幕长用它们，元素时长不会跟着变）。误改可 restore_rev 回滚。",
+      "name/durationInFrames/layoutFree 是场景级字段（layoutFree:true 声明本幕是动画特效，如字雨/落字/文字飞出画面——元素数/字号/出框/安全区审计全部跳过，回执会记账让用户看得见；传 null 撤销声明）。误改可 restore_rev 回滚。",
     shape: {
       sceneId: z.string().describe("要改哪一幕（get_project / add_scene 回执里的场景 id）"),
       props: z
@@ -1339,6 +1369,10 @@ const TOOLS: ToolDef[] = [
         .describe("要改的 props 字段（合并语义，见上方说明）；字段名查 list_scene_types"),
       name: z.string().optional().describe("改这一幕的名字（时间轴上显示的）"),
       durationInFrames: z.number().optional().describe("改这一幕的时长（帧）"),
+      layoutFree: z
+        .boolean()
+        .optional()
+        .describe("自由排版声明（见上方说明）；想给现有幕加字雨/落字特效，先设这个再往里堆元素"),
       projectId: z.string().optional().describe("要操作的工程 id，不传 = 当前默认工程（list_projects 查）"),
     },
     run: async (a) => {
@@ -1351,7 +1385,7 @@ const TOOLS: ToolDef[] = [
             {
               op: "update_scene",
               sceneId: a.sceneId,
-              patch: { props: a.props, name: a.name, durationInFrames: a.durationInFrames },
+              patch: { props: a.props, name: a.name, durationInFrames: a.durationInFrames, layoutFree: a.layoutFree },
             },
           ],
         }),
@@ -4369,7 +4403,7 @@ const TOOLS: ToolDef[] = [
   {
     name: "preview_frame",
     description:
-      "（已并入 preview_frames：单帧给 frames:[帧号]，多帧给 frames 列表）渲染指定帧为图片（默认同时出竖屏+横屏），返回图片 URL。改完务必调用它自检：检查文字溢出、重叠、被裁。",
+      "（已并入 preview_frames：单帧给 frames:[帧号]，多帧给 frames 列表）渲染指定帧为图片（默认同时出竖屏+横屏），返回图片 URL。改完务必调用它自检：检查文字溢出、被裁；**重叠/出框只在固定版式幕才算问题**——freeform / 声明 layoutFree 的幕做的是动画特效，字雨、落字、文字飞出画面都是设计，别当问题纠正。",
     retiredTo: "preview_frames",
     shape: {
       frame: z.number().optional().describe("全局帧号，默认 0（给了 sceneId 时忽略）"),
@@ -5666,7 +5700,8 @@ const TOOLS: ToolDef[] = [
     name: "add_element",
     description:
       "往场景里放一个自由元素（贴纸 / 图标 / 标签 / 图片 / 视频 / 音频 / **序列帧特效**）。可以用 libraryId 取素材库现成的，也可以自己给 svg（矢量；**几千字符的大图改用 svgSrcFile 传文件绝对路径**，服务端读文件注入，别内联长 path）、text（文字）、imageSrc（图片）、videoSrc（视频）、audioSrc（音频）、imageSeqSrc（序列帧：src 带 {frame} 占位符 + seqFrom/seqTo/frameDigits，每帧换一张透明 PNG 叠画面上，爆炸/烟雾/光效就用它）——素材库没有合适的就自己造。放进去之后用户可以正常拖动/旋转/缩放/删除。视频默认有声、不循环；音频/视频没给 durationInFrames 会按素材真实时长。支持背景色 bg、入场 enter / 出场 exit 特效、场景内时间 from / durationInFrames。\n" +
-      "**x/y 是元素中心点**（不是左上角）：贴边放时元素有一半会被裁掉。文字宽度随字数×字号变化，长句别往 x>80 放，否则右侧超出画面（回执会算给你）。",
+      "**x/y 是元素中心点**（不是左上角）：贴边放时元素有一半会被裁掉。文字宽度随字数×字号变化，长句别往 x>80 放，否则右侧超出画面（回执会算给你）。\n" +
+      "**freeform / 声明 layoutFree 的幕不做这个提醒**：动画特效里文字就是要出框、贴边、飞出画面，随便放。",
     shape: {
       projectId: z.string().optional().describe("要操作的工程 id，不传 = 当前默认工程（list_projects 查）"),
       sceneId: z.string().optional().describe("放到哪个场景；不传就用第一个场景"),
@@ -5774,7 +5809,8 @@ const TOOLS: ToolDef[] = [
         }),
       });
       // 中心点定位 + 文字宽度随字数变：靠边放必出界，出界在抽帧前看不出来（本地实测过 x=85 长句被裁一半）
-      const warn = elementEdgeWarn(element as never);
+      // 自由排版幕不提醒：落字就是要飞出画面，按「会被裁」报全是误伤
+      const warn = target && isLayoutFreeScene(target) ? null : elementEdgeWarn(element as never);
       return (
         `已放入元素 ${element.id}「${element.name}」到场景 ${sceneId}（${element.kind}，位置 ${element.x}% / ${element.y}%）` +
         (warn ? `\n⚠️ ${warn}` : "")
